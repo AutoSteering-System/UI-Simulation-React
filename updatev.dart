@@ -55,7 +55,9 @@ import {
   Square,
   PlayCircle,
   CheckSquare,
-  MapPin
+  MapPin,
+  Keyboard,
+  Check
 } from 'lucide-react';
 
 const SteeringWheelIcon = ({ className }) => (
@@ -115,15 +117,17 @@ const App = () => {
   const [menuOpen, setMenuOpen] = useState(false); 
   const [settingsOpen, setSettingsOpen] = useState(false); 
   const [fieldManagerOpen, setFieldManagerOpen] = useState(false); 
-  const [linesPanelOpen, setLinesPanelOpen] = useState(false); // NEW STATE FOR LINES PANEL
+  const [linesPanelOpen, setLinesPanelOpen] = useState(false); 
   const [lineModeModalOpen, setLineModeModalOpen] = useState(false); 
   const [lineNameModalOpen, setLineNameModalOpen] = useState(false);
+  const [manualHeadingModalOpen, setManualHeadingModalOpen] = useState(false);
   
-  // NEW: Boundary Name Modal State
+  // Boundary Name Modal State
   const [boundaryNameModalOpen, setBoundaryNameModalOpen] = useState(false);
   const [tempBoundaryName, setTempBoundaryName] = useState('');
 
   const [tempLineName, setTempLineName] = useState('');
+  const [tempManualHeading, setTempManualHeading] = useState('0.0'); 
   const [settingsTab, setSettingsTab] = useState('display'); 
   const [lineType, setLineType] = useState('STRAIGHT_AB'); 
   const [satelliteCount, setSatelliteCount] = useState(12);
@@ -143,7 +147,7 @@ const App = () => {
         name: "Home_Field_01", 
         area: "12.5 ha", 
         lastUsed: "Today", 
-        boundaries: [], // Array of objects {name, points: []}
+        boundaries: [], 
         lines: [ 
             { id: 101, name: "Main AB", type: "STRAIGHT_AB", date: "2023-10-01", points: { a: {x: -50, y: -200}, b: {x: -50, y: 200} } },
         ],
@@ -185,7 +189,7 @@ const App = () => {
   const [newFieldName, setNewFieldName] = useState('');
   const [isRecordingBoundary, setIsRecordingBoundary] = useState(false);
   const [tempBoundary, setTempBoundary] = useState([]); 
-  const [currentFieldBoundaries, setCurrentFieldBoundaries] = useState([]); // Array of objects {name, points}
+  const [currentFieldBoundaries, setCurrentFieldBoundaries] = useState([]);
 
   const t = theme === 'dark' ? {
     bgMain: 'bg-[#15171e]',
@@ -223,6 +227,24 @@ const App = () => {
     deviceFrame: 'bg-white border-gray-300'
   };
 
+  // Helper for compass direction
+  const getCardinalDirection = (angle) => {
+      let val = parseFloat(angle);
+      if (isNaN(val)) return '--';
+      val = val % 360;
+      if (val < 0) val += 360;
+      
+      if (val >= 337.5 || val < 22.5) return 'Bắc (North)';
+      if (val >= 22.5 && val < 67.5) return 'Đông Bắc (NE)';
+      if (val >= 67.5 && val < 112.5) return 'Đông (East)';
+      if (val >= 112.5 && val < 157.5) return 'Đông Nam (SE)';
+      if (val >= 157.5 && val < 202.5) return 'Nam (South)';
+      if (val >= 202.5 && val < 247.5) return 'Tây Nam (SW)';
+      if (val >= 247.5 && val < 292.5) return 'Tây (West)';
+      if (val >= 292.5 && val < 337.5) return 'Tây Bắc (NW)';
+      return '';
+  };
+
   // --- 1. CLOCK ---
   useEffect(() => {
     const updateTime = () => {
@@ -237,7 +259,7 @@ const App = () => {
   // --- 2. INPUT ---
   useEffect(() => {
     const handleKeyDown = (e) => {
-        if (menuOpen || settingsOpen || (fieldManagerOpen && !isRecordingBoundary) || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || linesPanelOpen) return; 
+        if (menuOpen || settingsOpen || (fieldManagerOpen && !isRecordingBoundary) || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || linesPanelOpen || manualHeadingModalOpen) return; 
         if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].indexOf(e.key) > -1) e.preventDefault();
         keysPressed.current[e.key] = true;
     };
@@ -245,7 +267,7 @@ const App = () => {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
-  }, [menuOpen, settingsOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen]);
+  }, [menuOpen, settingsOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen]);
 
   // --- 3. PHYSICS ---
   useEffect(() => {
@@ -284,6 +306,10 @@ const App = () => {
         if (Math.abs(p.speed) > 0.1) {
             const turnRate = p.steeringAngle * 0.15 * (p.speed / 10) * dt; 
             p.heading += turnRate * 20; 
+            
+            // Normalize heading to 0-360 range (FIXED HEADING ISSUE)
+            p.heading = (p.heading % 360 + 360) % 360;
+
             const rad = p.heading * Math.PI / 180;
             const pxPerSec = Math.abs(p.speed) * 15; 
             const moveDist = pxPerSec * dt;
@@ -403,7 +429,38 @@ const App = () => {
       }
       else { resetLines(); setPointA({ ...worldPos }); showNotification("Point A Reset", "info"); }
   };
-  const handleSetA_Plus = () => { resetLines(); setAPlusPoint({ ...worldPos }); setAPlusHeading(heading); setGuidanceLine('A_PLUS'); showNotification(`A+ Line Set at ${heading.toFixed(1)}°`, "success"); setTimeout(openSaveLineModal, 500); };
+  
+  // --- A+ LINE SPECIFIC FUNCTIONS ---
+  const handleSetAPlus_PointA = () => {
+      setAPlusPoint({ ...worldPos });
+      showNotification("Point A Set. Select Heading.", "info");
+  };
+
+  const handleSetAPlus_HeadingCurrent = () => {
+      setAPlusHeading(heading);
+      showNotification(`Heading Set to Current: ${heading.toFixed(1)}°`, "info");
+  };
+
+  const handleSetAPlus_HeadingManual = (val) => {
+      const num = parseFloat(val);
+      if (isNaN(num) || num < 0 || num > 360) {
+          showNotification("Invalid heading (0-360)", "warning");
+          return;
+      }
+      setAPlusHeading(num);
+      setManualHeadingModalOpen(false);
+      showNotification(`Heading Set Manually: ${num.toFixed(1)}°`, "info");
+  };
+
+  const handleConfirmAPlus = () => {
+      if (!aPlusPoint) return showNotification("Please Set Point A first", "warning");
+      if (aPlusHeading === null || aPlusHeading === undefined) return showNotification("Please Set Heading first", "warning");
+      
+      setGuidanceLine('A_PLUS');
+      showNotification("A+ Line Created!", "success");
+      setTimeout(openSaveLineModal, 500);
+  };
+
   const handleRecordCurve = () => { 
       if (isRecordingCurve) { 
           setIsRecordingCurve(false); 
@@ -413,7 +470,15 @@ const App = () => {
   };
   const handleSetCenter = () => { resetLines(); setPivotCenter({ ...worldPos }); showNotification("Pivot Center Set. Drive to Edge.", "info"); };
   const handleSetRadius = () => { if (!pivotCenter) return showNotification("Set Center first", "warning"); const radius = Math.hypot(worldPos.x - pivotCenter.x, worldPos.y - pivotCenter.y); if (radius < 50) return showNotification("Radius too small!", "warning"); setPivotRadius(radius); setGuidanceLine('PIVOT'); showNotification("Pivot Created!", "success"); setTimeout(openSaveLineModal, 500); };
-  const selectLineMode = (type) => { setLineType(type); setLineModeModalOpen(false); resetLines(); showNotification(`Mode Changed: ${type.replace('_', ' ')}`, "info"); };
+  
+  const selectLineMode = (type) => { 
+      setLineType(type); 
+      setLineModeModalOpen(false); 
+      // Reset logic but keep mode
+      resetLines(); 
+      showNotification(`Mode Changed: ${type.replace('_', ' ')}`, "info"); 
+  };
+  
   const updateManualSpeed = (val) => { physics.current.targetSpeed = val; setManualTargetSpeed(val); };
   const updateSteering = (val) => { physics.current.steeringAngle = val; setSteeringAngle(val); };
 
@@ -423,7 +488,7 @@ const App = () => {
       else if (line.type === 'CURVE' && line.points) { setCurvePoints(line.points.curve || []); setGuidanceLine('CURVE'); }
       else if (line.type === 'A_PLUS' && line.points) { setAPlusPoint(line.points.aplus?.point); setAPlusHeading(line.points.aplus?.heading); setGuidanceLine('A_PLUS'); }
       else if (line.type === 'PIVOT' && line.points) { setPivotCenter(line.points.pivot?.center); setPivotRadius(line.points.pivot?.radius); setGuidanceLine('PIVOT'); }
-      showNotification(`Line "${line.name}" Loaded`, "success"); setLinesPanelOpen(false); // Close lines panel
+      showNotification(`Line "${line.name}" Loaded`, "success"); setLinesPanelOpen(false); 
   }
 
   const handleTaskAction = (task, action) => {
@@ -437,14 +502,11 @@ const App = () => {
   const startFieldCreation = () => { setViewMode('CREATE_FIELD'); setNewFieldName(''); setCurrentFieldBoundaries([]); setTempBoundary([]); };
   const startBoundaryRecording = () => { setFieldManagerOpen(false); setIsRecordingBoundary(true); physics.current.targetSpeed = 5; showNotification("Drive to record boundary...", "info"); };
   
-  // UPDATED: finishBoundaryRecording - Just opens the modal
   const finishBoundaryRecording = () => {
       setIsRecordingBoundary(false);
       physics.current.targetSpeed = 0;
       
       if (tempBoundary.length > 2) {
-          // Open Naming Modal instead of saving immediately
-          // Auto generate a name or let user type
           const count = viewMode === 'CREATE_FIELD' 
               ? currentFieldBoundaries.length 
               : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
@@ -458,7 +520,6 @@ const App = () => {
       }
   };
 
-  // NEW: Save Boundary Logic
   const handleSaveBoundary = () => {
       if (!tempBoundaryName.trim()) {
           showNotification("Please enter boundary name", "warning");
@@ -470,7 +531,6 @@ const App = () => {
       if (viewMode === 'CREATE_FIELD') {
           setCurrentFieldBoundaries(prev => [...prev, newBoundaryObj]);
       } else {
-          // Add to existing field
           setFields(prev => prev.map(f => {
               if (f.id === selectedFieldId) {
                   return { ...f, boundaries: [...(f.boundaries || []), newBoundaryObj] };
@@ -497,7 +557,6 @@ const App = () => {
     setIsRecordingBoundary(false);
     physics.current.targetSpeed = 0;
     setTempBoundary([]);
-    // REMOVED: setFieldManagerOpen(true); -> Stay on map screen
     showNotification("Recording Cancelled", "info");
   };
   
@@ -548,10 +607,18 @@ const App = () => {
       const x1 = pointA.x - ux * 10000; const y1 = pointA.y - uy * 10000; const x2 = pointA.x + ux * 10000; const y2 = pointA.y + uy * 10000;
       return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="blue" strokeWidth="2" strokeOpacity="0.6" />;
     }
-    if (guidanceLine === 'A_PLUS' && aPlusPoint) {
-        const rad = aPlusHeading * Math.PI / 180; const ux = Math.sin(rad); const uy = -Math.cos(rad);
-        const x1 = aPlusPoint.x - ux * 10000; const y1 = aPlusPoint.y - uy * 10000; const x2 = aPlusPoint.x + ux * 10000; const y2 = aPlusPoint.y + uy * 10000;
-        return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="blue" strokeWidth="2" strokeOpacity="0.6" />;
+    // A+ PREVIEW OR CONFIRMED LINE
+    if ((guidanceLine === 'A_PLUS' || (lineType === 'A_PLUS' && !guidanceLine)) && aPlusPoint && aPlusHeading !== null && aPlusHeading !== undefined) {
+        const rad = aPlusHeading * Math.PI / 180; 
+        const ux = Math.sin(rad); 
+        const uy = -Math.cos(rad);
+        const x1 = aPlusPoint.x - ux * 100000; 
+        const y1 = aPlusPoint.y - uy * 100000; 
+        const x2 = aPlusPoint.x + ux * 100000; 
+        const y2 = aPlusPoint.y + uy * 100000;
+        // If it's a preview (not yet confirmed guidanceLine), make it dashed or lighter red
+        const isPreview = !guidanceLine;
+        return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={isPreview ? "red" : "blue"} strokeWidth="2" strokeOpacity={isPreview ? "0.8" : "0.6"} strokeDasharray={isPreview ? "15, 10" : "0"} />;
     }
     return null;
   };
@@ -569,7 +636,18 @@ const App = () => {
               if (pointA && !pointB) { abLabel = "Set B"; abColor = "red"; } else if (pointA && pointB) { abLabel = "Set A"; abColor = "green"; }
               const showCancelAB = pointA && !guidanceLine;
               return ( <><DockButton theme={t} icon={Target} label={abLabel} color={abColor} onClick={handleABButtonClick} />{showCancelAB && <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/>}<DockButton theme={t} icon={ArrowLeftRight} label="Shift" color="gray"/><DockButton theme={t} icon={MapPin} label="Bound" color="orange" onClick={startBoundaryRecording}/></> );
-          case 'A_PLUS': return ( <><DockButton theme={t} icon={Target} label="Set A+" color={aPlusPoint?"green":"blue"} onClick={handleSetA_Plus}/><DockButton theme={t} icon={ArrowLeftRight} label="Shift" color="gray"/><DockButton theme={t} icon={MapPin} label="Bound" color="orange" onClick={startBoundaryRecording}/></> );
+          case 'A_PLUS': 
+              // REVERTED: A+ Line specific dock logic - show all buttons
+              return ( 
+                <>
+                    <DockButton theme={t} icon={Target} label={aPlusPoint ? "Reset A" : "Set A"} color={aPlusPoint ? "green" : "blue"} onClick={handleSetAPlus_PointA}/>
+                    <DockButton theme={t} icon={Compass} label={aPlusHeading !== null ? `${aPlusHeading.toFixed(0)}°` : "Head"} color={aPlusHeading !== null ? "green" : "blue"} onClick={handleSetAPlus_HeadingCurrent}/>
+                    <DockButton theme={t} icon={Keyboard} label="Input" color="gray" onClick={() => { setManualHeadingModalOpen(true); setTempManualHeading(heading.toFixed(1)); }}/>
+                    <div className={`h-px ${t.divider} mx-1`}></div>
+                    <DockButton theme={t} icon={Check} label="OK" color="green" onClick={handleConfirmAPlus}/>
+                    <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/>
+                </> 
+              );
           case 'CURVE': return ( <><DockButton theme={t} icon={isRecordingCurve ? Disc : Spline} label={isRecordingCurve ? "Stop" : "Record"} color={isRecordingCurve ? "red" : "blue"} onClick={handleRecordCurve} className={isRecordingCurve ? "animate-pulse" : ""} />{isRecordingCurve && <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/>}<DockButton theme={t} icon={ArrowLeftRight} label="Shift" color="gray"/><DockButton theme={t} icon={MapPin} label="Bound" color="orange" onClick={startBoundaryRecording}/></> );
           case 'PIVOT': 
               const isCreatingPivot = pivotCenter && !guidanceLine;
@@ -622,63 +700,66 @@ const App = () => {
   };
 
   const renderFieldManager = () => {
-      if (viewMode === 'CREATE_FIELD') return ( <div className={`flex-1 p-8 flex flex-col ${t.textMain}`}><div className="mb-6 flex items-center gap-2"><button onClick={() => setViewMode('LIST')} className={`p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800`}><ArrowLeftRight className="w-5 h-5 rotate-180" /></button><h3 className="text-xl font-bold">Create New Field</h3></div><div className="max-w-md mx-auto w-full space-y-6"><div><label className={`block text-sm font-bold mb-2 ${t.textSub}`}>FIELD NAME</label><input type="text" value={newFieldName} onChange={e => setNewFieldName(e.target.value)} placeholder="Ex: South Farm 02" className={`w-full p-4 rounded-xl border ${t.borderCard} ${t.bgInput} focus:border-blue-500 outline-none`} /></div><div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}><div className="flex justify-between items-center mb-4"><span className="font-bold">Boundaries Recorded</span><span className={`text-xs ${currentFieldBoundaries.length > 0 ? 'text-green-500' : 'text-orange-500'}`}>{currentFieldBoundaries.length} loops saved</span></div><div className="space-y-3">{currentFieldBoundaries.length > 0 && <div className="h-20 bg-green-500/10 rounded-lg flex items-center justify-center border border-green-500/30 text-green-600 font-bold mb-2"><CheckCircle2 className="w-6 h-6 mr-2"/> {currentFieldBoundaries.length} Boundaries Ready</div>}<button onClick={startBoundaryRecording} className="w-full py-4 rounded-xl border-2 border-dashed border-blue-500/50 text-blue-500 font-bold hover:bg-blue-500/10 flex flex-col items-center gap-2"><Tractor className="w-8 h-8" /><span>{currentFieldBoundaries.length > 0 ? "Record Another Boundary" : "Drive to Record Boundary"}</span></button></div></div><div className="pt-6 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-4"><button onClick={() => setViewMode('LIST')} className="px-6 py-3 rounded-xl border font-bold text-slate-500">Cancel</button><button onClick={saveNewField} className="px-8 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg">Save Field</button></div></div></div> );
-      if (viewMode === 'CREATE_TASK') return ( <div className={`flex-1 p-8 flex flex-col ${t.textMain}`}><div className="mb-6 flex items-center gap-2"><button onClick={() => setViewMode('LIST')} className={`p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800`}><ArrowLeftRight className="w-5 h-5 rotate-180" /></button><h3 className="text-xl font-bold">New Task</h3></div><div className="grid grid-cols-2 gap-6 max-w-2xl mx-auto"><TaskOptionButton icon={Tractor} label="Tillage / Plowing" onClick={() => saveNewTask("Tillage")} t={t} /><TaskOptionButton icon={Sprout} label="Planting / Seeding" onClick={() => saveNewTask("Planting")} t={t} /><TaskOptionButton icon={Droplets} label="Spraying" onClick={() => saveNewTask("Spraying")} t={t} /><TaskOptionButton icon={Scissors} label="Harvesting" onClick={() => saveNewTask("Harvesting")} t={t} /></div></div> );
-      
       const activeField = fields.find(f => f.id === selectedFieldId);
-      const boundaries = activeField?.boundaries || (activeField?.boundary ? [activeField.boundary] : []); 
-      const lines = activeField?.lines || [];
+      
+      let rightContent;
+      if (viewMode === 'CREATE_FIELD') {
+          rightContent = (
+              <div className="flex-1 flex flex-col p-8 overflow-y-auto">
+                  <div className="mb-6 flex items-center gap-2"><button onClick={() => setViewMode('LIST')} className={`p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800`}><ArrowLeftRight className="w-5 h-5 rotate-180" /></button><h3 className="text-xl font-bold">Create New Field</h3></div>
+                  <div className="max-w-2xl w-full space-y-6">
+                      <div><label className={`block text-sm font-bold mb-2 ${t.textSub}`}>FIELD NAME</label><input type="text" value={newFieldName} onChange={e => setNewFieldName(e.target.value)} placeholder="Ex: South Farm 02" className={`w-full p-4 rounded-xl border ${t.borderCard} ${t.bgInput} focus:border-blue-500 outline-none`} /></div>
+                      <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}><div className="flex justify-between items-center mb-4"><span className="font-bold">Boundaries Recorded</span><span className={`text-xs ${currentFieldBoundaries.length > 0 ? 'text-green-500' : 'text-orange-500'}`}>{currentFieldBoundaries.length} loops saved</span></div><div className="space-y-3">{currentFieldBoundaries.length > 0 && <div className="h-20 bg-green-500/10 rounded-lg flex items-center justify-center border border-green-500/30 text-green-600 font-bold mb-2"><CheckCircle2 className="w-6 h-6 mr-2"/> {currentFieldBoundaries.length} Boundaries Ready</div>}<button onClick={startBoundaryRecording} className="w-full py-4 rounded-xl border-2 border-dashed border-blue-500/50 text-blue-500 font-bold hover:bg-blue-500/10 flex flex-col items-center gap-2"><Tractor className="w-8 h-8" /><span>{currentFieldBoundaries.length > 0 ? "Record Another Boundary" : "Drive to Record Boundary"}</span></button></div></div>
+                      <div className="pt-6 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-4"><button onClick={() => setViewMode('LIST')} className="px-6 py-3 rounded-xl border font-bold text-slate-500">Cancel</button><button onClick={saveNewField} className="px-8 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg">Save Field</button></div>
+                  </div>
+              </div>
+          );
+      } else if (viewMode === 'CREATE_TASK') {
+          rightContent = (
+              <div className="flex-1 flex flex-col p-8 overflow-y-auto">
+                  <div className="mb-6 flex items-center gap-2"><button onClick={() => setViewMode('LIST')} className={`p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800`}><ArrowLeftRight className="w-5 h-5 rotate-180" /></button><h3 className="text-xl font-bold">New Task</h3></div>
+                  <div className="grid grid-cols-2 gap-6 max-w-2xl"><TaskOptionButton icon={Tractor} label="Tillage / Plowing" onClick={() => saveNewTask("Tillage")} t={t} /><TaskOptionButton icon={Sprout} label="Planting / Seeding" onClick={() => saveNewTask("Planting")} t={t} /><TaskOptionButton icon={Droplets} label="Spraying" onClick={() => saveNewTask("Spraying")} t={t} /><TaskOptionButton icon={Scissors} label="Harvesting" onClick={() => saveNewTask("Harvesting")} t={t} /></div>
+              </div>
+          );
+      } else if (activeField) {
+          // OVERVIEW MODE
+          const boundaries = activeField.boundaries || [];
+          const lines = activeField.lines || [];
+          rightContent = (
+              <div className="flex-1 flex flex-col h-full">
+                  <div className={`p-6 border-b ${t.divider} flex justify-between items-center`}><h3 className={`text-lg font-bold uppercase ${t.textSub}`}>{activeField.name} OVERVIEW</h3><button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} hover:bg-slate-200 dark:hover:bg-slate-800`}><X className={`w-6 h-6 ${t.textMain}`} /></button></div>
+                  <div className="flex-1 p-8 overflow-y-auto space-y-8">
+                        {/* BOUNDARIES SECTION */}
+                        <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
+                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Boundaries</h4><button onClick={startBoundaryRecording} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> Add Boundary</button></div>
+                            {boundaries.length > 0 ? (
+                                <div className="space-y-2">{boundaries.map((b, i) => (<button key={i} onClick={() => setActiveBoundaryIdx(i)} className={`w-full flex items-center justify-between p-3 rounded-lg border transition-all ${activeBoundaryIdx === i ? t.selectedItem : `${t.borderCard} hover:brightness-95`}`}><div className="flex items-center gap-3"><MapIcon className={`w-5 h-5 ${activeBoundaryIdx === i ? 'text-blue-500' : t.textDim}`} /><span className={t.textMain}>{b.name || `Boundary ${i + 1}`}</span></div>{activeBoundaryIdx === i && <span className="text-xs bg-blue-500 text-white px-2 py-1 rounded">Active</span>}</button>))}</div>
+                            ) : (<div className={`text-center py-4 ${t.textDim} border-2 border-dashed border-slate-500/30 rounded-lg`}>No boundaries</div>)}
+                        </div>
+                        {/* LINES SECTION */}
+                        <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
+                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Saved Lines</h4></div>
+                            {lines && lines.length > 0 ? ( <div className="space-y-2">{lines.map((l) => (<div key={l.id} className={`flex items-center justify-between p-3 rounded-lg border ${t.borderCard}`}><div className="flex items-center gap-3">{l.type === 'CURVE' ? <Spline className="w-5 h-5 text-purple-500" /> : <GitCommitHorizontal className="w-5 h-5 text-blue-500" />}<span className={t.textMain}>{l.name}</span></div><div className="flex items-center gap-2"><span className={`text-xs ${t.textSub}`}>{l.date}</span><button onClick={() => handleLoadLine(l)} className={`px-3 py-1 rounded text-xs font-bold ${activeLineId === l.id ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500'}`}>{activeLineId === l.id ? 'Active' : 'Load'}</button></div></div>))}</div>) : (<div className={`text-center py-4 ${t.textDim}`}>No lines saved</div>)}
+                        </div>
+                        {/* TASKS SECTION */}
+                        <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
+                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Tasks History</h4><button onClick={startTaskCreation} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> New Task</button></div>{activeField.tasks.length > 0 ? (<div className="space-y-2">{activeField.tasks.map(task => (<div key={task.id} className={`flex items-center justify-between p-4 rounded-lg border transition-all ${activeTaskId === task.id ? 'border-green-500 bg-green-500/10' : t.borderCard}`}><div className="flex items-center gap-4"><div className="p-2 rounded bg-blue-500/20 text-blue-500">{task.type === 'Planting' ? <Sprout className="w-5 h-5"/> : task.type === 'Spraying' ? <Droplets className="w-5 h-5"/> : <Tractor className="w-5 h-5"/>}</div><div><div className={`font-bold ${t.textMain}`}>{task.name}</div><div className={`text-xs ${t.textSub}`}>{task.date} • {task.status}</div></div></div><div className="flex gap-2">{activeTaskId === task.id ? (<><button onClick={() => handleTaskAction(task, 'pause')} className="p-2 bg-orange-500/20 text-orange-500 rounded-lg hover:bg-orange-500/30"><Pause className="w-4 h-4" /></button><button onClick={() => handleTaskAction(task, 'finish')} className="p-2 bg-green-500/20 text-green-500 rounded-lg hover:bg-green-500/30"><CheckSquare className="w-4 h-4" /></button></>) : (task.status !== 'Done' && (<button onClick={() => handleTaskAction(task, 'start')} className="p-2 bg-blue-500/20 text-blue-500 rounded-lg hover:bg-blue-500/30"><PlayCircle className="w-4 h-4" /></button>))}</div></div>))}</div>) : (<div className={`text-center py-8 ${t.textDim}`}>No tasks recorded yet.</div>)}</div>
+                  </div>
+                  <div className={`p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button onClick={handleDeleteField} className={`px-6 py-3 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 flex items-center gap-2`}><Trash2 className="w-5 h-5" /> Delete</button><button onClick={handleLoadField} className="px-8 py-3 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500 shadow-lg shadow-green-900/20 flex items-center gap-2"><CheckCircle2 className="w-5 h-5" /> Load Field</button></div>
+              </div>
+          );
+      } else {
+          rightContent = <div className="flex-1 flex items-center justify-center text-slate-500">Select a field to view details</div>;
+      }
 
       return (
           <div className="flex h-full">
-              <div className={`w-[35%] border-r ${t.border} ${t.bgPanel} flex flex-col`}><div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl font-bold flex items-center gap-3 ${t.textMain}`}><LayoutGrid className="w-6 h-6 text-blue-500" />Field Manager</h2></div><div className="p-4"><button onClick={startFieldCreation} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold flex justify-center gap-2 hover:bg-blue-500"><Plus className="w-5 h-5" /> New Field</button></div><div className="flex-1 overflow-y-auto p-4 space-y-2">{fields.map(f => (<button key={f.id} onClick={() => setSelectedFieldId(f.id)} className={`w-full text-left p-4 rounded-xl border transition-all ${selectedFieldId === f.id ? t.selectedItem : `${t.bgCard} ${t.border} hover:brightness-95`}`}><div className="flex justify-between items-start"><div className="flex gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center ${selectedFieldId === f.id ? 'bg-blue-500 text-white' : 'bg-slate-300 dark:bg-slate-800 text-slate-500'}`}><MapIcon className="w-6 h-6" /></div><div><h4 className={`font-bold ${t.textMain}`}>{f.name}</h4><span className={`text-xs ${t.textSub}`}>{f.area}</span></div></div>{selectedFieldId === f.id && <CheckCircle2 className="w-5 h-5 text-blue-500" />}</div></button>))}</div></div>
-              <div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
-                <div className={`p-6 border-b ${t.divider} flex justify-between items-center`}><h3 className={`text-lg font-bold uppercase ${t.textSub}`}>{activeField?.name} OVERVIEW</h3><button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} hover:bg-slate-200 dark:hover:bg-slate-800`}><X className={`w-6 h-6 ${t.textMain}`} /></button></div>
-                <div className="flex-1 p-8 overflow-y-auto space-y-8">
-                    {/* BOUNDARIES SECTION */}
-                    <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
-                        <div className="flex justify-between items-center mb-4">
-                            <h4 className={`font-bold uppercase ${t.textSub}`}>Boundaries</h4>
-                            <button onClick={startBoundaryRecording} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> Add Boundary</button>
-                        </div>
-                        {boundaries.length > 0 ? (
-                            <div className="space-y-2">
-                                {boundaries.map((b, i) => (
-                                    <button 
-                                        key={i} 
-                                        onClick={() => setActiveBoundaryIdx(i)}
-                                        className={`w-full flex items-center justify-between p-3 rounded-lg border transition-all ${activeBoundaryIdx === i ? t.selectedItem : `${t.borderCard} hover:brightness-95`}`}
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <MapIcon className={`w-5 h-5 ${activeBoundaryIdx === i ? 'text-blue-500' : t.textDim}`} />
-                                            {/* DISPLAY BOUNDARY NAME IF EXISTS */}
-                                            <span className={t.textMain}>{b.name || `Boundary ${i + 1}`}</span>
-                                        </div>
-                                        {activeBoundaryIdx === i && <span className="text-xs bg-blue-500 text-white px-2 py-1 rounded">Active</span>}
-                                    </button>
-                                ))}
-                            </div>
-                        ) : (<div className={`text-center py-4 ${t.textDim} border-2 border-dashed border-slate-500/30 rounded-lg`}>No boundaries</div>)}
-                    </div>
-                    {/* LINES SECTION */}
-                    <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
-                        <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Saved Lines</h4></div>
-                        {lines && lines.length > 0 ? (
-                             <div className="space-y-2">
-                                {lines.map((l) => (
-                                    <div key={l.id} className={`flex items-center justify-between p-3 rounded-lg border ${t.borderCard}`}>
-                                        <div className="flex items-center gap-3">{l.type === 'CURVE' ? <Spline className="w-5 h-5 text-purple-500" /> : <GitCommitHorizontal className="w-5 h-5 text-blue-500" />}<span className={t.textMain}>{l.name}</span></div>
-                                        <div className="flex items-center gap-2"><span className={`text-xs ${t.textSub}`}>{l.date}</span><button onClick={() => handleLoadLine(l)} className={`px-3 py-1 rounded text-xs font-bold ${activeLineId === l.id ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500'}`}>{activeLineId === l.id ? 'Active' : 'Load'}</button></div>
-                                    </div>
-                                ))}
-                             </div>
-                        ) : (<div className={`text-center py-4 ${t.textDim}`}>No lines saved</div>)}
-                    </div>
-                    {/* TASKS SECTION */}
-                    <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}><div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Tasks History</h4><button onClick={startTaskCreation} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> New Task</button></div>{activeField.tasks.length > 0 ? (<div className="space-y-2">{activeField.tasks.map(task => (<div key={task.id} className={`flex items-center justify-between p-4 rounded-lg border transition-all ${activeTaskId === task.id ? 'border-green-500 bg-green-500/10' : t.borderCard}`}><div className="flex items-center gap-4"><div className="p-2 rounded bg-blue-500/20 text-blue-500">{task.type === 'Planting' ? <Sprout className="w-5 h-5"/> : task.type === 'Spraying' ? <Droplets className="w-5 h-5"/> : <Tractor className="w-5 h-5"/>}</div><div><div className={`font-bold ${t.textMain}`}>{task.name}</div><div className={`text-xs ${t.textSub}`}>{task.date} • {task.status}</div></div></div><div className="flex gap-2">{activeTaskId === task.id ? (<><button onClick={() => handleTaskAction(task, 'pause')} className="p-2 bg-orange-500/20 text-orange-500 rounded-lg hover:bg-orange-500/30"><Pause className="w-4 h-4" /></button><button onClick={() => handleTaskAction(task, 'finish')} className="p-2 bg-green-500/20 text-green-500 rounded-lg hover:bg-green-500/30"><CheckSquare className="w-4 h-4" /></button></>) : (task.status !== 'Done' && (<button onClick={() => handleTaskAction(task, 'start')} className="p-2 bg-blue-500/20 text-blue-500 rounded-lg hover:bg-blue-500/30"><PlayCircle className="w-4 h-4" /></button>))}</div></div>))}</div>) : (<div className={`text-center py-8 ${t.textDim}`}>No tasks recorded yet.</div>)}</div>
-                </div>
-                <div className={`p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button onClick={handleDeleteField} className={`px-6 py-3 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 flex items-center gap-2`}><Trash2 className="w-5 h-5" /> Delete</button><button onClick={handleLoadField} className="px-8 py-3 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500 shadow-lg shadow-green-900/20 flex items-center gap-2"><CheckCircle2 className="w-5 h-5" /> Load Field</button></div>
+              <div className={`w-[35%] border-r ${t.border} ${t.bgPanel} flex flex-col`}>
+                  <div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl font-bold flex items-center gap-3 ${t.textMain}`}><LayoutGrid className="w-6 h-6 text-blue-500" />Field Manager</h2></div>
+                  <div className="p-4"><button onClick={startFieldCreation} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold flex justify-center gap-2 hover:bg-blue-500"><Plus className="w-5 h-5" /> New Field</button></div>
+                  <div className="flex-1 overflow-y-auto p-4 space-y-2">{fields.map(f => (<button key={f.id} onClick={() => { setSelectedFieldId(f.id); setViewMode('LIST'); }} className={`w-full text-left p-4 rounded-xl border transition-all ${selectedFieldId === f.id ? t.selectedItem : `${t.bgCard} ${t.border} hover:brightness-95`}`}><div className="flex justify-between items-start"><div className="flex gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center ${selectedFieldId === f.id ? 'bg-blue-500 text-white' : 'bg-slate-300 dark:bg-slate-800 text-slate-500'}`}><MapIcon className="w-6 h-6" /></div><div><h4 className={`font-bold ${t.textMain}`}>{f.name}</h4><span className={`text-xs ${t.textSub}`}>{f.area}</span></div></div>{selectedFieldId === f.id && <CheckCircle2 className="w-5 h-5 text-blue-500" />}</div></button>))}</div>
               </div>
+              <div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>{rightContent}</div>
           </div>
       );
   };
@@ -689,11 +770,19 @@ const App = () => {
             {/* LEFT RAIL */}
             <aside className={`w-[8%] min-w-[70px] flex-shrink-0 ${t.bgPanel} border-r ${t.border} flex flex-col items-center py-[2%] z-30 shadow-2xl`}>
                 <div className="mb-[15%]"><div className="w-10 h-10 lg:w-12 lg:h-12 bg-blue-600 rounded-xl flex items-center justify-center font-black text-xl lg:text-2xl italic shadow-blue-900/50 shadow-lg text-white">F</div></div>
-                <nav className="flex-1 w-full flex flex-col gap-[6%] items-center">
+                <nav className="flex-1 w-full flex flex-col items-center gap-2 pt-4">
                     <RailButton theme={t} icon={MapIcon} label="Run" active={!settingsOpen && !fieldManagerOpen && !linesPanelOpen} onClick={() => {setSettingsOpen(false); setFieldManagerOpen(false); setLinesPanelOpen(false);}} />
+                    <div className={`h-px w-1/2 ${t.divider}`}></div>
                     <RailButton theme={t} icon={LayoutGrid} label="Field" active={fieldManagerOpen} onClick={() => {setFieldManagerOpen(true); setSettingsOpen(false); setLinesPanelOpen(false);}} />
-                    <RailButton theme={t} icon={Route} label="Lines" active={linesPanelOpen} onClick={() => {setLinesPanelOpen(true); setFieldManagerOpen(false); setSettingsOpen(false);}} />
-                    <div className={`h-px w-1/2 ${t.divider} my-2`}></div>
+                    <div className={`h-px w-1/2 ${t.divider}`}></div>
+                    <RailButton 
+                        theme={t} 
+                        icon={Route} 
+                        label="Lines" 
+                        active={linesPanelOpen} 
+                        onClick={() => {setLinesPanelOpen(true); setFieldManagerOpen(false); setSettingsOpen(false);}} 
+                    />
+                    <div className={`h-px w-1/2 ${t.divider}`}></div>
                     <RailButton theme={t} icon={Settings} label="System" active={settingsOpen} onClick={() => {setSettingsOpen(true); setFieldManagerOpen(false); setLinesPanelOpen(false);}} />
                 </nav>
                 <div className="mb-4 flex flex-col items-center gap-1">
@@ -836,7 +925,7 @@ const App = () => {
                 )}
                 
                 {settingsOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}><div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col`}><div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl lg:text-2xl font-bold flex items-center gap-3 ${t.textMain}`}><Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />Settings</h2></div><nav className="flex-1 overflow-y-auto p-4 space-y-2"><SettingsTab theme={t} label="Display" icon={Monitor} active={settingsTab === 'display'} onClick={() => setSettingsTab('display')} /><SettingsTab theme={t} label="Vehicle" icon={Tractor} active={settingsTab === 'vehicle'} onClick={() => setSettingsTab('vehicle')} /><SettingsTab theme={t} label="Implement" icon={Ruler} active={settingsTab === 'implement'} onClick={() => setSettingsTab('implement')} /><SettingsTab theme={t} label="Guidance" icon={Navigation} active={settingsTab === 'guidance'} onClick={() => setSettingsTab('guidance')} /><SettingsTab theme={t} label="RTK / GNSS" icon={Radio} active={settingsTab === 'rtk'} onClick={() => setSettingsTab('rtk')} /></nav></div><div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}><div className={`flex items-center justify-between p-6 lg:p-8 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><h3 className={`text-lg lg:text-xl font-medium ${t.textSub} uppercase tracking-widest`}>{settingsTab} CONFIGURATION</h3><button onClick={() => setSettingsOpen(false)} className={`p-2 lg:p-3 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}><X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} /></button></div><div className="flex-1 p-6 lg:p-10 overflow-y-auto"><div className="max-w-4xl">{renderSettingsContent()}</div></div><div className={`p-4 lg:p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`}>Cancel</button><button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg">Save Changes</button></div></div></div>}
-                {menuOpen && !fieldManagerOpen && !lineModeModalOpen && !linesPanelOpen && (
+                {menuOpen && !fieldManagerOpen && !lineModeModalOpen && !linesPanelOpen && !manualHeadingModalOpen && (
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-lg border ${t.borderCard} shadow-2xl flex flex-col max-h-[85vh]`}><div className={`p-4 border-b ${t.divider} flex justify-between items-center`}><div className="flex items-center gap-2"><Menu className="w-5 h-5 text-blue-500" /><h3 className={`font-bold text-lg ${t.textMain}`}>Quick Menu</h3></div><button onClick={() => setMenuOpen(false)} className={`px-3 py-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} rounded-lg text-xs hover:brightness-95 border ${t.borderCard} ${t.textMain}`}>Close</button></div><div className="p-4 grid grid-cols-2 gap-3 overflow-y-auto"><div className={`col-span-2 p-3 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}><div className="flex items-center gap-2 mb-3"><Gauge className="w-5 h-5 text-orange-500" /><span className={`font-bold ${t.textMain} text-sm`}>Manual Drive</span></div><div className="grid grid-cols-2 gap-4"><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Speed</span><div className="flex items-center gap-2"><input type="range" min="-5" max="15" value={manualTargetSpeed} onChange={(e) => updateManualSpeed(Number(e.target.value))} className="w-full accent-orange-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><span className={`font-mono font-bold text-lg w-12 text-center ${t.textMain}`}>{manualTargetSpeed}</span></div></div><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Steering ({steeringAngle}°)</span><div className="flex items-center gap-1"><button onClick={() => updateSteering(Math.max(steeringAngle - 5, -35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCcw className={`w-4 h-4 ${t.textMain}`} /></button><input type="range" min="-35" max="35" value={steeringAngle} onChange={(e) => updateSteering(Number(e.target.value))} className="w-full accent-blue-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><button onClick={() => updateSteering(Math.min(steeringAngle + 5, 35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCw className={`w-4 h-4 ${t.textMain}`} /></button></div></div></div><p className={`text-[10px] ${t.textSub} mt-2 text-center`}>*Arrow Keys: ↑ ↓ ← →</p></div><QuickAction theme={t} icon={Video} label="Camera" sub="Monitor" /><QuickAction theme={t} icon={AlertTriangle} label="Diagnostics" sub="Errors" /><QuickAction theme={t} icon={Ruler} label="Implement" sub="Width" /><QuickAction theme={t} icon={LocateFixed} label="Calibrate" sub="IMU" /><QuickAction theme={t} icon={Activity} label="Terrain" sub="Comp." /><QuickAction theme={t} icon={Save} label="Save Line" sub="Track" /><QuickAction theme={t} icon={Navigation} label="NMEA" sub="Out" /></div></div></div>
                 )}
                 {lineNameModalOpen && (
@@ -856,6 +945,34 @@ const App = () => {
                           </div>
                       </div>
                   </div>
+                )}
+                
+                {/* NEW: Manual Heading Modal */}
+                {manualHeadingModalOpen && (
+                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+                        <div className={`${t.bgPanel} rounded-2xl w-full max-w-sm border ${t.borderCard} shadow-2xl p-6`}>
+                            <h3 className={`text-xl font-bold ${t.textMain} mb-4`}>Input Heading</h3>
+                            <div className="flex flex-col gap-4 mb-6">
+                                <div className="flex items-center gap-2">
+                                    <input 
+                                        type="number" 
+                                        value={tempManualHeading} 
+                                        onChange={(e) => setTempManualHeading(e.target.value)} 
+                                        className={`flex-1 p-4 rounded-xl border ${t.borderCard} ${t.bgInput} ${t.textMain} font-mono text-2xl font-bold text-center focus:border-blue-500 outline-none`} 
+                                        autoFocus
+                                    />
+                                    <span className={`text-2xl font-bold ${t.textSub}`}>°</span>
+                                </div>
+                                <div className={`text-center font-bold ${t.textSub} bg-blue-500/10 py-2 rounded-lg`}>
+                                    {getCardinalDirection(tempManualHeading)}
+                                </div>
+                            </div>
+                            <div className="flex justify-end gap-3">
+                                <button onClick={() => setManualHeadingModalOpen(false)} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Cancel</button>
+                                <button onClick={() => handleSetAPlus_HeadingManual(tempManualHeading)} className="px-6 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500">Set</button>
+                            </div>
+                        </div>
+                    </div>
                 )}
                 
                 {/* NEW: Boundary Name Modal */}
@@ -882,14 +999,14 @@ const App = () => {
                     <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-2xl border ${t.borderCard} shadow-2xl p-6`}><div className="flex justify-between items-center mb-6"><h3 className={`text-xl font-bold ${t.textMain}`}>Select Guidance Mode</h3><button onClick={() => setLineModeModalOpen(false)} className={`p-2 rounded-lg hover:bg-slate-800/50 ${t.textDim}`}><X className="w-6 h-6" /></button></div><div className="grid grid-cols-2 gap-4"><button onClick={() => selectLineMode('STRAIGHT_AB')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'STRAIGHT_AB' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><GitCommitHorizontal className={`w-12 h-12 ${lineType === 'STRAIGHT_AB' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Straight AB</span><span className={`text-xs ${t.textSub}`}>Standard straight line A to B</span></button><button onClick={() => selectLineMode('A_PLUS')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'A_PLUS' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><ArrowUpFromDot className={`w-12 h-12 ${lineType === 'A_PLUS' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>A+ Heading</span><span className={`text-xs ${t.textSub}`}>Straight line with defined heading</span></button><button onClick={() => selectLineMode('CURVE')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'CURVE' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><Spline className={`w-12 h-12 ${lineType === 'CURVE' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Curve</span><span className={`text-xs ${t.textSub}`}>Adaptive curved guidance</span></button><button onClick={() => selectLineMode('PIVOT')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'PIVOT' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><CircleDashed className={`w-12 h-12 ${lineType === 'PIVOT' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Pivot</span><span className={`text-xs ${t.textSub}`}>Center pivot circular pattern</span></button></div></div></div>
                 )}
                 {/* ACTION DOCK */}
-                <div className="absolute right-[2%] top-[15%] bottom-[18%] w-[7%] min-w-[50px] z-20 flex flex-col justify-center pointer-events-none"><div className={`${t.bgCard} backdrop-blur-md rounded-2xl p-2 shadow-2xl border ${t.borderCard} pointer-events-auto flex flex-col gap-3`}><div className={`flex flex-col gap-1.5 lg:gap-2 pb-2 border-b ${t.divider}`}><span className={`text-[8px] lg:text-[9px] text-center ${t.textSub} font-bold uppercase`}>Mode</span><button onClick={() => setLineModeModalOpen(true)} className={`flex flex-col items-center justify-center gap-1 py-1.5 px-1 rounded-lg hover:${t.activeItem} transition-colors`}>{React.createElement(getLineTypeIcon(), { className: `w-6 h-6 ${t.textMain}` })}<span className={`text-[8px] font-bold ${t.textMain}`}>{lineType.replace('_', ' ')}</span></button></div>{renderActionDock()}<div className={`h-px ${t.divider}`}></div><DockButton theme={t} icon={MoreHorizontal} label="Menu" color="gray" onClick={() => setMenuOpen(true)}/></div></div>
+                <div className="absolute right-[2%] top-[15%] bottom-[18%] w-[7%] min-w-[50px] z-20 flex flex-col justify-center pointer-events-none"><div className={`${t.bgCard} backdrop-blur-md rounded-2xl p-2 shadow-2xl border ${t.borderCard} pointer-events-auto flex flex-col gap-3`}><div className={`flex flex-col gap-1.5 lg:gap-2 pb-2 border-b ${t.divider}`}><span className={`text-[8px] lg:text-[9px] text-center ${t.textSub} font-bold uppercase`}>Mode</span><button onClick={() => setLineModeModalOpen(true)} className={`flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-xl bg-blue-600 shadow-md hover:bg-blue-500 transition-all text-white w-full`}>{React.createElement(getLineTypeIcon(), { className: `w-6 h-6 text-white` })}<span className={`text-[8px] font-bold text-white`}>{lineType.replace('_', ' ')}</span></button></div>{renderActionDock()}<div className={`h-px ${t.divider}`}></div><DockButton theme={t} icon={MoreHorizontal} label="Menu" color="gray" onClick={() => setMenuOpen(true)}/></div></div>
             </main>
         </div>
     </div>
   );
 };
 
-const RailButton = ({ icon: Icon, label, active, onClick, theme }) => ( <button onClick={onClick} className={`flex flex-col items-center gap-1 w-full py-[15%] rounded-xl transition-all ${active ? 'bg-blue-600 text-white shadow-lg' : `${theme.textDim} hover:${theme.activeItem} hover:${theme.textMain}`}`}><Icon className="w-5 h-5 lg:w-7 lg:h-7" /><span className="text-[9px] lg:text-[10px] font-bold">{label}</span></button> );
+const RailButton = ({ icon: Icon, label, active, onClick, theme, className }) => ( <button onClick={onClick} className={`flex flex-col items-center gap-1 w-full py-[15%] rounded-xl transition-all ${active ? 'bg-blue-600 text-white shadow-lg' : `${theme.textDim} hover:${theme.activeItem} hover:${theme.textMain}`} ${className || ''}`}><Icon className="w-5 h-5 lg:w-7 lg:h-7" /><span className="text-[9px] lg:text-[10px] font-bold">{label}</span></button> );
 const DockButton = ({ icon: Icon, label, color, onClick, theme, className }) => { const colorClasses = { blue: 'bg-blue-500/10 text-blue-500 border-blue-500/30', green: 'bg-green-500/10 text-green-500 border-green-500/30', orange: 'bg-orange-500/10 text-orange-500 border-orange-500/30', red: 'bg-red-500/10 text-red-500 border-red-500/30', gray: theme.textMain === 'text-white' ? 'bg-slate-800 text-slate-400 border-slate-600' : 'bg-gray-100 text-slate-500 border-gray-300' }; return ( <button onClick={onClick} className={`w-full aspect-square rounded-xl flex flex-col items-center justify-center gap-1 border active:scale-95 ${colorClasses[color] || colorClasses.gray} ${className || ''}`}><Icon className="w-6 h-6" /><span className="text-[10px] font-bold">{label}</span></button> ); };
 const QuickAction = ({ icon: Icon, label, sub, theme }) => ( <button className={`flex flex-col items-start p-3 ${theme.textMain === 'text-white' ? 'bg-slate-800/50 hover:bg-slate-800' : 'bg-gray-50 hover:bg-gray-100'} border ${theme.borderCard} rounded-xl hover:border-blue-500/50 transition-all group`}><div className={`p-2 ${theme.activeItem} rounded-lg mb-2 ${theme.textSub} group-hover:text-blue-500 group-hover:bg-blue-500/10 transition-colors`}><Icon className="w-5 h-5" /></div><span className={`text-sm font-bold ${theme.textMain}`}>{label}</span><span className={`text-[10px] ${theme.textSub}`}>{sub}</span></button> );
 const TaskOptionButton = ({ icon: Icon, label, onClick, t }) => ( <button onClick={onClick} className={`p-6 rounded-2xl border ${t.borderCard} ${t.bgCard} hover:border-blue-500 hover:bg-blue-500/5 transition-all flex flex-col items-center gap-4 group`}><div className="w-16 h-16 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400 group-hover:scale-110 transition-transform"><Icon className="w-8 h-8" /></div><span className={`font-bold text-lg ${t.textMain}`}>{label}</span></button> );
