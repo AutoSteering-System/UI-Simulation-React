@@ -61,8 +61,76 @@ import {
   ChevronDown,
   ChevronsRight,
   PenTool,
-  PlusCircle 
+  PlusCircle,
+  AlertCircle
 } from 'lucide-react';
+
+// --- GEOMETRY HELPERS ---
+
+// Scale factor: Assuming ~15 pixels = 1 meter based on physics logic
+const PIXELS_PER_METER = 15; 
+
+// Calculate total length of a path in pixels
+const calculatePathLength = (points) => {
+    let length = 0;
+    for (let i = 0; i < points.length - 1; i++) {
+        length += Math.hypot(points[i+1].x - points[i].x, points[i+1].y - points[i].y);
+    }
+    return length;
+};
+
+// Check if segment (p1, p2) intersects with (p3, p4)
+const getLineIntersection = (p1, p2, p3, p4) => {
+    const s1_x = p2.x - p1.x;
+    const s1_y = p2.y - p1.y;
+    const s2_x = p4.x - p3.x;
+    const s2_y = p4.y - p3.y;
+
+    const denom = -s2_x * s1_y + s1_x * s2_y;
+    if (Math.abs(denom) < 0.0001) return null; // Parallel lines
+
+    const s = (-s1_y * (p1.x - p3.x) + s1_x * (p1.y - p3.y)) / denom;
+    const t = ( s2_x * (p1.y - p3.y) - s2_y * (p1.x - p3.x)) / denom;
+
+    // Strict intersection (not endpoints) usually preferred, but 0..1 is okay
+    if (s >= 0 && s <= 1 && t >= 0 && t <= 1) {
+        return {
+            x: p1.x + (t * s1_x),
+            y: p1.y + (t * s1_y)
+        };
+    }
+    return null;
+};
+
+// Check for ANY self-intersection in the path
+const checkSelfIntersection = (points) => {
+    if (points.length < 4) return null;
+    
+    // We iterate backwards to find the most recent intersection first.
+    // 'i' is the start index of the "late" segment (the one currently being drawn/overshot)
+    for (let i = points.length - 2; i >= 2; i--) {
+        const p1 = points[i];
+        const p2 = points[i+1];
+        
+        // 'j' is the start index of the "early" segment (the one we are crossing back into)
+        // We stop at i - 1 to avoid checking adjacent segments (which naturally touch)
+        for (let j = 0; j < i - 1; j++) {
+            const p3 = points[j];
+            const p4 = points[j+1];
+            
+            const intersection = getLineIntersection(p1, p2, p3, p4);
+            if (intersection) {
+                return {
+                    earlySegmentIdx: j, // Index of Pj
+                    lateSegmentIdx: i,  // Index of Pi
+                    point: intersection
+                };
+            }
+        }
+    }
+    return null;
+};
+
 
 const SteeringWheelIcon = ({ className }) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -99,8 +167,8 @@ const App = () => {
   const [crossTrackError, setCrossTrackError] = useState(0.0);
   
   // ACTION DOCK STATES
-  const [isCreating, setIsCreating] = useState(false); // Mode creating line
-  const [dockMenuOpen, setDockMenuOpen] = useState(false); // Menu level 2 open?
+  const [isCreating, setIsCreating] = useState(false); 
+  const [dockMenuOpen, setDockMenuOpen] = useState(false); 
 
   // Driving & Physics
   const [speed, setSpeed] = useState(0);
@@ -130,9 +198,11 @@ const App = () => {
   const [lineNameModalOpen, setLineNameModalOpen] = useState(false);
   const [manualHeadingModalOpen, setManualHeadingModalOpen] = useState(false);
   
-  // Boundary Name Modal State
+  // Boundary States
   const [boundaryNameModalOpen, setBoundaryNameModalOpen] = useState(false);
   const [tempBoundaryName, setTempBoundaryName] = useState('');
+  const [boundaryAlertOpen, setBoundaryAlertOpen] = useState(false); // New Alert Modal
+  const [boundaryAlertType, setBoundaryAlertType] = useState(null); // 'INCOMPLETE' or 'AUTO_CLOSE'
 
   const [tempLineName, setTempLineName] = useState('');
   const [tempManualHeading, setTempManualHeading] = useState('0.0'); 
@@ -267,7 +337,7 @@ const App = () => {
   // --- 2. INPUT ---
   useEffect(() => {
     const handleKeyDown = (e) => {
-        if (menuOpen || settingsOpen || (fieldManagerOpen && !isRecordingBoundary) || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || linesPanelOpen || manualHeadingModalOpen) return; 
+        if (menuOpen || settingsOpen || (fieldManagerOpen && !isRecordingBoundary) || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || linesPanelOpen || manualHeadingModalOpen || boundaryAlertOpen) return; 
         if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].indexOf(e.key) > -1) e.preventDefault();
         keysPressed.current[e.key] = true;
     };
@@ -275,7 +345,7 @@ const App = () => {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
-  }, [menuOpen, settingsOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen]);
+  }, [menuOpen, settingsOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen, boundaryAlertOpen]);
 
   // --- 3. PHYSICS ---
   useEffect(() => {
@@ -315,7 +385,6 @@ const App = () => {
             const turnRate = p.steeringAngle * 0.15 * (p.speed / 10) * dt; 
             p.heading += turnRate * 20; 
             
-            // Normalize heading to 0-360 range (FIXED HEADING ISSUE)
             p.heading = (p.heading % 360 + 360) % 360;
 
             const rad = p.heading * Math.PI / 180;
@@ -530,21 +599,96 @@ const App = () => {
   const startFieldCreation = () => { setViewMode('CREATE_FIELD'); setNewFieldName(''); setCurrentFieldBoundaries([]); setTempBoundary([]); };
   const startBoundaryRecording = () => { setFieldManagerOpen(false); setIsRecordingBoundary(true); physics.current.targetSpeed = 5; showNotification("Drive to record boundary...", "info"); };
   
+  // UPDATED FINISH BOUNDARY LOGIC
   const finishBoundaryRecording = () => {
-      setIsRecordingBoundary(false);
-      physics.current.targetSpeed = 0;
+      // 1. Check Minimum Distance (100m)
+      const pathLengthPx = calculatePathLength(tempBoundary);
+      // 100 meters * PIXELS_PER_METER
+      if (pathLengthPx < (100 * PIXELS_PER_METER)) {
+           showNotification(`Quãng đường quá ngắn (< 100m). Hãy chạy thêm!`, "warning");
+           return;
+      }
       
-      if (tempBoundary.length > 2) {
-          const count = viewMode === 'CREATE_FIELD' 
-              ? currentFieldBoundaries.length 
-              : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
+      // Use Case 1: Check for Self-Intersection (CROSSING)
+      const selfIntersect = checkSelfIntersection(tempBoundary);
+      
+      if (selfIntersect) {
+          // INTERSECTION FOUND -> Auto Trim Tail -> Create Polygon
+          // Logic: Keep points starting from the intersection point on the OLD segment
+          // up to the point BEFORE current overshoot.
           
+          // The loop consists of: 
+          // 1. The Intersection Point
+          // 2. Points [segmentIndex + 1] to [length - 2] (exclude overshoot tail)
+          // 3. The Intersection Point (to close)
+          
+          const loopPoints = [selfIntersect.point]; // Start at intersection
+          
+          // Add intermediate points (excluding the overshoot part which is the last point)
+          // segmentIndex is where the old segment started (j). 
+          // So the loop goes: Intersection -> j+1 -> ... -> last-1 -> Intersection
+          for (let k = selfIntersect.segmentIndex + 1; k < tempBoundary.length - 1; k++) {
+              loopPoints.push(tempBoundary[k]);
+          }
+          
+          loopPoints.push(selfIntersect.point); // Close it precisely
+
+          setTempBoundary(loopPoints);
+          setIsRecordingBoundary(false);
+          physics.current.targetSpeed = 0;
+          
+          // Proceed to Save immediately
+          const count = viewMode === 'CREATE_FIELD' ? currentFieldBoundaries.length : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
           setTempBoundaryName(`Boundary ${count + 1}`);
           setBoundaryNameModalOpen(true);
+          showNotification("Đã tạo vùng khép kín (Cắt đuôi thừa)", "success");
+          return;
+      }
+
+      // Use Case 2 & 3: Check Distance to Start
+      const firstPoint = tempBoundary[0];
+      const lastPoint = tempBoundary[tempBoundary.length - 1];
+      const dist = Math.hypot(firstPoint.x - lastPoint.x, firstPoint.y - lastPoint.y);
+      const THRESHOLD = 50 * PIXELS_PER_METER; // 50m threshold (750px)
+
+      if (dist < THRESHOLD) {
+          // Use Case 3: Near Start Point -> Confirm Auto Close
+          setBoundaryAlertType('AUTO_CLOSE');
+          setBoundaryAlertOpen(true);
       } else {
-          showNotification("Boundary too short, discarded.", "warning");
-          setTempBoundary([]);
-          setFieldManagerOpen(true);
+          // Use Case 2: Far from Start -> Incomplete -> Confirm Continue/Cancel
+          setBoundaryAlertType('INCOMPLETE');
+          setBoundaryAlertOpen(true);
+      }
+  };
+
+  const handleBoundaryAlertConfirm = (choice) => {
+      setBoundaryAlertOpen(false);
+      
+      if (boundaryAlertType === 'AUTO_CLOSE') {
+          if (choice === 'YES') {
+              // Auto close logic
+              setIsRecordingBoundary(false);
+              physics.current.targetSpeed = 0;
+              
+              // Force snap: Add start point to end
+              setTempBoundary(prev => [...prev, prev[0]]);
+              
+              const count = viewMode === 'CREATE_FIELD' ? currentFieldBoundaries.length : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
+              setTempBoundaryName(`Boundary ${count + 1}`);
+              setBoundaryNameModalOpen(true);
+              showNotification("Đã đóng vòng biên", "success");
+          } else {
+              // Continue recording
+              showNotification("Tiếp tục ghi...", "info");
+          }
+      } else if (boundaryAlertType === 'INCOMPLETE') {
+          if (choice === 'CONTINUE') {
+               showNotification("Tiếp tục ghi...", "info");
+          } else {
+              // Cancel
+              cancelBoundaryRecording();
+          }
       }
   };
 
@@ -554,24 +698,47 @@ const App = () => {
           return;
       }
       
-      const newBoundaryObj = { name: tempBoundaryName, points: tempBoundary };
+      // Ensure loop is closed visually if not already
+      let finalPoints = [...tempBoundary];
+      // Basic check if closed
+      if (finalPoints.length > 2) {
+          const first = finalPoints[0];
+          const last = finalPoints[finalPoints.length - 1];
+          // Simple check if same object or coordinates
+          if (first.x !== last.x || first.y !== last.y) {
+               finalPoints.push(first);
+          }
+      }
+
+      const newBoundaryObj = { name: tempBoundaryName, points: finalPoints };
+      let updatedBoundaries = [];
       
       if (viewMode === 'CREATE_FIELD') {
-          setCurrentFieldBoundaries(prev => [...prev, newBoundaryObj]);
+          // Add new boundary to list
+          updatedBoundaries = [...currentFieldBoundaries, newBoundaryObj];
+          setCurrentFieldBoundaries(updatedBoundaries);
+          // Set as active immediately for preview
+          setActiveBoundaryIdx(updatedBoundaries.length - 1);
       } else {
-          setFields(prev => prev.map(f => {
+          // Update existing field
+          const activeField = fields.find(f => f.id === selectedFieldId);
+          updatedBoundaries = [...(activeField.boundaries || []), newBoundaryObj];
+
+          const updatedFields = fields.map(f => {
               if (f.id === selectedFieldId) {
-                  return { ...f, boundaries: [...(f.boundaries || []), newBoundaryObj] };
+                  return { ...f, boundaries: updatedBoundaries };
               }
               return f;
-          }));
+          });
+          setFields(updatedFields);
           
-          if (loadedField && loadedField.id === selectedFieldId) {
-              setLoadedField(prev => ({
-                  ...prev,
-                  boundaries: [...(prev.boundaries || []), newBoundaryObj]
-              }));
-          }
+          // CRITICAL FIX: Always update loadedField to reflect the changes immediately
+          // This ensures the map renders the new boundary and the active highlight works
+          const updatedActiveField = updatedFields.find(f => f.id === selectedFieldId);
+          setLoadedField(updatedActiveField); 
+          
+          // Set as active immediately
+          setActiveBoundaryIdx(updatedBoundaries.length - 1);
       }
       
       setBoundaryNameModalOpen(false);
@@ -579,7 +746,7 @@ const App = () => {
       setTempBoundaryName('');
       setIsRecordingBoundary(false);
       setDockMenuOpen(true); // Return to menu
-      showNotification("Boundary Saved!", "success");
+      showNotification("Boundary Saved & Active!", "success");
   }
 
   const cancelBoundaryRecording = () => {
@@ -733,6 +900,7 @@ const App = () => {
                <DockButton theme={t} icon={Route} label="Line" color="blue" onClick={() => setLineModeModalOpen(true)}/>
                <DockButton theme={t} icon={MapPin} label="Bound" color="orange" onClick={startBoundaryCreation}/>
                <div className={`h-px ${t.divider}`}></div>
+               <DockButton theme={t} icon={MoreHorizontal} label="Menu" color="gray" onClick={() => setMenuOpen(true)}/>
                <DockButton theme={t} icon={X} label="Close" color="gray" onClick={() => setDockMenuOpen(false)}/>
             </div>
           );
@@ -808,7 +976,6 @@ const App = () => {
     );
   };
 
-  // REFACTORED: Completely rewritten to avoid inner component definition
   const renderFieldManager = () => {
       const activeField = fields.find(f => f.id === selectedFieldId);
       
@@ -920,13 +1087,21 @@ const App = () => {
                             {/* RENDER TEMP BOUNDARY WHILE RECORDING */}
                             {isRecordingBoundary && tempBoundary.map((pt, i) => <div key={i} className="absolute w-2 h-2 bg-orange-500 rounded-full" style={{ left: `calc(50% + ${pt.x}px)`, top: `calc(60% + ${pt.y}px)` }} />)}
                             
-                            {/* RENDER SAVED BOUNDARIES OF CURRENT LOADED FIELD */}
-                            {loadedField?.boundaries?.map((bound, bIdx) => (
-                                <React.Fragment key={bIdx}>
-                                    {/* Handle both object structure {name, points} and old array structure */}
-                                    {(bound.points || bound).map((pt, i) => <div key={i} className={`absolute w-3 h-3 rounded-full ${bIdx === activeBoundaryIdx ? 'bg-yellow-500 scale-125' : 'bg-slate-500 opacity-50'}`} style={{ left: `calc(50% + ${pt.x}px)`, top: `calc(60% + ${pt.y}px)` }} />)}
-                                </React.Fragment>
-                            ))}
+                            {/* RENDER SAVED BOUNDARIES (LOADED FIELD & NEW FIELD CREATION) */}
+                            <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none">
+                                <g style={{ transform: 'translate(50%, 60%)' }}>
+                                    {(loadedField?.boundaries || []).concat(viewMode === 'CREATE_FIELD' ? currentFieldBoundaries : []).map((bound, bIdx) => (
+                                        <polygon 
+                                            key={bIdx}
+                                            points={(bound.points || bound).map(p => `${p.x},${p.y}`).join(' ')}
+                                            fill={bIdx === activeBoundaryIdx ? "rgba(234, 179, 8, 0.2)" : "rgba(100, 116, 139, 0.2)"} 
+                                            stroke={bIdx === activeBoundaryIdx ? "#eab308" : "#64748b"} 
+                                            strokeWidth="2"
+                                            strokeDasharray="5,5" 
+                                        />
+                                    ))}
+                                </g>
+                            </svg>
 
 
                             {coverageTrail.map((point, i) => <div key={i} className="absolute bg-green-500/30" style={{ left: `calc(50% + ${point.x}px)`, top: `calc(60% + ${point.y}px)`, width: '20px', height: '20px', transform: `translate(-50%, -50%) rotate(${point.h}deg) scale(6, 1)` }}></div>)}
@@ -1036,7 +1211,7 @@ const App = () => {
                 )}
                 
                 {settingsOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}><div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col`}><div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl lg:text-2xl font-bold flex items-center gap-3 ${t.textMain}`}><Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />Settings</h2></div><nav className="flex-1 overflow-y-auto p-4 space-y-2"><SettingsTab theme={t} label="Display" icon={Monitor} active={settingsTab === 'display'} onClick={() => setSettingsTab('display')} /><SettingsTab theme={t} label="Vehicle" icon={Tractor} active={settingsTab === 'vehicle'} onClick={() => setSettingsTab('vehicle')} /><SettingsTab theme={t} label="Implement" icon={Ruler} active={settingsTab === 'implement'} onClick={() => setSettingsTab('implement')} /><SettingsTab theme={t} label="Guidance" icon={Navigation} active={settingsTab === 'guidance'} onClick={() => setSettingsTab('guidance')} /><SettingsTab theme={t} label="RTK / GNSS" icon={Radio} active={settingsTab === 'rtk'} onClick={() => setSettingsTab('rtk')} /></nav></div><div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}><div className={`flex items-center justify-between p-6 lg:p-8 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><h3 className={`text-lg lg:text-xl font-medium ${t.textSub} uppercase tracking-widest`}>{settingsTab} CONFIGURATION</h3><button onClick={() => setSettingsOpen(false)} className={`p-2 lg:p-3 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}><X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} /></button></div><div className="flex-1 p-6 lg:p-10 overflow-y-auto"><div className="max-w-4xl">{renderSettingsContent()}</div></div><div className={`p-4 lg:p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`}>Cancel</button><button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg">Save Changes</button></div></div></div>}
-                {menuOpen && !fieldManagerOpen && !lineModeModalOpen && !linesPanelOpen && !manualHeadingModalOpen && (
+                {menuOpen && !fieldManagerOpen && !lineModeModalOpen && !linesPanelOpen && !manualHeadingModalOpen && !boundaryAlertOpen && (
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-lg border ${t.borderCard} shadow-2xl flex flex-col max-h-[85vh]`}><div className={`p-4 border-b ${t.divider} flex justify-between items-center`}><div className="flex items-center gap-2"><Menu className="w-5 h-5 text-blue-500" /><h3 className={`font-bold text-lg ${t.textMain}`}>Quick Menu</h3></div><button onClick={() => setMenuOpen(false)} className={`px-3 py-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} rounded-lg text-xs hover:brightness-95 border ${t.borderCard} ${t.textMain}`}>Close</button></div><div className="p-4 grid grid-cols-2 gap-3 overflow-y-auto"><div className={`col-span-2 p-3 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}><div className="flex items-center gap-2 mb-3"><Gauge className="w-5 h-5 text-orange-500" /><span className={`font-bold ${t.textMain} text-sm`}>Manual Drive</span></div><div className="grid grid-cols-2 gap-4"><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Speed</span><div className="flex items-center gap-2"><input type="range" min="-5" max="15" value={manualTargetSpeed} onChange={(e) => updateManualSpeed(Number(e.target.value))} className="w-full accent-orange-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><span className={`font-mono font-bold text-lg w-12 text-center ${t.textMain}`}>{manualTargetSpeed}</span></div></div><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Steering ({steeringAngle}°)</span><div className="flex items-center gap-1"><button onClick={() => updateSteering(Math.max(steeringAngle - 5, -35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCcw className={`w-4 h-4 ${t.textMain}`} /></button><input type="range" min="-35" max="35" value={steeringAngle} onChange={(e) => updateSteering(Number(e.target.value))} className="w-full accent-blue-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><button onClick={() => updateSteering(Math.min(steeringAngle + 5, 35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCw className={`w-4 h-4 ${t.textMain}`} /></button></div></div></div><p className={`text-[10px] ${t.textSub} mt-2 text-center`}>*Arrow Keys: ↑ ↓ ← →</p></div><QuickAction theme={t} icon={Video} label="Camera" sub="Monitor" /><QuickAction theme={t} icon={AlertTriangle} label="Diagnostics" sub="Errors" /><QuickAction theme={t} icon={Ruler} label="Implement" sub="Width" /><QuickAction theme={t} icon={LocateFixed} label="Calibrate" sub="IMU" /><QuickAction theme={t} icon={Activity} label="Terrain" sub="Comp." /><QuickAction theme={t} icon={Save} label="Save Line" sub="Track" /><QuickAction theme={t} icon={Navigation} label="NMEA" sub="Out" /></div></div></div>
                 )}
                 {lineNameModalOpen && (
@@ -1101,6 +1276,41 @@ const App = () => {
                             <div className="flex justify-end gap-3">
                                 <button onClick={() => {setBoundaryNameModalOpen(false); setDockMenuOpen(true); setIsRecordingBoundary(false); setTempBoundary([])}} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Cancel</button>
                                 <button onClick={handleSaveBoundary} className="px-6 py-2 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500">Save</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* NEW: Boundary Alert Modal (Use Case 2 & 3) */}
+                {boundaryAlertOpen && (
+                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+                        <div className={`${t.bgPanel} rounded-2xl w-full max-w-md border ${t.borderCard} shadow-2xl p-6 text-center`}>
+                            <div className="flex justify-center mb-4">
+                                <div className="p-3 bg-orange-500/20 rounded-full">
+                                    <AlertTriangle className="w-8 h-8 text-orange-500" />
+                                </div>
+                            </div>
+                            <h3 className={`text-xl font-bold ${t.textMain} mb-2`}>
+                                {boundaryAlertType === 'AUTO_CLOSE' ? 'Đóng vòng biên?' : 'Biên chưa khép kín'}
+                            </h3>
+                            <p className={`${t.textSub} mb-6`}>
+                                {boundaryAlertType === 'AUTO_CLOSE' 
+                                    ? 'Xe đang ở gần điểm bắt đầu. Bạn có muốn tự động nối biên thành một vòng khép kín?' 
+                                    : 'Xe chưa chạy cắt qua đường biên cũ. Bạn muốn tiếp tục chạy để hoàn thành hay hủy bỏ?'}
+                            </p>
+                            
+                            <div className="flex justify-center gap-3">
+                                {boundaryAlertType === 'AUTO_CLOSE' ? (
+                                    <>
+                                        <button onClick={() => handleBoundaryAlertConfirm('NO')} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Tiếp tục chạy</button>
+                                        <button onClick={() => handleBoundaryAlertConfirm('YES')} className="px-6 py-2 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500">Đóng vòng</button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <button onClick={() => handleBoundaryAlertConfirm('CANCEL')} className={`px-6 py-2 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold`}>Hủy bỏ</button>
+                                        <button onClick={() => handleBoundaryAlertConfirm('CONTINUE')} className="px-6 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500">Tiếp tục chạy</button>
+                                    </>
+                                )}
                             </div>
                         </div>
                     </div>
