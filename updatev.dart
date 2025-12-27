@@ -70,6 +70,14 @@ import {
 // Scale factor: Assuming ~15 pixels = 1 meter based on physics logic
 const PIXELS_PER_METER = 15; 
 
+// Normalize angle to -180 to 180
+const normalizeAngle = (angle) => {
+    let a = angle % 360;
+    if (a > 180) a -= 360;
+    if (a < -180) a += 360;
+    return a;
+};
+
 // Calculate total length of a path in pixels
 const calculatePathLength = (points) => {
     let length = 0;
@@ -106,14 +114,16 @@ const getLineIntersection = (p1, p2, p3, p4) => {
 const checkSelfIntersection = (points) => {
     if (points.length < 4) return null;
     
-    // We scan from the most recent segment backwards.
-    // i is the start index of the "late" segment (could be the one vehicle just finished, or one before that)
-    for (let i = points.length - 2; i > 1; i--) {
+    // We iterate backwards to find the most recent intersection first.
+    // 'i' is the start index of the "late" segment (the one currently being drawn/overshot)
+    // The last segment is points[len-2] -> points[len-1]
+    
+    for (let i = points.length - 2; i >= 2; i--) {
         const p1 = points[i];
         const p2 = points[i+1];
         
-        // j is the start index of the "early" segment
-        // We stop at i - 1 to avoid checking adjacent segments which share a vertex
+        // 'j' is the start index of the "early" segment (the one we are crossing back into)
+        // We stop at i - 1 to avoid checking adjacent segments (which naturally touch)
         for (let j = 0; j < i - 1; j++) {
             const p3 = points[j];
             const p4 = points[j+1];
@@ -121,8 +131,8 @@ const checkSelfIntersection = (points) => {
             const intersection = getLineIntersection(p1, p2, p3, p4);
             if (intersection) {
                 return {
-                    earlySegmentIdx: j, // Index of Pj -> Pj+1
-                    lateSegmentIdx: i,  // Index of Pi -> Pi+1
+                    earlySegmentIdx: j, // Index of Pj (start of the crossed segment)
+                    lateSegmentIdx: i,  // Index of Pi (start of the crossing segment)
                     point: intersection
                 };
             }
@@ -203,7 +213,7 @@ const App = () => {
   const [tempBoundaryName, setTempBoundaryName] = useState('');
   const [boundaryAlertOpen, setBoundaryAlertOpen] = useState(false); 
   const [boundaryAlertType, setBoundaryAlertType] = useState(null); 
-  const [previewBoundary, setPreviewBoundary] = useState(null); // Preview State
+  const [previewBoundary, setPreviewBoundary] = useState(null); 
 
   const [tempLineName, setTempLineName] = useState('');
   const [tempManualHeading, setTempManualHeading] = useState('0.0'); 
@@ -269,6 +279,27 @@ const App = () => {
   const [isRecordingBoundary, setIsRecordingBoundary] = useState(false);
   const [tempBoundary, setTempBoundary] = useState([]); 
   const [currentFieldBoundaries, setCurrentFieldBoundaries] = useState([]);
+
+  // Store refs to guidance data for physics loop
+  const guidanceRef = useRef({
+      type: null,
+      points: null
+  });
+
+  // Sync guidanceRef with state
+  useEffect(() => {
+    guidanceRef.current = {
+        type: guidanceLine,
+        points: { 
+            a: pointA, 
+            b: pointB, 
+            aplus: { point: aPlusPoint, heading: aPlusHeading },
+            curve: curvePoints,
+            pivot: { center: pivotCenter, radius: pivotRadius }
+        }
+    };
+  }, [guidanceLine, pointA, pointB, aPlusPoint, aPlusHeading, curvePoints, pivotCenter, pivotRadius]);
+
 
   const t = theme === 'dark' ? {
     bgMain: 'bg-[#15171e]',
@@ -359,8 +390,79 @@ const App = () => {
 
         const p = physics.current; 
 
-        if (steeringMode === 'MANUAL') {
-            if (keysPressed.current['ArrowUp']) p.targetSpeed = Math.min(p.targetSpeed + 10 * dt, 15); 
+        // --- AUTO STEERING LOGIC ---
+        if (steeringMode === 'AUTO') {
+             // 1. Maintain default speed if stopped or slow (Simulate driving)
+             if (p.targetSpeed < 2) p.targetSpeed = 6; 
+
+             // 2. Calculate Steering
+             const guide = guidanceRef.current;
+             let xte = 0;
+             let lineHeading = 0;
+             let validLine = false;
+
+             if (guide.type === 'STRAIGHT_AB' && guide.points.a && guide.points.b) {
+                const ax = guide.points.a.x; const ay = guide.points.a.y;
+                const bx = guide.points.b.x; const by = guide.points.b.y;
+                const dx = bx - ax; const dy = by - ay;
+                const len = Math.hypot(dx, dy);
+                
+                // Normal vector calculation for XTE
+                const crossProduct = (bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax);
+                xte = crossProduct / len;
+                
+                // Calculate Line Heading (0 deg is North/Up)
+                lineHeading = Math.atan2(dx, -dy) * 180 / Math.PI;
+                validLine = true;
+             } 
+             else if (guide.type === 'A_PLUS' && guide.points.aplus && guide.points.aplus.point && guide.points.aplus.heading != null) {
+                 const ax = guide.points.aplus.point.x;
+                 const ay = guide.points.aplus.point.y;
+                 const h = guide.points.aplus.heading;
+                 
+                 const rad = h * Math.PI / 180;
+                 const ux = Math.sin(rad);
+                 const uy = -Math.cos(rad); 
+                 
+                 const vax = p.x - ax; const vay = p.y - ay;
+                 xte = vax * (-uy) + vay * (ux); // Dot product with normal
+                 
+                 lineHeading = h;
+                 validLine = true;
+             }
+
+             if (validLine) {
+                 // --- BIDIRECTIONAL LOGIC ---
+                 let headingErr = normalizeAngle(lineHeading - p.heading);
+                 
+                 // If the angle difference is > 90 (driving reverse relative to line), flip logic
+                 if (Math.abs(headingErr) > 90) {
+                     // Flip target heading by 180
+                     const reverseHeading = normalizeAngle(lineHeading + 180);
+                     headingErr = normalizeAngle(reverseHeading - p.heading);
+                     
+                     // IMPORTANT: Also flip XTE sign because "Left" and "Right" are reversed when driving backwards along the line
+                     xte = -xte; 
+                 }
+                 
+                 // Control Gains
+                 const kP_xte = 0.5; 
+                 const kP_head = 1.0; 
+                 
+                 // Control Law: Steer to reduce Heading Error AND XTE
+                 // If XTE > 0 (Right), we need to steer Left (-).
+                 let steerCmd = headingErr * kP_head - xte * kP_xte;
+                 
+                 // Clamp
+                 if (steerCmd > 40) steerCmd = 40;
+                 if (steerCmd < -40) steerCmd = -40;
+                 
+                 p.steeringAngle = steerCmd;
+             }
+             
+        } else {
+             // MANUAL MODE logic already handles key inputs
+             if (keysPressed.current['ArrowUp']) p.targetSpeed = Math.min(p.targetSpeed + 10 * dt, 15); 
             else if (keysPressed.current['ArrowDown']) p.targetSpeed = Math.max(p.targetSpeed - 15 * dt, -5); 
             
             const steerSpeed = 25;
@@ -370,9 +472,6 @@ const App = () => {
                 if (p.steeringAngle > 0) p.steeringAngle = Math.max(0, p.steeringAngle - 20 * dt);
                 else if (p.steeringAngle < 0) p.steeringAngle = Math.min(0, p.steeringAngle + 20 * dt);
             }
-        } else {
-            p.targetSpeed = 8.5;
-            p.steeringAngle = 0;
         }
 
         if (Math.abs(p.speed - p.targetSpeed) > 0.1) {
@@ -449,7 +548,6 @@ const App = () => {
     if (!guidanceLine && steeringMode === 'MANUAL') return showNotification("Set Line first!", "warning");
     if (steeringMode === 'MANUAL') {
         setDragOffset({ x: 0, y: 0 });
-        physics.current.targetSpeed = 8.5;
     } else {
         physics.current.targetSpeed = 0;
         physics.current.steeringAngle = 0;
@@ -602,7 +700,7 @@ const App = () => {
   
   // UPDATED FINISH BOUNDARY LOGIC
   const finishBoundaryRecording = () => {
-      // 1. Check Minimum Distance (50m) - Reduced for testing
+      // 1. Check Minimum Distance (100m) - Reduced for testing
       const pathLengthPx = calculatePathLength(tempBoundary);
       // 50 meters * PIXELS_PER_METER (easier testing)
       if (pathLengthPx < (50 * PIXELS_PER_METER)) {
@@ -617,19 +715,16 @@ const App = () => {
       
       if (selfIntersect) {
           // INTERSECTION FOUND -> Auto Trim Tail & Head -> Create Polygon
-          
-          // Debug/Fix: Access correct properties
           const { earlySegmentIdx, lateSegmentIdx, point } = selfIntersect;
           
-          const loopPoints = [point]; // Start at intersection
-          
-          // Add intermediate points inside the loop
-          // From the end of the early segment (earlySegmentIdx + 1)
-          // To the start of the late segment (lateSegmentIdx)
+          const loopPoints = [point]; 
+          // Take only the loop part (exclude start tail and current overshoot head)
+          // From end of early segment to start of late segment
+          // The intersection happens on segment 'earlySegmentIdx' and 'lateSegmentIdx'
+          // We need points between them.
           for (let k = earlySegmentIdx + 1; k <= lateSegmentIdx; k++) {
               loopPoints.push(currentPath[k]);
           }
-          
           loopPoints.push(point); // Close it precisely
 
           // Update preview and proceed
@@ -641,7 +736,7 @@ const App = () => {
           const count = viewMode === 'CREATE_FIELD' ? currentFieldBoundaries.length : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
           setTempBoundaryName(`Boundary ${count + 1}`);
           setBoundaryNameModalOpen(true);
-          showNotification("Đã tạo vùng khép kín (Cắt đuôi thừa)", "success");
+          showNotification("Đã cắt bỏ phần thừa!", "success");
           return;
       }
 
