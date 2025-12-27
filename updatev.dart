@@ -11,44 +11,44 @@ import {
   ArrowLeftRight, 
   CornerUpLeft, 
   CornerUpRight, 
-  MoreHorizontal,
-  Video,
-  Ruler,
-  Layers,
-  Save,
-  Navigation,
-  AlertTriangle,
-  LocateFixed,
-  Compass,
-  Tractor,
-  Route,
-  Activity,
-  Globe,
-  X,
-  ChevronRight,
-  Monitor,
-  Cpu,
-  Radio,
-  Plus,
-  Minus,
-  Sun,
-  Moon,
-  FolderOpen,
-  FileText,
-  Trash2,
-  CheckCircle2,
-  Gauge,
-  RotateCcw,
-  RotateCw,
-  Flag,
-  Calendar,
-  Sprout,
-  Droplets,
-  Scissors,
+  MoreHorizontal, 
+  Video, 
+  Ruler, 
+  Layers, 
+  Save, 
+  Navigation, 
+  AlertTriangle, 
+  LocateFixed, 
+  Compass, 
+  Tractor, 
+  Route, 
+  Activity, 
+  Globe, 
+  X, 
+  ChevronRight, 
+  Monitor, 
+  Cpu, 
+  Radio, 
+  Plus, 
+  Minus, 
+  Sun, 
+  Moon, 
+  FolderOpen, 
+  FileText, 
+  Trash2, 
+  CheckCircle2, 
+  Gauge, 
+  RotateCcw, 
+  RotateCw, 
+  Flag, 
+  Calendar, 
+  Sprout, 
+  Droplets, 
+  Scissors, 
   GitCommitHorizontal, 
-  ArrowUpFromDot,       
-  Spline,               
-  CircleDashed,         
+  ArrowUpFromDot,        
+  Spline,                
+  CircleDashed,          
   MousePointer2,        
   Disc,
   Crosshair,
@@ -321,8 +321,6 @@ const App = () => {
   useEffect(() => {
     // Find active line object to get its specific properties
     const activeField = fields.find(f => f.id === selectedFieldId);
-    // Use global multi-line setting OR line specific setting? 
-    // Usually system setting overrides or applies. Let's use the global setting for now as requested.
     
     guidanceRef.current = {
         type: guidanceLine,
@@ -575,7 +573,8 @@ const App = () => {
     if (steeringMode === 'MANUAL') {
         setDragOffset({ x: 0, y: 0 });
     } else {
-        physics.current.targetSpeed = 0;
+        // Disengaging Auto Mode
+        // physics.current.targetSpeed = 0; // REMOVED: Do not reset speed to 0
         physics.current.steeringAngle = 0;
     }
     setSteeringMode(prev => prev === 'MANUAL' ? 'AUTO' : 'MANUAL');
@@ -605,6 +604,38 @@ const App = () => {
       setIsCreating(false); // EXIT CREATION MODE
       setDockMenuOpen(true); // RETURN TO DOCK MENU
       showNotification("Creation Cancelled", "info"); 
+  };
+  
+  const updateManualSpeed = (val) => { physics.current.targetSpeed = val; setManualTargetSpeed(val); };
+  const updateSteering = (val) => { physics.current.steeringAngle = val; setSteeringAngle(val); };
+  const startFieldCreation = () => { setViewMode('CREATE_FIELD'); setNewFieldName(''); setCurrentFieldBoundaries([]); };
+  const handleTaskAction = (task, action) => { 
+        const newStatus = action === 'start' ? 'In Progress' : action === 'pause' ? 'Paused' : 'Done'; 
+        const updatedFields = fields.map(f => { 
+            if (f.id === selectedFieldId) { 
+                const newTasks = f.tasks.map(t => t.id === task.id ? { ...t, status: newStatus } : t); 
+                return { ...f, tasks: newTasks }; 
+            } return f; 
+        }); 
+        setFields(updatedFields); 
+        if (action === 'start') setActiveTaskId(task.id); 
+        else if (action === 'finish') setActiveTaskId(null); 
+  }
+
+  const handleLoadLine = (line) => {
+      setActiveLineId(line.id);
+      setLineType(line.type);
+      setPointA(line.points.a);
+      setPointB(line.points.b);
+      setAPlusPoint(line.points.aplus?.point);
+      setAPlusHeading(line.points.aplus?.heading);
+      setCurvePoints(line.points.curve || []);
+      setPivotCenter(line.points.pivot?.center);
+      setPivotRadius(line.points.pivot?.radius);
+      setGuidanceLine(line.type);
+      if (line.isMulti !== undefined) setIsMultiLineMode(line.isMulti);
+      setLinesPanelOpen(false);
+      showNotification(`Loaded Line: ${line.name}`, "success");
   };
 
   const openSaveLineModal = () => {
@@ -1068,7 +1099,7 @@ const App = () => {
                       <>
                         <DockButton theme={t} icon={Target} label="Set A" color="blue" onClick={handleSetAPlus_PointA}/>
                         <DockButton theme={t} icon={ArrowLeftRight} label="Shift" color="gray"/>
-                        <DockButton theme={t} icon={MapPin} label="Bound" color="orange" onClick={startBoundaryRecording}/>
+                        <DockButton theme={t} icon={MapPin} label="Bound" color="orange" onClick={startBoundaryCreation}/>
                       </> 
                     );
                 } else {
@@ -1152,12 +1183,24 @@ const App = () => {
   const renderSettingsContent = () => {
     switch (settingsTab) {
         case 'display': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Màn hình (Display)</h3><div className="grid grid-cols-1 gap-4"><SettingSlider theme={t} label="Độ sáng (Brightness)" value={85} min={0} max={100} /><div className={`flex items-center justify-between p-4 lg:p-5 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} border ${t.borderCard} rounded-xl`}><div className="flex items-center gap-3">{theme === 'light' ? <Sun className="w-6 h-6 text-orange-500" /> : <Moon className="w-6 h-6 text-blue-400" />}<span className={`font-bold text-base lg:text-lg ${t.textMain}`}>Giao diện (Theme)</span></div><div className="flex bg-slate-700/20 p-1 rounded-lg"><button onClick={() => setTheme('light')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${theme === 'light' ? 'bg-white text-slate-900 shadow-md' : 'text-slate-500 hover:text-slate-700'}`}><Sun className="w-4 h-4" /> Sáng</button><button onClick={() => setTheme('dark')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${theme === 'dark' ? 'bg-slate-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}><Moon className="w-4 h-4" /> Tối</button></div></div><SettingToggle theme={t} label="Chế độ ban đêm tự động" active={false} /></div></div> );
-        case 'vehicle': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Cấu hình Xe (Vehicle)</h3><div className="grid grid-cols-2 gap-4"><SettingInput theme={t} label="Vehicle Type" value={vehicleSettings.type} /><SettingInput theme={t} label="Wheelbase" value={`${vehicleSettings.wheelbase} cm`} /><SettingInput theme={t} label="Antenna Height" value={`${vehicleSettings.antennaHeight} cm`} /><SettingInput theme={t} label="Antenna Offset (X)" value={`${vehicleSettings.antennaOffset} cm`} /><SettingInput theme={t} label="Rear Hitch Length" value={`${vehicleSettings.rearHitch} cm`} /><SettingInput theme={t} label="Turning Radius" value={`${vehicleSettings.turnRadius} m`} /></div></div> );
+        case 'vehicle': return ( 
+            <div className="space-y-4">
+                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Cấu hình Xe (Vehicle)</h3>
+                <div className="grid grid-cols-2 gap-4">
+                    <SettingInput theme={t} label="Vehicle Type" value={vehicleSettings.type} onChange={(e) => setVehicleSettings({...vehicleSettings, type: e.target.value})} />
+                    <SettingInput theme={t} label="Wheelbase" value={vehicleSettings.wheelbase} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, wheelbase: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Antenna Height" value={vehicleSettings.antennaHeight} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, antennaHeight: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Antenna Offset (X)" value={vehicleSettings.antennaOffset} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, antennaOffset: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Rear Hitch Length" value={vehicleSettings.rearHitch} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, rearHitch: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Turning Radius" value={vehicleSettings.turnRadius} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, turnRadius: parseFloat(e.target.value) || 0})} />
+                </div>
+            </div> 
+        );
         case 'implement': return ( 
             <div className="space-y-4">
                 <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Nông cụ (Implement)</h3>
                 <div className="grid grid-cols-2 gap-4">
-                    <SettingInput theme={t} label="Implement Name" value={implementSettings.name} />
+                    <SettingInput theme={t} label="Implement Name" value={implementSettings.name} onChange={(e) => handleImplementChange('name', e.target.value)} />
                     <div className="flex flex-col gap-2">
                         <label className={`text-xs font-bold uppercase ${t.textSub}`}>Working Width (m)</label>
                         <input 
@@ -1167,10 +1210,10 @@ const App = () => {
                             className={`${t.bgInput} border ${t.borderCard} rounded-xl px-4 py-3 ${t.textMain}`} 
                         />
                     </div>
-                    <SettingInput theme={t} label="Overlap" value={`${implementSettings.overlap} cm`} />
-                    <SettingInput theme={t} label="Lateral Offset" value={`${implementSettings.offset} cm`} />
-                    <SettingInput theme={t} label="Delay On" value={`${implementSettings.delayOn} s`} />
-                    <SettingInput theme={t} label="Delay Off" value={`${implementSettings.delayOff} s`} />
+                    <SettingInput theme={t} label="Overlap (cm)" value={implementSettings.overlap} type="number" onChange={(e) => handleImplementChange('overlap', parseFloat(e.target.value) || 0)} />
+                    <SettingInput theme={t} label="Lateral Offset (cm)" value={implementSettings.offset} type="number" onChange={(e) => handleImplementChange('offset', parseFloat(e.target.value) || 0)} />
+                    <SettingInput theme={t} label="Delay On (s)" value={implementSettings.delayOn} type="number" onChange={(e) => handleImplementChange('delayOn', parseFloat(e.target.value) || 0)} />
+                    <SettingInput theme={t} label="Delay Off (s)" value={implementSettings.delayOff} type="number" onChange={(e) => handleImplementChange('delayOff', parseFloat(e.target.value) || 0)} />
                 </div>
             </div> 
         );
@@ -1238,7 +1281,7 @@ const App = () => {
                   <div className="mb-6 flex items-center gap-2"><button onClick={() => setViewMode('LIST')} className={`p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800`}><ArrowLeftRight className="w-5 h-5 rotate-180" /></button><h3 className="text-xl font-bold">Create New Field</h3></div>
                   <div className="max-w-2xl w-full space-y-6">
                       <div><label className={`block text-sm font-bold mb-2 ${t.textSub}`}>FIELD NAME</label><input type="text" value={newFieldName} onChange={e => setNewFieldName(e.target.value)} placeholder="Ex: South Farm 02" className={`w-full p-4 rounded-xl border ${t.borderCard} ${t.bgInput} focus:border-blue-500 outline-none`} /></div>
-                      <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}><div className="flex justify-between items-center mb-4"><span className="font-bold">Boundaries Recorded</span><span className={`text-xs ${currentFieldBoundaries.length > 0 ? 'text-green-500' : 'text-orange-500'}`}>{currentFieldBoundaries.length} loops saved</span></div><div className="space-y-3">{currentFieldBoundaries.length > 0 && <div className="h-20 bg-green-500/10 rounded-lg flex items-center justify-center border border-green-500/30 text-green-600 font-bold mb-2"><CheckCircle2 className="w-6 h-6 mr-2"/> {currentFieldBoundaries.length} Boundaries Ready</div>}<button onClick={startBoundaryRecording} className="w-full py-4 rounded-xl border-2 border-dashed border-blue-500/50 text-blue-500 font-bold hover:bg-blue-500/10 flex flex-col items-center gap-2"><Tractor className="w-8 h-8" /><span>{currentFieldBoundaries.length > 0 ? "Record Another Boundary" : "Drive to Record Boundary"}</span></button></div></div>
+                      <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}><div className="flex justify-between items-center mb-4"><span className="font-bold">Boundaries Recorded</span><span className={`text-xs ${currentFieldBoundaries.length > 0 ? 'text-green-500' : 'text-orange-500'}`}>{currentFieldBoundaries.length} loops saved</span></div><div className="space-y-3">{currentFieldBoundaries.length > 0 && <div className="h-20 bg-green-500/10 rounded-lg flex items-center justify-center border border-green-500/30 text-green-600 font-bold mb-2"><CheckCircle2 className="w-6 h-6 mr-2"/> {currentFieldBoundaries.length} Boundaries Ready</div>}<button onClick={startBoundaryCreation} className="w-full py-4 rounded-xl border-2 border-dashed border-blue-500/50 text-blue-500 font-bold hover:bg-blue-500/10 flex flex-col items-center gap-2"><Tractor className="w-8 h-8" /><span>{currentFieldBoundaries.length > 0 ? "Record Another Boundary" : "Drive to Record Boundary"}</span></button></div></div>
                       <div className="pt-6 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-4"><button onClick={() => setViewMode('LIST')} className="px-6 py-3 rounded-xl border font-bold text-slate-500">Cancel</button><button onClick={saveNewField} className="px-8 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg">Save Field</button></div>
                   </div>
               </div>
@@ -1260,7 +1303,7 @@ const App = () => {
                   <div className="flex-1 p-8 overflow-y-auto space-y-8">
                         {/* BOUNDARIES SECTION */}
                         <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
-                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Boundaries</h4><button onClick={startBoundaryRecording} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> Add Boundary</button></div>
+                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Boundaries</h4><button onClick={startBoundaryCreation} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> Add Boundary</button></div>
                             {boundaries.length > 0 ? (
                                 <div className="space-y-2">{boundaries.map((b, i) => (<div key={i} onClick={() => setActiveBoundaryIdx(i)} className={`w-full flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all ${activeBoundaryIdx === i ? t.selectedItem : `${t.borderCard} hover:brightness-95`}`}><div className="flex items-center gap-3"><MapIcon className={`w-5 h-5 ${activeBoundaryIdx === i ? 'text-blue-500' : t.textDim}`} /><span className={t.textMain}>{b.name || `Boundary ${i + 1}`}</span></div><div className="flex items-center gap-2"><button onClick={(e) => { e.stopPropagation(); confirmDelete('boundary', null, i); }} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button>{activeBoundaryIdx === i && <span className="text-xs bg-blue-500 text-white px-2 py-1 rounded">Active</span>}</div></div>))}</div>
                             ) : (<div className={`text-center py-4 ${t.textDim} border-2 border-dashed border-slate-500/30 rounded-lg`}>No boundaries</div>)}
@@ -1285,7 +1328,7 @@ const App = () => {
           <div className="flex h-full">
               <div className={`w-[35%] border-r ${t.border} ${t.bgPanel} flex flex-col`}>
                   <div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl font-bold flex items-center gap-3 ${t.textMain}`}><LayoutGrid className="w-6 h-6 text-blue-500" />Field Manager</h2></div>
-                  <div className="p-4"><button onClick={startFieldCreation} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold flex justify-center gap-2 hover:bg-blue-500"><Plus className="w-5 h-5" /> New Field</button></div>
+                  <div className="p-4"><button onClick={() => { setViewMode('CREATE_FIELD'); setNewFieldName(''); setCurrentFieldBoundaries([]); }} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold flex justify-center gap-2 hover:bg-blue-500"><Plus className="w-5 h-5" /> New Field</button></div>
                   <div className="flex-1 overflow-y-auto p-4 space-y-2">{fields.map(f => (<button key={f.id} onClick={() => { setSelectedFieldId(f.id); setViewMode('LIST'); }} className={`w-full text-left p-4 rounded-xl border transition-all ${selectedFieldId === f.id ? t.selectedItem : `${t.bgCard} ${t.border} hover:brightness-95`}`}><div className="flex justify-between items-start"><div className="flex gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center ${selectedFieldId === f.id ? 'bg-blue-500 text-white' : 'bg-slate-300 dark:bg-slate-800 text-slate-500'}`}><MapIcon className="w-6 h-6" /></div><div><h4 className={`font-bold ${t.textMain}`}>{f.name}</h4><span className={`text-xs ${t.textSub}`}>{f.area}</span></div></div>{selectedFieldId === f.id && <CheckCircle2 className="w-5 h-5 text-blue-500" />}</div></button>))}</div>
               </div>
               <div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>{rightContent}</div>
@@ -1626,7 +1669,7 @@ const DockButton = ({ icon: Icon, label, color, onClick, theme, className }) => 
 const QuickAction = ({ icon: Icon, label, sub, theme }) => ( <button className={`flex flex-col items-start p-3 ${theme.textMain === 'text-white' ? 'bg-slate-800/50 hover:bg-slate-800' : 'bg-gray-50 hover:bg-gray-100'} border ${theme.borderCard} rounded-xl hover:border-blue-500/50 transition-all group`}><div className={`p-2 ${theme.activeItem} rounded-lg mb-2 ${theme.textSub} group-hover:text-blue-500 group-hover:bg-blue-500/10 transition-colors`}><Icon className="w-5 h-5" /></div><span className={`text-sm font-bold ${theme.textMain}`}>{label}</span><span className={`text-[10px] ${theme.textSub}`}>{sub}</span></button> );
 const TaskOptionButton = ({ icon: Icon, label, onClick, t }) => ( <button onClick={onClick} className={`p-6 rounded-2xl border ${t.borderCard} ${t.bgCard} hover:border-blue-500 hover:bg-blue-500/5 transition-all flex flex-col items-center gap-4 group`}><div className="w-16 h-16 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400 group-hover:scale-110 transition-transform"><Icon className="w-8 h-8" /></div><span className={`font-bold text-lg ${t.textMain}`}>{label}</span></button> );
 const SettingsTab = ({ label, icon: Icon, active, onClick, theme }) => ( <button onClick={onClick} className={`w-full flex items-center justify-between p-3 rounded-xl transition-colors ${active ? 'bg-blue-600 text-white' : theme.textMain}`}><div className="flex items-center gap-3"><Icon className="w-5 h-5" /><span className="text-sm font-medium">{label}</span></div>{active && <ChevronRight className="w-4 h-4" />}</button> );
-const SettingInput = ({ label, value, theme }) => ( <div className="flex flex-col gap-2"><label className={`text-xs font-bold uppercase ${theme.textSub}`}>{label}</label><input type="text" defaultValue={value} className={`${theme.bgInput} border ${theme.borderCard} rounded-xl px-4 py-3 ${theme.textMain}`} /></div> );
+const SettingInput = ({ label, value, onChange, theme, type = "text" }) => ( <div className="flex flex-col gap-2"><label className={`text-xs font-bold uppercase ${theme.textSub}`}>{label}</label><input type={type} value={value} onChange={onChange} className={`${theme.bgInput} border ${theme.borderCard} rounded-xl px-4 py-3 ${theme.textMain}`} /></div> );
 const SettingToggle = ({ label, active, theme }) => ( <div className={`flex items-center justify-between p-4 ${theme.bgInput} border ${theme.borderCard} rounded-xl`}><span className={`font-bold ${theme.textMain}`}>{label}</span><div className={`w-12 h-7 rounded-full p-1 ${active ? 'bg-green-500' : 'bg-slate-400'}`}><div className={`w-5 h-5 rounded-full bg-white shadow-md transform ${active ? 'translate-x-5' : ''}`}></div></div></div> );
 const SettingSlider = ({ label, value, min, max, theme }) => ( <div className={`flex flex-col gap-2 p-4 ${theme.bgInput} border ${theme.borderCard} rounded-xl`}><div className="flex justify-between"><span className={`font-bold ${theme.textMain}`}>{label}</span><span className="text-blue-500 font-mono">{value}%</span></div><input type="range" min={min} max={max} defaultValue={value} className="w-full accent-blue-500 h-2 bg-slate-600 rounded-lg" /></div> );
 
