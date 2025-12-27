@@ -106,14 +106,14 @@ const getLineIntersection = (p1, p2, p3, p4) => {
 const checkSelfIntersection = (points) => {
     if (points.length < 4) return null;
     
-    // We iterate backwards to find the most recent intersection first.
-    // 'i' is the start index of the "late" segment (the one currently being drawn/overshot)
-    for (let i = points.length - 2; i >= 2; i--) {
+    // We scan from the most recent segment backwards.
+    // i is the start index of the "late" segment (could be the one vehicle just finished, or one before that)
+    for (let i = points.length - 2; i > 1; i--) {
         const p1 = points[i];
         const p2 = points[i+1];
         
-        // 'j' is the start index of the "early" segment (the one we are crossing back into)
-        // We stop at i - 1 to avoid checking adjacent segments (which naturally touch)
+        // j is the start index of the "early" segment
+        // We stop at i - 1 to avoid checking adjacent segments which share a vertex
         for (let j = 0; j < i - 1; j++) {
             const p3 = points[j];
             const p4 = points[j+1];
@@ -121,8 +121,8 @@ const checkSelfIntersection = (points) => {
             const intersection = getLineIntersection(p1, p2, p3, p4);
             if (intersection) {
                 return {
-                    earlySegmentIdx: j, // Index of Pj
-                    lateSegmentIdx: i,  // Index of Pi
+                    earlySegmentIdx: j, // Index of Pj -> Pj+1
+                    lateSegmentIdx: i,  // Index of Pi -> Pi+1
                     point: intersection
                 };
             }
@@ -201,8 +201,9 @@ const App = () => {
   // Boundary States
   const [boundaryNameModalOpen, setBoundaryNameModalOpen] = useState(false);
   const [tempBoundaryName, setTempBoundaryName] = useState('');
-  const [boundaryAlertOpen, setBoundaryAlertOpen] = useState(false); // New Alert Modal
-  const [boundaryAlertType, setBoundaryAlertType] = useState(null); // 'INCOMPLETE' or 'AUTO_CLOSE'
+  const [boundaryAlertOpen, setBoundaryAlertOpen] = useState(false); 
+  const [boundaryAlertType, setBoundaryAlertType] = useState(null); 
+  const [previewBoundary, setPreviewBoundary] = useState(null); // Preview State
 
   const [tempLineName, setTempLineName] = useState('');
   const [tempManualHeading, setTempManualHeading] = useState('0.0'); 
@@ -601,43 +602,42 @@ const App = () => {
   
   // UPDATED FINISH BOUNDARY LOGIC
   const finishBoundaryRecording = () => {
-      // 1. Check Minimum Distance (100m)
+      // 1. Check Minimum Distance (50m) - Reduced for testing
       const pathLengthPx = calculatePathLength(tempBoundary);
-      // 100 meters * PIXELS_PER_METER
-      if (pathLengthPx < (100 * PIXELS_PER_METER)) {
-           showNotification(`Quãng đường quá ngắn (< 100m). Hãy chạy thêm!`, "warning");
+      // 50 meters * PIXELS_PER_METER (easier testing)
+      if (pathLengthPx < (50 * PIXELS_PER_METER)) {
+           showNotification(`Quãng đường quá ngắn (< 50m). Hãy chạy thêm!`, "warning");
            return;
       }
       
-      // Use Case 1: Check for Self-Intersection (CROSSING)
-      const selfIntersect = checkSelfIntersection(tempBoundary);
+      // Use Case 1: Check for Self-Intersection (CROSSING) with LIVE POS
+      // Add current position to check for the most recent crossing
+      const currentPath = [...tempBoundary, worldPos];
+      const selfIntersect = checkSelfIntersection(currentPath);
       
       if (selfIntersect) {
-          // INTERSECTION FOUND -> Auto Trim Tail -> Create Polygon
-          // Logic: Keep points starting from the intersection point on the OLD segment
-          // up to the point BEFORE current overshoot.
+          // INTERSECTION FOUND -> Auto Trim Tail & Head -> Create Polygon
           
-          // The loop consists of: 
-          // 1. The Intersection Point
-          // 2. Points [segmentIndex + 1] to [length - 2] (exclude overshoot tail)
-          // 3. The Intersection Point (to close)
+          // Debug/Fix: Access correct properties
+          const { earlySegmentIdx, lateSegmentIdx, point } = selfIntersect;
           
-          const loopPoints = [selfIntersect.point]; // Start at intersection
+          const loopPoints = [point]; // Start at intersection
           
-          // Add intermediate points (excluding the overshoot part which is the last point)
-          // segmentIndex is where the old segment started (j). 
-          // So the loop goes: Intersection -> j+1 -> ... -> last-1 -> Intersection
-          for (let k = selfIntersect.segmentIndex + 1; k < tempBoundary.length - 1; k++) {
-              loopPoints.push(tempBoundary[k]);
+          // Add intermediate points inside the loop
+          // From the end of the early segment (earlySegmentIdx + 1)
+          // To the start of the late segment (lateSegmentIdx)
+          for (let k = earlySegmentIdx + 1; k <= lateSegmentIdx; k++) {
+              loopPoints.push(currentPath[k]);
           }
           
-          loopPoints.push(selfIntersect.point); // Close it precisely
+          loopPoints.push(point); // Close it precisely
 
-          setTempBoundary(loopPoints);
+          // Update preview and proceed
+          setPreviewBoundary(loopPoints); 
+          setTempBoundary([]); 
           setIsRecordingBoundary(false);
           physics.current.targetSpeed = 0;
           
-          // Proceed to Save immediately
           const count = viewMode === 'CREATE_FIELD' ? currentFieldBoundaries.length : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
           setTempBoundaryName(`Boundary ${count + 1}`);
           setBoundaryNameModalOpen(true);
@@ -647,16 +647,14 @@ const App = () => {
 
       // Use Case 2 & 3: Check Distance to Start
       const firstPoint = tempBoundary[0];
-      const lastPoint = tempBoundary[tempBoundary.length - 1];
+      const lastPoint = worldPos;
       const dist = Math.hypot(firstPoint.x - lastPoint.x, firstPoint.y - lastPoint.y);
-      const THRESHOLD = 50 * PIXELS_PER_METER; // 50m threshold (750px)
+      const THRESHOLD = 100 * PIXELS_PER_METER; // INCREASED THRESHOLD (~100m range) for easier closing
 
       if (dist < THRESHOLD) {
-          // Use Case 3: Near Start Point -> Confirm Auto Close
           setBoundaryAlertType('AUTO_CLOSE');
           setBoundaryAlertOpen(true);
       } else {
-          // Use Case 2: Far from Start -> Incomplete -> Confirm Continue/Cancel
           setBoundaryAlertType('INCOMPLETE');
           setBoundaryAlertOpen(true);
       }
@@ -668,19 +666,18 @@ const App = () => {
       if (boundaryAlertType === 'AUTO_CLOSE') {
           if (choice === 'YES') {
               // Auto close logic
+              const closedLoop = [...tempBoundary, tempBoundary[0]]; // Snap to start
+              setPreviewBoundary(closedLoop);
+              setTempBoundary([]);
               setIsRecordingBoundary(false);
               physics.current.targetSpeed = 0;
-              
-              // Force snap: Add start point to end
-              setTempBoundary(prev => [...prev, prev[0]]);
               
               const count = viewMode === 'CREATE_FIELD' ? currentFieldBoundaries.length : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
               setTempBoundaryName(`Boundary ${count + 1}`);
               setBoundaryNameModalOpen(true);
               showNotification("Đã đóng vòng biên", "success");
           } else {
-              // Continue recording
-              showNotification("Tiếp tục ghi...", "info");
+               showNotification("Tiếp tục ghi...", "info");
           }
       } else if (boundaryAlertType === 'INCOMPLETE') {
           if (choice === 'CONTINUE') {
@@ -698,17 +695,8 @@ const App = () => {
           return;
       }
       
-      // Ensure loop is closed visually if not already
-      let finalPoints = [...tempBoundary];
-      // Basic check if closed
-      if (finalPoints.length > 2) {
-          const first = finalPoints[0];
-          const last = finalPoints[finalPoints.length - 1];
-          // Simple check if same object or coordinates
-          if (first.x !== last.x || first.y !== last.y) {
-               finalPoints.push(first);
-          }
-      }
+      // Use preview boundary as final data
+      const finalPoints = previewBoundary || tempBoundary; 
 
       const newBoundaryObj = { name: tempBoundaryName, points: finalPoints };
       let updatedBoundaries = [];
@@ -732,20 +720,19 @@ const App = () => {
           });
           setFields(updatedFields);
           
-          // CRITICAL FIX: Always update loadedField to reflect the changes immediately
-          // This ensures the map renders the new boundary and the active highlight works
+          // Force update loaded field to reflect changes immediately
           const updatedActiveField = updatedFields.find(f => f.id === selectedFieldId);
           setLoadedField(updatedActiveField); 
           
-          // Set as active immediately
           setActiveBoundaryIdx(updatedBoundaries.length - 1);
       }
       
       setBoundaryNameModalOpen(false);
+      setPreviewBoundary(null); 
       setTempBoundary([]);
       setTempBoundaryName('');
       setIsRecordingBoundary(false);
-      setDockMenuOpen(true); // Return to menu
+      setDockMenuOpen(true); 
       showNotification("Boundary Saved & Active!", "success");
   }
 
@@ -753,7 +740,8 @@ const App = () => {
     setIsRecordingBoundary(false);
     physics.current.targetSpeed = 0;
     setTempBoundary([]);
-    setDockMenuOpen(true); // Return to menu
+    setPreviewBoundary(null); 
+    setDockMenuOpen(true); 
     showNotification("Recording Cancelled", "info");
   };
   
@@ -1100,6 +1088,15 @@ const App = () => {
                                             strokeDasharray="5,5" 
                                         />
                                     ))}
+                                    {previewBoundary && (
+                                        <polygon 
+                                            points={previewBoundary.map(p => `${p.x},${p.y}`).join(' ')}
+                                            fill="rgba(34, 197, 94, 0.3)" 
+                                            stroke="#22c55e" 
+                                            strokeWidth="3"
+                                            strokeDasharray="5,5" 
+                                        />
+                                    )}
                                 </g>
                             </svg>
 
