@@ -62,21 +62,15 @@ import {
   ChevronsRight,
   PenTool,
   PlusCircle,
-  AlertCircle
+  AlertCircle,
+  Copy,
+  AlignJustify 
 } from 'lucide-react';
 
 // --- GEOMETRY HELPERS ---
 
-// Scale factor: Assuming ~15 pixels = 1 meter based on physics logic
 const PIXELS_PER_METER = 15; 
-
-// Normalize angle to -180 to 180
-const normalizeAngle = (angle) => {
-    let a = angle % 360;
-    if (a > 180) a -= 360;
-    if (a < -180) a += 360;
-    return a;
-};
+const DEFAULT_IMPLEMENT_WIDTH = 4.5; // meters
 
 // Calculate total length of a path in pixels
 const calculatePathLength = (points) => {
@@ -100,7 +94,7 @@ const getLineIntersection = (p1, p2, p3, p4) => {
     const s = (-s1_y * (p1.x - p3.x) + s1_x * (p1.y - p3.y)) / denom;
     const t = ( s2_x * (p1.y - p3.y) - s2_y * (p1.x - p3.x)) / denom;
 
-    // Strict intersection (not endpoints) usually preferred, but 0..1 is okay
+    // Strict intersection (0..1)
     if (s >= 0 && s <= 1 && t >= 0 && t <= 1) {
         return {
             x: p1.x + (t * s1_x),
@@ -139,6 +133,14 @@ const checkSelfIntersection = (points) => {
         }
     }
     return null;
+};
+
+// Normalize angle to -180 to 180
+const normalizeAngle = (angle) => {
+    let a = angle % 360;
+    if (a > 180) a -= 360;
+    if (a < -180) a += 360;
+    return a;
 };
 
 
@@ -199,6 +201,25 @@ const App = () => {
       lastTime: 0
   });
   
+  // Settings States (Real-time updates)
+  const [vehicleSettings, setVehicleSettings] = useState({
+      type: 'Tractor 4WD',
+      wheelbase: 285,
+      antennaHeight: 320,
+      antennaOffset: 0,
+      rearHitch: 110,
+      turnRadius: 6.5
+  });
+
+  const [implementSettings, setImplementSettings] = useState({
+      name: 'Planter_6R',
+      width: DEFAULT_IMPLEMENT_WIDTH, 
+      overlap: 0.1,
+      offset: 0,
+      delayOn: 0.5,
+      delayOff: 0.2
+  });
+
   // UI States
   const [menuOpen, setMenuOpen] = useState(false); 
   const [settingsOpen, setSettingsOpen] = useState(false); 
@@ -215,10 +236,18 @@ const App = () => {
   const [boundaryAlertType, setBoundaryAlertType] = useState(null); 
   const [previewBoundary, setPreviewBoundary] = useState(null); 
 
+  // Delete Confirm Modal
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState(null); 
+
   const [tempLineName, setTempLineName] = useState('');
   const [tempManualHeading, setTempManualHeading] = useState('0.0'); 
   const [settingsTab, setSettingsTab] = useState('display'); 
   const [lineType, setLineType] = useState('STRAIGHT_AB'); 
+  
+  // Multiple Line Mode
+  const [isMultiLineMode, setIsMultiLineMode] = useState(true); // Default ON
+
   const [satelliteCount, setSatelliteCount] = useState(12);
   const [notification, setNotification] = useState(null);
   const [zoomLevel, setZoomLevel] = useState(0.6); 
@@ -238,7 +267,7 @@ const App = () => {
         lastUsed: "Today", 
         boundaries: [], 
         lines: [ 
-            { id: 101, name: "Main AB", type: "STRAIGHT_AB", date: "2023-10-01", points: { a: {x: -50, y: -200}, b: {x: -50, y: 200} } },
+            { id: 101, name: "Main AB", type: "STRAIGHT_AB", isMulti: true, date: "2023-10-01", points: { a: {x: -50, y: -200}, b: {x: -50, y: 200} } },
         ],
         tasks: [
              { id: 201, name: "Spring Planting", type: "Planting", date: "2023-10-15", status: "Paused" }
@@ -283,13 +312,22 @@ const App = () => {
   // Store refs to guidance data for physics loop
   const guidanceRef = useRef({
       type: null,
-      points: null
+      points: null,
+      isMulti: false,
+      width: 0
   });
 
   // Sync guidanceRef with state
   useEffect(() => {
+    // Find active line object to get its specific properties
+    const activeField = fields.find(f => f.id === selectedFieldId);
+    // Use global multi-line setting OR line specific setting? 
+    // Usually system setting overrides or applies. Let's use the global setting for now as requested.
+    
     guidanceRef.current = {
         type: guidanceLine,
+        isMulti: isMultiLineMode, 
+        width: implementSettings.width * PIXELS_PER_METER,
         points: { 
             a: pointA, 
             b: pointB, 
@@ -298,7 +336,7 @@ const App = () => {
             pivot: { center: pivotCenter, radius: pivotRadius }
         }
     };
-  }, [guidanceLine, pointA, pointB, aPlusPoint, aPlusHeading, curvePoints, pivotCenter, pivotRadius]);
+  }, [guidanceLine, pointA, pointB, aPlusPoint, aPlusHeading, curvePoints, pivotCenter, pivotRadius, activeLineId, fields, selectedFieldId, isMultiLineMode, implementSettings.width]);
 
 
   const t = theme === 'dark' ? {
@@ -369,7 +407,7 @@ const App = () => {
   // --- 2. INPUT ---
   useEffect(() => {
     const handleKeyDown = (e) => {
-        if (menuOpen || settingsOpen || (fieldManagerOpen && !isRecordingBoundary) || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || linesPanelOpen || manualHeadingModalOpen || boundaryAlertOpen) return; 
+        if (menuOpen || settingsOpen || (fieldManagerOpen && !isRecordingBoundary) || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || linesPanelOpen || manualHeadingModalOpen || boundaryAlertOpen || deleteModalOpen) return; 
         if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].indexOf(e.key) > -1) e.preventDefault();
         keysPressed.current[e.key] = true;
     };
@@ -377,7 +415,7 @@ const App = () => {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
-  }, [menuOpen, settingsOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen, boundaryAlertOpen]);
+  }, [menuOpen, settingsOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen]);
 
   // --- 3. PHYSICS ---
   useEffect(() => {
@@ -392,10 +430,8 @@ const App = () => {
 
         // --- AUTO STEERING LOGIC ---
         if (steeringMode === 'AUTO') {
-             // 1. Maintain default speed if stopped or slow (Simulate driving)
              if (p.targetSpeed < 2) p.targetSpeed = 6; 
 
-             // 2. Calculate Steering
              const guide = guidanceRef.current;
              let xte = 0;
              let lineHeading = 0;
@@ -407,11 +443,8 @@ const App = () => {
                 const dx = bx - ax; const dy = by - ay;
                 const len = Math.hypot(dx, dy);
                 
-                // Normal vector calculation for XTE
                 const crossProduct = (bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax);
                 xte = crossProduct / len;
-                
-                // Calculate Line Heading (0 deg is North/Up)
                 lineHeading = Math.atan2(dx, -dy) * 180 / Math.PI;
                 validLine = true;
              } 
@@ -425,43 +458,36 @@ const App = () => {
                  const uy = -Math.cos(rad); 
                  
                  const vax = p.x - ax; const vay = p.y - ay;
-                 xte = vax * (-uy) + vay * (ux); // Dot product with normal
-                 
+                 xte = vax * (-uy) + vay * (ux);
                  lineHeading = h;
                  validLine = true;
              }
 
              if (validLine) {
-                 // --- BIDIRECTIONAL LOGIC ---
+                 // MULTI-LINE OFFSET LOGIC
+                 if (guide.isMulti && guide.width > 0) {
+                     const laneIdx = Math.round(xte / guide.width);
+                     xte = xte - (laneIdx * guide.width);
+                 }
+
                  let headingErr = normalizeAngle(lineHeading - p.heading);
                  
-                 // If the angle difference is > 90 (driving reverse relative to line), flip logic
                  if (Math.abs(headingErr) > 90) {
-                     // Flip target heading by 180
                      const reverseHeading = normalizeAngle(lineHeading + 180);
                      headingErr = normalizeAngle(reverseHeading - p.heading);
-                     
-                     // IMPORTANT: Also flip XTE sign because "Left" and "Right" are reversed when driving backwards along the line
                      xte = -xte; 
                  }
                  
-                 // Control Gains
                  const kP_xte = 0.5; 
                  const kP_head = 1.0; 
-                 
-                 // Control Law: Steer to reduce Heading Error AND XTE
-                 // If XTE > 0 (Right), we need to steer Left (-).
                  let steerCmd = headingErr * kP_head - xte * kP_xte;
                  
-                 // Clamp
                  if (steerCmd > 40) steerCmd = 40;
                  if (steerCmd < -40) steerCmd = -40;
-                 
                  p.steeringAngle = steerCmd;
              }
              
         } else {
-             // MANUAL MODE logic already handles key inputs
              if (keysPressed.current['ArrowUp']) p.targetSpeed = Math.min(p.targetSpeed + 10 * dt, 15); 
             else if (keysPressed.current['ArrowDown']) p.targetSpeed = Math.max(p.targetSpeed - 15 * dt, -5); 
             
@@ -593,6 +619,7 @@ const App = () => {
         id: Date.now(),
         name: tempLineName,
         type: lineType,
+        isMulti: isMultiLineMode,
         date: new Date().toISOString().split('T')[0],
         points: { a: pointA, b: pointB, curve: curvePoints, pivot: { center: pivotCenter, radius: pivotRadius }, aplus: { point: aPlusPoint, heading: aPlusHeading } }
     };
@@ -672,31 +699,6 @@ const App = () => {
      physics.current.targetSpeed = 5; 
      showNotification("Drive to record boundary...", "info"); 
   };
-  
-  const updateManualSpeed = (val) => { physics.current.targetSpeed = val; setManualTargetSpeed(val); };
-  const updateSteering = (val) => { physics.current.steeringAngle = val; setSteeringAngle(val); };
-
-  const handleLoadLine = (line) => {
-      resetLines(); setActiveLineId(line.id); setLineType(line.type);
-      if (line.type === 'STRAIGHT_AB' && line.points) { setPointA(line.points.a); setPointB(line.points.b); setGuidanceLine('STRAIGHT_AB'); }
-      else if (line.type === 'CURVE' && line.points) { setCurvePoints(line.points.curve || []); setGuidanceLine('CURVE'); }
-      else if (line.type === 'A_PLUS' && line.points) { setAPlusPoint(line.points.aplus?.point); setAPlusHeading(line.points.aplus?.heading); setGuidanceLine('A_PLUS'); }
-      else if (line.type === 'PIVOT' && line.points) { setPivotCenter(line.points.pivot?.center); setPivotRadius(line.points.pivot?.radius); setGuidanceLine('PIVOT'); }
-      showNotification(`Line "${line.name}" Loaded`, "success"); setLinesPanelOpen(false); 
-      setIsCreating(false); // DO NOT ENTER CREATION MODE WHEN LOADING
-      setDockMenuOpen(false); // Close menu
-  }
-
-  const handleTaskAction = (task, action) => {
-      let newStatus = task.status;
-      if (action === 'start') { newStatus = 'In Progress'; setActiveTaskId(task.id); showNotification(`Task "${task.name}" Started`, "success"); }
-      else if (action === 'pause') { newStatus = 'Paused'; if (activeTaskId === task.id) setActiveTaskId(null); showNotification(`Task "${task.name}" Paused`, "info"); }
-      else if (action === 'finish') { newStatus = 'Done'; if (activeTaskId === task.id) setActiveTaskId(null); showNotification(`Task "${task.name}" Finished!`, "success"); }
-      setFields(prev => prev.map(f => { if (f.id === selectedFieldId) { return { ...f, tasks: f.tasks.map(t => t.id === task.id ? { ...t, status: newStatus } : t) }; } return f; }));
-  }
-
-  const startFieldCreation = () => { setViewMode('CREATE_FIELD'); setNewFieldName(''); setCurrentFieldBoundaries([]); setTempBoundary([]); };
-  const startBoundaryRecording = () => { setFieldManagerOpen(false); setIsRecordingBoundary(true); physics.current.targetSpeed = 5; showNotification("Drive to record boundary...", "info"); };
   
   // UPDATED FINISH BOUNDARY LOGIC
   const finishBoundaryRecording = () => {
@@ -840,6 +842,70 @@ const App = () => {
     showNotification("Recording Cancelled", "info");
   };
   
+  // Custom Delete Modal Handler
+  const confirmDelete = (type, id, index) => {
+      setItemToDelete({ type, id, index });
+      setDeleteModalOpen(true);
+  };
+
+  const executeDelete = () => {
+      if (!itemToDelete) return;
+      const { type, id, index } = itemToDelete;
+
+      if (type === 'boundary') {
+            const updatedFields = fields.map(f => {
+                if (f.id === selectedFieldId) {
+                    const newBounds = f.boundaries.filter((_, i) => i !== index);
+                    return { ...f, boundaries: newBounds };
+                }
+                return f;
+            });
+            setFields(updatedFields);
+            
+            if (loadedField && loadedField.id === selectedFieldId) {
+                const newBounds = loadedField.boundaries.filter((_, i) => i !== index);
+                setLoadedField({...loadedField, boundaries: newBounds});
+            }
+            if (activeBoundaryIdx === index) setActiveBoundaryIdx(0);
+            showNotification("Boundary Deleted", "info");
+      } else if (type === 'line') {
+            const updatedFields = fields.map(f => {
+                if (f.id === selectedFieldId) {
+                    const newLines = f.lines.filter(l => l.id !== id);
+                    return { ...f, lines: newLines };
+                }
+                return f;
+            });
+            setFields(updatedFields);
+            
+            if (loadedField && loadedField.id === selectedFieldId) {
+                const newLines = loadedField.lines.filter(l => l.id !== id);
+                setLoadedField({...loadedField, lines: newLines});
+            }
+            if (activeLineId === id) {
+                setActiveLineId(null);
+                setGuidanceLine(null);
+                resetLines();
+            }
+            showNotification("Line Deleted", "info");
+      } else if (type === 'task') {
+            const updatedFields = fields.map(f => {
+                if (f.id === selectedFieldId) {
+                    const newTasks = f.tasks.filter(t => t.id !== id);
+                    return { ...f, tasks: newTasks };
+                }
+                return f;
+            });
+            setFields(updatedFields);
+            if (activeTaskId === id) {
+                setActiveTaskId(null);
+            }
+            showNotification("Task Deleted", "info");
+      }
+      setDeleteModalOpen(false);
+      setItemToDelete(null);
+  }
+  
   const handleDeleteField = () => {
       if (fields.length <= 1) { showNotification("Cannot delete the last field!", "warning"); return; }
       const updatedFields = fields.filter(f => f.id !== selectedFieldId);
@@ -882,12 +948,61 @@ const App = () => {
   const getLineTypeIcon = () => { switch(lineType) { case 'STRAIGHT_AB': return GitCommitHorizontal; case 'A_PLUS': return ArrowUpFromDot; case 'CURVE': return Spline; case 'PIVOT': return CircleDashed; default: return GitCommitHorizontal; } };
 
   const renderGuidanceLine = () => {
+    // 1. Current Active Line from Logic
+    let currentLaneIndex = 0;
+    
+    // Calculate lane index based on physics/position (duplicated logic for render)
+    if (guidanceRef.current && guidanceRef.current.type && guidanceRef.current.width > 0) {
+         // Re-calculate XTE roughly to find lane
+         const guide = guidanceRef.current;
+         const p = worldPos; // Current pos
+         let xte = 0;
+
+         if (guide.type === 'STRAIGHT_AB' && guide.points.a && guide.points.b) {
+            const ax = guide.points.a.x; const ay = guide.points.a.y;
+            const bx = guide.points.b.x; const by = guide.points.b.y;
+            const dx = bx - ax; const dy = by - ay;
+            const len = Math.hypot(dx, dy);
+            xte = ((bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax)) / len;
+         } 
+         else if (guide.type === 'A_PLUS' && guide.points.aplus && guide.points.aplus.point) {
+             const ax = guide.points.aplus.point.x;
+             const ay = guide.points.aplus.point.y;
+             const h = guide.points.aplus.heading;
+             const rad = h * Math.PI / 180;
+             const ux = Math.sin(rad);
+             const uy = -Math.cos(rad); 
+             const vax = p.x - ax; const vay = p.y - ay;
+             xte = vax * (-uy) + vay * (ux);
+         }
+         
+         currentLaneIndex = Math.round(xte / guide.width);
+    }
+
+
     if (guidanceLine === 'STRAIGHT_AB' && pointA && pointB) {
       const dx = pointB.x - pointA.x; const dy = pointB.y - pointA.y; const length = Math.sqrt(dx*dx + dy*dy); const ux = dx / length; const uy = dy / length;
       const x1 = pointA.x - ux * 10000; const y1 = pointA.y - uy * 10000; const x2 = pointA.x + ux * 10000; const y2 = pointA.y + uy * 10000;
-      return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="blue" strokeWidth="2" strokeOpacity="0.6" />;
+      
+      const elements = [];
+      // Main Line (Index 0)
+      // Highlight: if currentLaneIndex === 0, make it thicker and darker blue. Else lighter.
+      // Solid lines requested: remove strokeDasharray
+      elements.push(<line key="main" x1={x1} y1={y1} x2={x2} y2={y2} stroke={currentLaneIndex === 0 ? "#2563eb" : "#93c5fd"} strokeWidth={currentLaneIndex === 0 ? "4" : "2"} />);
+
+      if (isMultiLineMode) {
+          const w = implementSettings.width * PIXELS_PER_METER;
+          const nx = -uy; const ny = ux; 
+          for (let i = 1; i <= 6; i++) { // Render 6 lines
+               // Right side (positive index)
+               elements.push(<line key={`r${i}`} x1={x1 + nx*w*i} y1={y1 + ny*w*i} x2={x2 + nx*w*i} y2={y2 + ny*w*i} stroke={currentLaneIndex === i ? "#2563eb" : "#93c5fd"} strokeWidth={currentLaneIndex === i ? "4" : "2"} />);
+               // Left side (negative index)
+               elements.push(<line key={`l${i}`} x1={x1 - nx*w*i} y1={y1 - ny*w*i} x2={x2 - nx*w*i} y2={y2 - ny*w*i} stroke={currentLaneIndex === -i ? "#2563eb" : "#93c5fd"} strokeWidth={currentLaneIndex === -i ? "4" : "2"} />);
+          }
+      }
+      return elements;
     }
-    // A+ PREVIEW OR CONFIRMED LINE
+    
     if ((guidanceLine === 'A_PLUS' || (lineType === 'A_PLUS' && !guidanceLine)) && aPlusPoint && aPlusHeading !== null && aPlusHeading !== undefined) {
         const rad = aPlusHeading * Math.PI / 180; 
         const ux = Math.sin(rad); 
@@ -896,9 +1011,22 @@ const App = () => {
         const y1 = aPlusPoint.y - uy * 100000; 
         const x2 = aPlusPoint.x + ux * 100000; 
         const y2 = aPlusPoint.y + uy * 100000;
-        // If it's a preview (not yet confirmed guidanceLine), make it dashed or lighter red
+        
         const isPreview = !guidanceLine;
-        return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={isPreview ? "red" : "blue"} strokeWidth="2" strokeOpacity={isPreview ? "0.8" : "0.6"} strokeDasharray={isPreview ? "15, 10" : "0"} />;
+        const elements = [];
+        
+        // Preview line is red dashed. Active lines are blue solid.
+        elements.push(<line key="main" x1={x1} y1={y1} x2={x2} y2={y2} stroke={isPreview ? "red" : (currentLaneIndex === 0 ? "#2563eb" : "#93c5fd")} strokeWidth={currentLaneIndex === 0 ? "4" : "2"} strokeDasharray={isPreview ? "15, 10" : "0"} />);
+        
+        if (!isPreview && isMultiLineMode) {
+           const w = implementSettings.width * PIXELS_PER_METER;
+           const nx = -uy; const ny = ux;
+           for (let i = 1; i <= 6; i++) {
+               elements.push(<line key={`r${i}`} x1={x1 + nx*w*i} y1={y1 + ny*w*i} x2={x2 + nx*w*i} y2={y2 + ny*w*i} stroke={currentLaneIndex === i ? "#2563eb" : "#93c5fd"} strokeWidth={currentLaneIndex === i ? "4" : "2"} />);
+               elements.push(<line key={`l${i}`} x1={x1 - nx*w*i} y1={y1 - ny*w*i} x2={x2 - nx*w*i} y2={y2 - ny*w*i} stroke={currentLaneIndex === -i ? "#2563eb" : "#93c5fd"} strokeWidth={currentLaneIndex === -i ? "4" : "2"} />);
+          }
+        }
+        return elements;
     }
     return null;
   };
@@ -1016,12 +1144,53 @@ const App = () => {
       );
   };
 
+  // HANDLER FOR REAL-TIME IMPLEMENT CHANGE
+  const handleImplementChange = (key, value) => {
+      setImplementSettings(prev => ({ ...prev, [key]: value }));
+  };
+
   const renderSettingsContent = () => {
     switch (settingsTab) {
         case 'display': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Màn hình (Display)</h3><div className="grid grid-cols-1 gap-4"><SettingSlider theme={t} label="Độ sáng (Brightness)" value={85} min={0} max={100} /><div className={`flex items-center justify-between p-4 lg:p-5 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} border ${t.borderCard} rounded-xl`}><div className="flex items-center gap-3">{theme === 'light' ? <Sun className="w-6 h-6 text-orange-500" /> : <Moon className="w-6 h-6 text-blue-400" />}<span className={`font-bold text-base lg:text-lg ${t.textMain}`}>Giao diện (Theme)</span></div><div className="flex bg-slate-700/20 p-1 rounded-lg"><button onClick={() => setTheme('light')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${theme === 'light' ? 'bg-white text-slate-900 shadow-md' : 'text-slate-500 hover:text-slate-700'}`}><Sun className="w-4 h-4" /> Sáng</button><button onClick={() => setTheme('dark')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${theme === 'dark' ? 'bg-slate-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}><Moon className="w-4 h-4" /> Tối</button></div></div><SettingToggle theme={t} label="Chế độ ban đêm tự động" active={false} /></div></div> );
-        case 'vehicle': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Cấu hình Xe (Vehicle)</h3><div className="grid grid-cols-2 gap-4"><SettingInput theme={t} label="Vehicle Type" value="Tractor 4WD" /><SettingInput theme={t} label="Wheelbase" value="285 cm" /><SettingInput theme={t} label="Antenna Height" value="320 cm" /><SettingInput theme={t} label="Antenna Offset (X)" value="0 cm" /><SettingInput theme={t} label="Rear Hitch Length" value="110 cm" /><SettingInput theme={t} label="Turning Radius" value="6.5 m" /></div></div> );
-        case 'implement': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Nông cụ (Implement)</h3><div className="grid grid-cols-2 gap-4"><SettingInput theme={t} label="Implement Name" value="Planter_6R" /><SettingInput theme={t} label="Working Width" value="450 cm" /><SettingInput theme={t} label="Overlap" value="10 cm" /><SettingInput theme={t} label="Lateral Offset" value="0 cm" /><SettingInput theme={t} label="Delay On" value="0.5 s" /><SettingInput theme={t} label="Delay Off" value="0.2 s" /></div></div> );
-        case 'guidance': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Dẫn hướng (Guidance)</h3><div className="grid grid-cols-1 gap-4"><SettingSlider theme={t} label="Steering Sensitivity" value={75} min={0} max={100} /><SettingSlider theme={t} label="Line Acquisition Aggressiveness" value={60} min={0} max={100} /><SettingToggle theme={t} label="Enable U-Turn" active={true} /><SettingToggle theme={t} label="Terrain Compensation" active={true} /></div></div> );
+        case 'vehicle': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Cấu hình Xe (Vehicle)</h3><div className="grid grid-cols-2 gap-4"><SettingInput theme={t} label="Vehicle Type" value={vehicleSettings.type} /><SettingInput theme={t} label="Wheelbase" value={`${vehicleSettings.wheelbase} cm`} /><SettingInput theme={t} label="Antenna Height" value={`${vehicleSettings.antennaHeight} cm`} /><SettingInput theme={t} label="Antenna Offset (X)" value={`${vehicleSettings.antennaOffset} cm`} /><SettingInput theme={t} label="Rear Hitch Length" value={`${vehicleSettings.rearHitch} cm`} /><SettingInput theme={t} label="Turning Radius" value={`${vehicleSettings.turnRadius} m`} /></div></div> );
+        case 'implement': return ( 
+            <div className="space-y-4">
+                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Nông cụ (Implement)</h3>
+                <div className="grid grid-cols-2 gap-4">
+                    <SettingInput theme={t} label="Implement Name" value={implementSettings.name} />
+                    <div className="flex flex-col gap-2">
+                        <label className={`text-xs font-bold uppercase ${t.textSub}`}>Working Width (m)</label>
+                        <input 
+                            type="number" 
+                            value={implementSettings.width} 
+                            onChange={(e) => handleImplementChange('width', parseFloat(e.target.value) || 0)} 
+                            className={`${t.bgInput} border ${t.borderCard} rounded-xl px-4 py-3 ${t.textMain}`} 
+                        />
+                    </div>
+                    <SettingInput theme={t} label="Overlap" value={`${implementSettings.overlap} cm`} />
+                    <SettingInput theme={t} label="Lateral Offset" value={`${implementSettings.offset} cm`} />
+                    <SettingInput theme={t} label="Delay On" value={`${implementSettings.delayOn} s`} />
+                    <SettingInput theme={t} label="Delay Off" value={`${implementSettings.delayOff} s`} />
+                </div>
+            </div> 
+        );
+        case 'guidance': return ( 
+            <div className="space-y-4">
+                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Dẫn hướng (Guidance)</h3>
+                <div className="grid grid-cols-1 gap-4">
+                    <div onClick={() => setIsMultiLineMode(!isMultiLineMode)} className={`flex items-center justify-between p-4 ${t.bgInput} border ${t.borderCard} rounded-xl cursor-pointer`}>
+                        <span className={`font-bold ${t.textMain}`}>Show Multiple Lines</span>
+                        <div className={`w-12 h-7 rounded-full p-1 transition-colors ${isMultiLineMode ? 'bg-green-500' : 'bg-slate-400'}`}>
+                            <div className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform ${isMultiLineMode ? 'translate-x-5' : ''}`}></div>
+                        </div>
+                    </div>
+                    <SettingSlider theme={t} label="Steering Sensitivity" value={75} min={0} max={100} />
+                    <SettingSlider theme={t} label="Line Acquisition Aggressiveness" value={60} min={0} max={100} />
+                    <SettingToggle theme={t} label="Enable U-Turn" active={true} />
+                    <SettingToggle theme={t} label="Terrain Compensation" active={true} />
+                </div>
+            </div> 
+        );
         case 'rtk': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Kết nối RTK (GNSS)</h3><div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-lg border ${t.borderCard} mb-4`}><div className="flex items-center justify-between mb-2"><span className={`text-sm ${t.textSub}`}>Status</span><span className="text-green-500 font-bold">CONNECTED</span></div><div className={`h-2 ${theme === 'dark' ? 'bg-slate-700' : 'bg-gray-300'} rounded-full overflow-hidden`}><div className="h-full bg-green-500 w-[95%]"></div></div></div><div className="grid grid-cols-2 gap-4"><SettingInput theme={t} label="NTRIP Host" value="rtk.sveaverken.com" /><SettingInput theme={t} label="Port" value="2101" /><SettingInput theme={t} label="Mountpoint" value="VRS_RTCM32" /><SettingInput theme={t} label="User" value="user123" /></div></div> );
         default: return <div className={t.textDim}>Select a menu item</div>;
     }
@@ -1044,7 +1213,7 @@ const App = () => {
                             {lines.map((l) => (
                                 <div key={l.id} className={`flex items-center justify-between p-3 rounded-lg border ${t.borderCard}`}>
                                     <div className="flex items-center gap-3">{l.type === 'CURVE' ? <Spline className="w-5 h-5 text-purple-500" /> : <GitCommitHorizontal className="w-5 h-5 text-blue-500" />}<span className={t.textMain}>{l.name}</span></div>
-                                    <div className="flex items-center gap-2"><span className={`text-xs ${t.textSub}`}>{l.date}</span><button onClick={() => handleLoadLine(l)} className={`px-3 py-1 rounded text-xs font-bold ${activeLineId === l.id ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500'}`}>{activeLineId === l.id ? 'Active' : 'Load'}</button></div>
+                                    <div className="flex items-center gap-2"><span className={`text-xs ${t.textSub}`}>{l.date}</span><button onClick={() => confirmDelete('line', l.id)} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button><button onClick={() => handleLoadLine(l)} className={`px-3 py-1 rounded text-xs font-bold ${activeLineId === l.id ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500'}`}>{activeLineId === l.id ? 'Active' : 'Load'}</button></div>
                                 </div>
                             ))}
                             </div>
@@ -1093,17 +1262,17 @@ const App = () => {
                         <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
                             <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Boundaries</h4><button onClick={startBoundaryRecording} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> Add Boundary</button></div>
                             {boundaries.length > 0 ? (
-                                <div className="space-y-2">{boundaries.map((b, i) => (<button key={i} onClick={() => setActiveBoundaryIdx(i)} className={`w-full flex items-center justify-between p-3 rounded-lg border transition-all ${activeBoundaryIdx === i ? t.selectedItem : `${t.borderCard} hover:brightness-95`}`}><div className="flex items-center gap-3"><MapIcon className={`w-5 h-5 ${activeBoundaryIdx === i ? 'text-blue-500' : t.textDim}`} /><span className={t.textMain}>{b.name || `Boundary ${i + 1}`}</span></div>{activeBoundaryIdx === i && <span className="text-xs bg-blue-500 text-white px-2 py-1 rounded">Active</span>}</button>))}</div>
+                                <div className="space-y-2">{boundaries.map((b, i) => (<div key={i} onClick={() => setActiveBoundaryIdx(i)} className={`w-full flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all ${activeBoundaryIdx === i ? t.selectedItem : `${t.borderCard} hover:brightness-95`}`}><div className="flex items-center gap-3"><MapIcon className={`w-5 h-5 ${activeBoundaryIdx === i ? 'text-blue-500' : t.textDim}`} /><span className={t.textMain}>{b.name || `Boundary ${i + 1}`}</span></div><div className="flex items-center gap-2"><button onClick={(e) => { e.stopPropagation(); confirmDelete('boundary', null, i); }} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button>{activeBoundaryIdx === i && <span className="text-xs bg-blue-500 text-white px-2 py-1 rounded">Active</span>}</div></div>))}</div>
                             ) : (<div className={`text-center py-4 ${t.textDim} border-2 border-dashed border-slate-500/30 rounded-lg`}>No boundaries</div>)}
                         </div>
                         {/* LINES SECTION */}
                         <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
                             <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Saved Lines</h4></div>
-                            {lines && lines.length > 0 ? ( <div className="space-y-2">{lines.map((l) => (<div key={l.id} className={`flex items-center justify-between p-3 rounded-lg border ${t.borderCard}`}><div className="flex items-center gap-3">{l.type === 'CURVE' ? <Spline className="w-5 h-5 text-purple-500" /> : <GitCommitHorizontal className="w-5 h-5 text-blue-500" />}<span className={t.textMain}>{l.name}</span></div><div className="flex items-center gap-2"><span className={`text-xs ${t.textSub}`}>{l.date}</span><button onClick={() => handleLoadLine(l)} className={`px-3 py-1 rounded text-xs font-bold ${activeLineId === l.id ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500'}`}>{activeLineId === l.id ? 'Active' : 'Load'}</button></div></div>))}</div>) : (<div className={`text-center py-4 ${t.textDim}`}>No lines saved</div>)}
+                            {lines && lines.length > 0 ? ( <div className="space-y-2">{lines.map((l) => (<div key={l.id} className={`flex items-center justify-between p-3 rounded-lg border ${t.borderCard}`}><div className="flex items-center gap-3">{l.type === 'CURVE' ? <Spline className="w-5 h-5 text-purple-500" /> : <GitCommitHorizontal className="w-5 h-5 text-blue-500" />}<span className={t.textMain}>{l.name}</span></div><div className="flex items-center gap-2"><span className={`text-xs ${t.textSub}`}>{l.date}</span><button onClick={() => confirmDelete('line', l.id)} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button><button onClick={() => handleLoadLine(l)} className={`px-3 py-1 rounded text-xs font-bold ${activeLineId === l.id ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500'}`}>{activeLineId === l.id ? 'Active' : 'Load'}</button></div></div>))}</div>) : (<div className={`text-center py-4 ${t.textDim}`}>No lines saved</div>)}
                         </div>
                         {/* TASKS SECTION */}
                         <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
-                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Tasks History</h4><button onClick={startTaskCreation} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> New Task</button></div>{activeField.tasks.length > 0 ? (<div className="space-y-2">{activeField.tasks.map(task => (<div key={task.id} className={`flex items-center justify-between p-4 rounded-lg border transition-all ${activeTaskId === task.id ? 'border-green-500 bg-green-500/10' : t.borderCard}`}><div className="flex items-center gap-4"><div className="p-2 rounded bg-blue-500/20 text-blue-500">{task.type === 'Planting' ? <Sprout className="w-5 h-5"/> : task.type === 'Spraying' ? <Droplets className="w-5 h-5"/> : <Tractor className="w-5 h-5"/>}</div><div><div className={`font-bold ${t.textMain}`}>{task.name}</div><div className={`text-xs ${t.textSub}`}>{task.date} • {task.status}</div></div></div><div className="flex gap-2">{activeTaskId === task.id ? (<><button onClick={() => handleTaskAction(task, 'pause')} className="p-2 bg-orange-500/20 text-orange-500 rounded-lg hover:bg-orange-500/30"><Pause className="w-4 h-4" /></button><button onClick={() => handleTaskAction(task, 'finish')} className="p-2 bg-green-500/20 text-green-500 rounded-lg hover:bg-green-500/30"><CheckSquare className="w-4 h-4" /></button></>) : (task.status !== 'Done' && (<button onClick={() => handleTaskAction(task, 'start')} className="p-2 bg-blue-500/20 text-blue-500 rounded-lg hover:bg-blue-500/30"><PlayCircle className="w-4 h-4" /></button>))}</div></div>))}</div>) : (<div className={`text-center py-8 ${t.textDim}`}>No tasks recorded yet.</div>)}</div>
+                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Tasks History</h4><button onClick={startTaskCreation} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> New Task</button></div>{activeField.tasks.length > 0 ? (<div className="space-y-2">{activeField.tasks.map(task => (<div key={task.id} className={`flex items-center justify-between p-4 rounded-lg border transition-all ${activeTaskId === task.id ? 'border-green-500 bg-green-500/10' : t.borderCard}`}><div className="flex items-center gap-4"><div className="p-2 rounded bg-blue-500/20 text-blue-500">{task.type === 'Planting' ? <Sprout className="w-5 h-5"/> : task.type === 'Spraying' ? <Droplets className="w-5 h-5"/> : <Tractor className="w-5 h-5"/>}</div><div><div className={`font-bold ${t.textMain}`}>{task.name}</div><div className={`text-xs ${t.textSub}`}>{task.date} • {task.status}</div></div></div><div className="flex gap-2">{activeTaskId === task.id ? (<><button onClick={() => handleTaskAction(task, 'pause')} className="p-2 bg-orange-500/20 text-orange-500 rounded-lg hover:bg-orange-500/30"><Pause className="w-4 h-4" /></button><button onClick={() => handleTaskAction(task, 'finish')} className="p-2 bg-green-500/20 text-green-500 rounded-lg hover:bg-green-500/30"><CheckSquare className="w-4 h-4" /></button></>) : (task.status !== 'Done' && (<><button onClick={() => handleTaskAction(task, 'start')} className="p-2 bg-blue-500/20 text-blue-500 rounded-lg hover:bg-blue-500/30"><PlayCircle className="w-4 h-4" /></button><button onClick={() => confirmDelete('task', task.id)} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button></>))}</div></div>))}</div>) : (<div className={`text-center py-8 ${t.textDim}`}>No tasks recorded yet.</div>)}</div>
                   </div>
                   <div className={`p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button onClick={handleDeleteField} className={`px-6 py-3 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 flex items-center gap-2`}><Trash2 className="w-5 h-5" /> Delete</button><button onClick={handleLoadField} className="px-8 py-3 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500 shadow-lg shadow-green-900/20 flex items-center gap-2"><CheckCircle2 className="w-5 h-5" /> Load Field</button></div>
               </div>
@@ -1303,7 +1472,7 @@ const App = () => {
                 )}
                 
                 {settingsOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}><div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col`}><div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl lg:text-2xl font-bold flex items-center gap-3 ${t.textMain}`}><Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />Settings</h2></div><nav className="flex-1 overflow-y-auto p-4 space-y-2"><SettingsTab theme={t} label="Display" icon={Monitor} active={settingsTab === 'display'} onClick={() => setSettingsTab('display')} /><SettingsTab theme={t} label="Vehicle" icon={Tractor} active={settingsTab === 'vehicle'} onClick={() => setSettingsTab('vehicle')} /><SettingsTab theme={t} label="Implement" icon={Ruler} active={settingsTab === 'implement'} onClick={() => setSettingsTab('implement')} /><SettingsTab theme={t} label="Guidance" icon={Navigation} active={settingsTab === 'guidance'} onClick={() => setSettingsTab('guidance')} /><SettingsTab theme={t} label="RTK / GNSS" icon={Radio} active={settingsTab === 'rtk'} onClick={() => setSettingsTab('rtk')} /></nav></div><div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}><div className={`flex items-center justify-between p-6 lg:p-8 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><h3 className={`text-lg lg:text-xl font-medium ${t.textSub} uppercase tracking-widest`}>{settingsTab} CONFIGURATION</h3><button onClick={() => setSettingsOpen(false)} className={`p-2 lg:p-3 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}><X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} /></button></div><div className="flex-1 p-6 lg:p-10 overflow-y-auto"><div className="max-w-4xl">{renderSettingsContent()}</div></div><div className={`p-4 lg:p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`}>Cancel</button><button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg">Save Changes</button></div></div></div>}
-                {menuOpen && !fieldManagerOpen && !lineModeModalOpen && !linesPanelOpen && !manualHeadingModalOpen && !boundaryAlertOpen && (
+                {menuOpen && !fieldManagerOpen && !lineModeModalOpen && !linesPanelOpen && !manualHeadingModalOpen && !boundaryAlertOpen && !deleteModalOpen && (
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-lg border ${t.borderCard} shadow-2xl flex flex-col max-h-[85vh]`}><div className={`p-4 border-b ${t.divider} flex justify-between items-center`}><div className="flex items-center gap-2"><Menu className="w-5 h-5 text-blue-500" /><h3 className={`font-bold text-lg ${t.textMain}`}>Quick Menu</h3></div><button onClick={() => setMenuOpen(false)} className={`px-3 py-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} rounded-lg text-xs hover:brightness-95 border ${t.borderCard} ${t.textMain}`}>Close</button></div><div className="p-4 grid grid-cols-2 gap-3 overflow-y-auto"><div className={`col-span-2 p-3 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}><div className="flex items-center gap-2 mb-3"><Gauge className="w-5 h-5 text-orange-500" /><span className={`font-bold ${t.textMain} text-sm`}>Manual Drive</span></div><div className="grid grid-cols-2 gap-4"><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Speed</span><div className="flex items-center gap-2"><input type="range" min="-5" max="15" value={manualTargetSpeed} onChange={(e) => updateManualSpeed(Number(e.target.value))} className="w-full accent-orange-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><span className={`font-mono font-bold text-lg w-12 text-center ${t.textMain}`}>{manualTargetSpeed}</span></div></div><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Steering ({steeringAngle}°)</span><div className="flex items-center gap-1"><button onClick={() => updateSteering(Math.max(steeringAngle - 5, -35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCcw className={`w-4 h-4 ${t.textMain}`} /></button><input type="range" min="-35" max="35" value={steeringAngle} onChange={(e) => updateSteering(Number(e.target.value))} className="w-full accent-blue-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><button onClick={() => updateSteering(Math.min(steeringAngle + 5, 35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCw className={`w-4 h-4 ${t.textMain}`} /></button></div></div></div><p className={`text-[10px] ${t.textSub} mt-2 text-center`}>*Arrow Keys: ↑ ↓ ← →</p></div><QuickAction theme={t} icon={Video} label="Camera" sub="Monitor" /><QuickAction theme={t} icon={AlertTriangle} label="Diagnostics" sub="Errors" /><QuickAction theme={t} icon={Ruler} label="Implement" sub="Width" /><QuickAction theme={t} icon={LocateFixed} label="Calibrate" sub="IMU" /><QuickAction theme={t} icon={Activity} label="Terrain" sub="Comp." /><QuickAction theme={t} icon={Save} label="Save Line" sub="Track" /><QuickAction theme={t} icon={Navigation} label="NMEA" sub="Out" /></div></div></div>
                 )}
                 {lineNameModalOpen && (
@@ -1407,9 +1576,38 @@ const App = () => {
                         </div>
                     </div>
                 )}
+                
+                {/* NEW: Delete Confirmation Modal */}
+                {deleteModalOpen && (
+                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+                        <div className={`${t.bgPanel} rounded-2xl w-full max-w-sm border ${t.borderCard} shadow-2xl p-6 text-center`}>
+                             <div className="flex justify-center mb-4">
+                                <div className="p-3 bg-red-500/20 rounded-full">
+                                    <Trash2 className="w-8 h-8 text-red-500" />
+                                </div>
+                            </div>
+                            <h3 className={`text-xl font-bold ${t.textMain} mb-2`}>Xác nhận xóa?</h3>
+                            <p className={`${t.textSub} mb-6`}>
+                                Hành động này không thể hoàn tác. Bạn có chắc chắn muốn xóa mục này?
+                            </p>
+                            <div className="flex justify-center gap-3">
+                                <button onClick={() => setDeleteModalOpen(false)} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Hủy</button>
+                                <button onClick={executeDelete} className="px-6 py-2 rounded-lg bg-red-600 text-white font-bold hover:bg-red-500">Xóa vĩnh viễn</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {lineModeModalOpen && (
-                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-2xl border ${t.borderCard} shadow-2xl p-6`}><div className="flex justify-between items-center mb-6"><h3 className={`text-xl font-bold ${t.textMain}`}>Select Guidance Mode</h3><button onClick={() => setLineModeModalOpen(false)} className={`p-2 rounded-lg hover:bg-slate-800/50 ${t.textDim}`}><X className="w-6 h-6" /></button></div><div className="grid grid-cols-2 gap-4"><button onClick={() => selectLineMode('STRAIGHT_AB')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'STRAIGHT_AB' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><GitCommitHorizontal className={`w-12 h-12 ${lineType === 'STRAIGHT_AB' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Straight AB</span><span className={`text-xs ${t.textSub}`}>Standard straight line A to B</span></button><button onClick={() => selectLineMode('A_PLUS')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'A_PLUS' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><ArrowUpFromDot className={`w-12 h-12 ${lineType === 'A_PLUS' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>A+ Heading</span><span className={`text-xs ${t.textSub}`}>Straight line with defined heading</span></button><button onClick={() => selectLineMode('CURVE')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'CURVE' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><Spline className={`w-12 h-12 ${lineType === 'CURVE' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Curve</span><span className={`text-xs ${t.textSub}`}>Adaptive curved guidance</span></button><button onClick={() => selectLineMode('PIVOT')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'PIVOT' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><CircleDashed className={`w-12 h-12 ${lineType === 'PIVOT' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Pivot</span><span className={`text-xs ${t.textSub}`}>Center pivot circular pattern</span></button></div></div></div>
+                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-2xl border ${t.borderCard} shadow-2xl p-6`}><div className="flex justify-between items-center mb-6"><h3 className={`text-xl font-bold ${t.textMain}`}>Select Guidance Mode</h3><button onClick={() => setLineModeModalOpen(false)} className={`p-2 rounded-lg hover:bg-slate-800/50 ${t.textDim}`}><X className="w-6 h-6" /></button></div><div className="grid grid-cols-2 gap-4"><button onClick={() => selectLineMode('STRAIGHT_AB')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'STRAIGHT_AB' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><GitCommitHorizontal className={`w-12 h-12 ${lineType === 'STRAIGHT_AB' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Straight AB</span><span className={`text-xs ${t.textSub}`}>Standard straight line A to B</span></button><button onClick={() => selectLineMode('A_PLUS')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'A_PLUS' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><ArrowUpFromDot className={`w-12 h-12 ${lineType === 'A_PLUS' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>A+ Heading</span><span className={`text-xs ${t.textSub}`}>Straight line with defined heading</span></button><button onClick={() => selectLineMode('CURVE')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'CURVE' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><Spline className={`w-12 h-12 ${lineType === 'CURVE' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Curve</span><span className={`text-xs ${t.textSub}`}>Adaptive curved guidance</span></button><button onClick={() => selectLineMode('PIVOT')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'PIVOT' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><CircleDashed className={`w-12 h-12 ${lineType === 'PIVOT' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Pivot</span><span className={`text-xs ${t.textSub}`}>Center pivot circular pattern</span></button>
+                    {/* MULTI-LINE OPTION */}
+                    <div className="col-span-2 mt-4 flex items-center justify-between p-4 rounded-xl border border-slate-700/50 bg-slate-800/30">
+                        <span className="text-sm font-bold text-white">Multiple Lines</span>
+                        <div onClick={() => setIsMultiLineMode(!isMultiLineMode)} className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-colors ${isMultiLineMode ? 'bg-blue-600' : 'bg-slate-600'}`}>
+                            <div className={`w-4 h-4 rounded-full bg-white shadow-sm transform transition-transform ${isMultiLineMode ? 'translate-x-6' : ''}`} />
+                        </div>
+                    </div>
+                    </div></div></div>
                 )}
                 {/* ACTION DOCK */}
                 <div className="absolute right-[2%] top-[15%] bottom-[18%] w-[7%] min-w-[60px] z-20 flex flex-col justify-center pointer-events-none">
