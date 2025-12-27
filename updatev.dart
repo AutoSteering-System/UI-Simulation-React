@@ -637,14 +637,27 @@ const App = () => {
               const showCancelAB = pointA && !guidanceLine;
               return ( <><DockButton theme={t} icon={Target} label={abLabel} color={abColor} onClick={handleABButtonClick} />{showCancelAB && <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/>}<DockButton theme={t} icon={ArrowLeftRight} label="Shift" color="gray"/><DockButton theme={t} icon={MapPin} label="Bound" color="orange" onClick={startBoundaryRecording}/></> );
           case 'A_PLUS': 
-              // REVERTED: A+ Line specific dock logic - show all buttons
+              if (!aPlusPoint) {
+                 return (
+                    <>
+                        <DockButton theme={t} icon={Target} label="Set A" color="blue" onClick={handleSetAPlus_PointA}/>
+                        <DockButton theme={t} icon={ArrowLeftRight} label="Shift" color="gray"/>
+                        <DockButton theme={t} icon={MapPin} label="Bound" color="orange" onClick={startBoundaryRecording}/>
+                    </>
+                 );
+              }
+              
               return ( 
                 <>
-                    <DockButton theme={t} icon={Target} label={aPlusPoint ? "Reset A" : "Set A"} color={aPlusPoint ? "green" : "blue"} onClick={handleSetAPlus_PointA}/>
                     <DockButton theme={t} icon={Compass} label={aPlusHeading !== null ? `${aPlusHeading.toFixed(0)}°` : "Head"} color={aPlusHeading !== null ? "green" : "blue"} onClick={handleSetAPlus_HeadingCurrent}/>
                     <DockButton theme={t} icon={Keyboard} label="Input" color="gray" onClick={() => { setManualHeadingModalOpen(true); setTempManualHeading(heading.toFixed(1)); }}/>
+                    
                     <div className={`h-px ${t.divider} mx-1`}></div>
-                    <DockButton theme={t} icon={Check} label="OK" color="green" onClick={handleConfirmAPlus}/>
+                    
+                    {aPlusHeading !== null && (
+                        <DockButton theme={t} icon={Check} label="OK" color="green" onClick={handleConfirmAPlus}/>
+                    )}
+                    
                     <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/>
                 </> 
               );
@@ -940,7 +953,7 @@ const App = () => {
                               autoFocus
                           />
                           <div className="flex justify-end gap-3">
-                              <button onClick={() => setLineNameModalOpen(false)} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Cancel</button>
+                              <button onClick={() => { setLineNameModalOpen(false); resetLines(); }} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Cancel</button>
                               <button onClick={handleSaveLine} className="px-6 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500">Save</button>
                           </div>
                       </div>
