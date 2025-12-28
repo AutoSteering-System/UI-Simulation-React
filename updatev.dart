@@ -70,7 +70,7 @@ import {
 // --- GEOMETRY HELPERS ---
 
 const PIXELS_PER_METER = 15; 
-const DEFAULT_IMPLEMENT_WIDTH = 4.5; // meters
+const DEFAULT_IMPLEMENT_WIDTH = 3.0; // 3m
 
 // Calculate total length of a path in pixels
 const calculatePathLength = (points) => {
@@ -108,16 +108,14 @@ const getLineIntersection = (p1, p2, p3, p4) => {
 const checkSelfIntersection = (points) => {
     if (points.length < 4) return null;
     
-    // We iterate backwards to find the most recent intersection first.
-    // 'i' is the start index of the "late" segment (the one currently being drawn/overshot)
+    // Iterate backwards to find the most recent crossing (creating the smallest/latest loop)
     // The last segment is points[len-2] -> points[len-1]
     
-    for (let i = points.length - 2; i >= 2; i--) {
+    for (let i = points.length - 2; i >= 1; i--) { // Checked until 1 to allow full loop scan
         const p1 = points[i];
         const p2 = points[i+1];
         
-        // 'j' is the start index of the "early" segment (the one we are crossing back into)
-        // We stop at i - 1 to avoid checking adjacent segments (which naturally touch)
+        // Check against all previous segments, excluding the immediate predecessor (i-1)
         for (let j = 0; j < i - 1; j++) {
             const p3 = points[j];
             const p4 = points[j+1];
@@ -125,8 +123,8 @@ const checkSelfIntersection = (points) => {
             const intersection = getLineIntersection(p1, p2, p3, p4);
             if (intersection) {
                 return {
-                    earlySegmentIdx: j, // Index of Pj (start of the crossed segment)
-                    lateSegmentIdx: i,  // Index of Pi (start of the crossing segment)
+                    earlySegmentIdx: j, // Start of the segment being crossed
+                    lateSegmentIdx: i,  // Start of the segment doing the crossing
                     point: intersection
                 };
             }
@@ -154,22 +152,131 @@ const SteeringWheelIcon = ({ className }) => (
   </svg>
 );
 
-const TractorVehicle = ({ mode, steeringAngle }) => (
-  <svg width="80" height="120" viewBox="0 0 100 120" className="drop-shadow-2xl filter">
-    <rect x="20" y="20" width="60" height="6" fill="#334155" rx="2" />
-    <rect x="15" y="85" width="70" height="8" fill="#334155" rx="2" />
-    <g transform={`rotate(${steeringAngle}, 14, 24)`}><rect x="5" y="10" width="18" height="28" fill="#1e293b" rx="4" stroke="#0f172a" strokeWidth="2" /></g>
-    <g transform={`rotate(${steeringAngle}, 86, 24)`}><rect x="77" y="10" width="18" height="28" fill="#1e293b" rx="4" stroke="#0f172a" strokeWidth="2" /></g>
-    <rect x="0" y="70" width="22" height="45" fill="#1e293b" rx="5" stroke="#0f172a" strokeWidth="2" />
-    <rect x="78" y="70" width="22" height="45" fill="#1e293b" rx="5" stroke="#0f172a" strokeWidth="2" />
-    <path d="M30 10 L70 10 L75 100 L25 100 Z" fill={mode === 'AUTO' ? '#22c55e' : '#3b82f6'} stroke="white" strokeWidth="2" />
-    <rect x="35" y="15" width="30" height="40" fill="rgba(0,0,0,0.1)" rx="2" />
-    <path d="M32 60 L68 60 L72 90 L28 90 Z" fill="#94a3b8" opacity="0.8" stroke="white" strokeWidth="1" />
-    <rect x="35" y="65" width="30" height="20" fill="white" opacity="0.9" rx="2" />
-    <circle cx="35" cy="12" r="2" fill="#facc15" />
-    <circle cx="65" cy="12" r="2" fill="#facc15" />
-  </svg>
-);
+const TractorVehicle = ({ mode, steeringAngle, implementWidth, vehicleSettings }) => {
+  const ppm = PIXELS_PER_METER;
+  
+  // Dimensions (converted to pixels)
+  const wheelbase = (vehicleSettings?.wheelbase || 2.85) * ppm;
+  const frontOuterW = (vehicleSettings?.frontAxleWidth || 1.53) * ppm;
+  const rearOuterW = (vehicleSettings?.rearAxleWidth || 2.71) * ppm;
+  const rearHitch = (vehicleSettings?.rearHitch || 1.1) * ppm;
+  
+  // Positioning (Center of SVG is 50, 90 for 100x180)
+  // Let's place the Rear Axle at Y=100 (slightly below center to leave room for implement)
+  const rAxleY = 100;
+  const fAxleY = rAxleY - wheelbase;
+  
+  // Tire Dimensions (Rear ~ 1.8m dia -> ~27px, Width ~0.6m -> ~9px)
+  // We scale visually for better look - REDUCED SIZE as requested
+  const rTireDia = 30; // Reduced from 36
+  const rTireW = 12;   // Reduced from 14
+  
+  const fTireDia = rTireDia * 0.6; // 3/5 ratio
+  const fTireW = rTireW * 0.6;
+
+  // Add visual padding to push implement back further
+  const visualHitchPadding = 20; 
+  const hitchY = rAxleY + rearHitch + visualHitchPadding;
+
+  // Wheel Centers
+  const rLeftX = 50 - (rearOuterW / 2) + (rTireW / 2);
+  const rRightX = 50 + (rearOuterW / 2) - (rTireW / 2);
+  
+  const fLeftX = 50 - (frontOuterW / 2) + (fTireW / 2);
+  const fRightX = 50 + (frontOuterW / 2) - (fTireW / 2);
+
+  // Implement
+  const implPx = implementWidth * ppm;
+  const implX = 50 - implPx / 2;
+
+  // Colors
+  const bodyColor = mode === 'AUTO' ? '#22c55e' : '#3b82f6'; // Green/Blue
+  const bodyStroke = mode === 'AUTO' ? '#15803d' : '#1d4ed8';
+  const tireFill = '#1e293b';
+  const rimFill = '#facc15'; // Yellow rims
+  const cabinFill = 'rgba(255, 255, 255, 0.6)';
+  
+  return (
+    <svg width="150" height="220" viewBox="0 0 100 220" className="drop-shadow-2xl filter overflow-visible">
+        {/* === IMPLEMENT & HITCH === */}
+        <g>
+            {/* Drawbar / Linkage */}
+            <path d={`M${50-4} ${rAxleY} L${50+4} ${rAxleY} L50 ${hitchY} Z`} fill="none" stroke="#475569" strokeWidth="2" strokeLinejoin="round"/>
+            {/* Implement Bar */}
+            <rect x={implX} y={hitchY} width={implPx} height="6" fill="#fbbf24" stroke="#b45309" strokeWidth="1" rx="1" />
+            {/* Implement Tines/Details */}
+            {Array.from({ length: 9 }).map((_, i) => (
+                <line key={i} x1={implX + (implPx/8)*i} y1={hitchY+2} x2={implX + (implPx/8)*i} y2={hitchY+5} stroke="#78350f" strokeWidth="1" />
+            ))}
+        </g>
+
+        {/* === TRACTOR CHASSIS UNDERLAYER === */}
+        {/* Front Axle Beam */}
+        <rect x={50 - frontOuterW/2} y={fAxleY - 2} width={frontOuterW} height="4" fill="#334155" rx="2" />
+        {/* Rear Axle Housing */}
+        <rect x={50 - rearOuterW/2 + 4} y={rAxleY - 3} width={rearOuterW - 8} height="6" fill="#334155" rx="2" />
+
+        {/* === WHEELS === */}
+        {/* Front Left */}
+        <g transform={`rotate(${steeringAngle}, ${fLeftX}, ${fAxleY})`}>
+            <rect x={fLeftX - fTireW/2} y={fAxleY - fTireDia/2} width={fTireW} height={fTireDia} fill={tireFill} rx="2" stroke="#0f172a" strokeWidth="1" />
+            {/* Tread pattern */}
+            <path d={`M${fLeftX - fTireW/2} ${fAxleY-5} L${fLeftX + fTireW/2} ${fAxleY} M${fLeftX - fTireW/2} ${fAxleY+5} L${fLeftX + fTireW/2} ${fAxleY+10}`} stroke="#475569" strokeWidth="1" opacity="0.3"/>
+        </g>
+        {/* Front Right */}
+        <g transform={`rotate(${steeringAngle}, ${fRightX}, ${fAxleY})`}>
+            <rect x={fRightX - fTireW/2} y={fAxleY - fTireDia/2} width={fTireW} height={fTireDia} fill={tireFill} rx="2" stroke="#0f172a" strokeWidth="1" />
+            <path d={`M${fRightX - fTireW/2} ${fAxleY-5} L${fRightX + fTireW/2} ${fAxleY} M${fRightX - fTireW/2} ${fAxleY+5} L${fRightX + fTireW/2} ${fAxleY+10}`} stroke="#475569" strokeWidth="1" opacity="0.3"/>
+        </g>
+        
+        {/* Rear Left */}
+        <rect x={rLeftX - rTireW/2} y={rAxleY - rTireDia/2} width={rTireW} height={rTireDia} fill={tireFill} rx="3" stroke="#0f172a" strokeWidth="1" />
+        <circle cx={rLeftX} cy={rAxleY} r="3" fill={rimFill} stroke="#ca8a04" strokeWidth="1"/>
+        
+        {/* Rear Right */}
+        <rect x={rRightX - rTireW/2} y={rAxleY - rTireDia/2} width={rTireW} height={rTireDia} fill={tireFill} rx="3" stroke="#0f172a" strokeWidth="1" />
+        <circle cx={rRightX} cy={rAxleY} r="3" fill={rimFill} stroke="#ca8a04" strokeWidth="1"/>
+
+        {/* === BODY === */}
+        {/* Engine Hood (Nắp capo) */}
+        <path d={`M${50 - frontOuterW*0.25} ${fAxleY - 5} 
+                 L${50 + frontOuterW*0.25} ${fAxleY - 5} 
+                 L${50 + rearOuterW*0.2} ${rAxleY - wheelbase*0.3} 
+                 L${50 - rearOuterW*0.2} ${rAxleY - wheelbase*0.3} Z`} 
+                 fill={bodyColor} stroke={bodyStroke} strokeWidth="1" />
+        
+        {/* Hood Vents */}
+        <rect x={50-3} y={fAxleY + 10} width="6" height="15" fill="rgba(0,0,0,0.15)" rx="1" />
+
+        {/* Cabin Base / Fenders */}
+        <path d={`M${50 - rearOuterW*0.35} ${rAxleY + 5} 
+                 Q${50 - rearOuterW*0.4} ${rAxleY - rTireDia*0.6} ${50 - rearOuterW*0.2} ${rAxleY - wheelbase*0.4}
+                 L${50 + rearOuterW*0.2} ${rAxleY - wheelbase*0.4}
+                 Q${50 + rearOuterW*0.4} ${rAxleY - rTireDia*0.6} ${50 + rearOuterW*0.35} ${rAxleY + 5}
+                 `} fill={bodyColor} stroke={bodyStroke} strokeWidth="1" />
+
+        {/* Cabin Glass & Roof */}
+        <rect x={50 - rearOuterW*0.22} y={rAxleY - wheelbase*0.55} width={rearOuterW*0.44} height={wheelbase*0.5} fill={cabinFill} stroke="#94a3b8" strokeWidth="1" rx="2" />
+        <rect x={50 - rearOuterW*0.24} y={rAxleY - wheelbase*0.50} width={rearOuterW*0.48} height={wheelbase*0.4} fill="white" stroke="#cbd5e1" strokeWidth="1" rx="3" />
+        
+        {/* Side Mirrors */}
+        <line x1={50 - rearOuterW*0.22} y1={rAxleY - wheelbase*0.5} x2={50 - rearOuterW*0.35} y2={rAxleY - wheelbase*0.45} stroke="#334155" strokeWidth="1" />
+        <rect x={50 - rearOuterW*0.38} y={rAxleY - wheelbase*0.48} width="3" height="6" fill="#334155" rx="1" />
+        
+        <line x1={50 + rearOuterW*0.22} y1={rAxleY - wheelbase*0.5} x2={50 + rearOuterW*0.35} y2={rAxleY - wheelbase*0.45} stroke="#334155" strokeWidth="1" />
+        <rect x={50 + rearOuterW*0.38 - 3} y={rAxleY - wheelbase*0.48} width="3" height="6" fill="#334155" rx="1" />
+
+        {/* Lights */}
+        {/* Front */}
+        <path d={`M${50 - 5} ${fAxleY - 5} Q${50 - 8} ${fAxleY - 2} ${50 - 5} ${fAxleY} Z`} fill="#facc15" />
+        <path d={`M${50 + 5} ${fAxleY - 5} Q${50 + 8} ${fAxleY - 2} ${50 + 5} ${fAxleY} Z`} fill="#facc15" />
+        {/* Rear */}
+        <rect x={50 - rearOuterW*0.3} y={rAxleY + 2} width="4" height="2" fill="#ef4444" />
+        <rect x={50 + rearOuterW*0.3 - 4} y={rAxleY + 2} width="4" height="2" fill="#ef4444" />
+
+    </svg>
+  );
+};
 
 const App = () => {
   // --- SYSTEM STATES ---
@@ -204,16 +311,18 @@ const App = () => {
   // Settings States (Real-time updates)
   const [vehicleSettings, setVehicleSettings] = useState({
       type: 'Tractor 4WD',
-      wheelbase: 285,
-      antennaHeight: 320,
-      antennaOffset: 0,
-      rearHitch: 110,
+      wheelbase: 2.85, 
+      frontAxleWidth: 1.53, // UPDATED DEFAULT
+      rearAxleWidth: 2.71,  // UPDATED DEFAULT
+      antennaHeight: 3.20, 
+      antennaOffset: 0, 
+      rearHitch: 1.10, 
       turnRadius: 6.5
   });
 
   const [implementSettings, setImplementSettings] = useState({
       name: 'Planter_6R',
-      width: DEFAULT_IMPLEMENT_WIDTH, 
+      width: DEFAULT_IMPLEMENT_WIDTH, // 3.0m
       overlap: 0.1,
       offset: 0,
       delayOn: 0.5,
@@ -731,7 +840,7 @@ const App = () => {
      showNotification("Drive to record boundary...", "info"); 
   };
   
-  // UPDATED FINISH BOUNDARY LOGIC
+  // UPDATED FINISH BOUNDARY LOGIC - FIXED "Version trước" issue
   const finishBoundaryRecording = () => {
       // 1. Check Minimum Distance (100m) - Reduced for testing
       const pathLengthPx = calculatePathLength(tempBoundary);
@@ -1188,11 +1297,13 @@ const App = () => {
                 <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Cấu hình Xe (Vehicle)</h3>
                 <div className="grid grid-cols-2 gap-4">
                     <SettingInput theme={t} label="Vehicle Type" value={vehicleSettings.type} onChange={(e) => setVehicleSettings({...vehicleSettings, type: e.target.value})} />
-                    <SettingInput theme={t} label="Wheelbase" value={vehicleSettings.wheelbase} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, wheelbase: parseFloat(e.target.value) || 0})} />
-                    <SettingInput theme={t} label="Antenna Height" value={vehicleSettings.antennaHeight} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, antennaHeight: parseFloat(e.target.value) || 0})} />
-                    <SettingInput theme={t} label="Antenna Offset (X)" value={vehicleSettings.antennaOffset} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, antennaOffset: parseFloat(e.target.value) || 0})} />
-                    <SettingInput theme={t} label="Rear Hitch Length" value={vehicleSettings.rearHitch} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, rearHitch: parseFloat(e.target.value) || 0})} />
-                    <SettingInput theme={t} label="Turning Radius" value={vehicleSettings.turnRadius} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, turnRadius: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Wheelbase (m)" value={vehicleSettings.wheelbase} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, wheelbase: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Front Axle Width (m)" value={vehicleSettings.frontAxleWidth} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, frontAxleWidth: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Rear Axle Width (m)" value={vehicleSettings.rearAxleWidth} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, rearAxleWidth: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Antenna Height (m)" value={vehicleSettings.antennaHeight} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, antennaHeight: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Antenna Offset X (m)" value={vehicleSettings.antennaOffset} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, antennaOffset: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Rear Hitch Length (m)" value={vehicleSettings.rearHitch} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, rearHitch: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Turning Radius (m)" value={vehicleSettings.turnRadius} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, turnRadius: parseFloat(e.target.value) || 0})} />
                 </div>
             </div> 
         );
@@ -1454,8 +1565,7 @@ const App = () => {
                                 }}
                              >
                                 <div className="relative group scale-100 lg:scale-110">
-                                    <TractorVehicle mode={steeringMode} steeringAngle={steeringAngle} />
-                                    <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-32 h-1 bg-blue-400/50"></div>
+                                    <TractorVehicle mode={steeringMode} steeringAngle={steeringAngle} implementWidth={implementSettings.width} vehicleSettings={vehicleSettings} />
                                 </div>
                             </div>
                         </div>
@@ -1475,7 +1585,7 @@ const App = () => {
                     <div className="absolute right-24 bottom-32 z-20 flex flex-col gap-2"><button onClick={() => handleZoom('in')} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain}`}><Plus className="w-6 h-6"/></button><button onClick={() => handleZoom('out')} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain}`}><Minus className="w-6 h-6"/></button></div>
                 </div>
 
-                {/* TOP HEADER */}
+                {/* ... rest of the app ... */}
                 <header className={`h-[10%] min-h-[40px] ${t.bgHeader} backdrop-blur-md flex items-center justify-between px-[3%] z-20 border-b ${t.border}`}>
                     <div className="flex items-center gap-[4%] w-1/3"><div className="flex flex-col"><div className={`flex items-center gap-2 text-[10px] lg:text-xs ${t.textSub} uppercase tracking-wider font-bold`}><Layers className="w-3 h-3" /><span>Field / Task</span></div><div className="flex items-center gap-1 lg:gap-2"><span className={`${t.textMain} font-bold text-xs lg:text-base`}>{loadedField ? loadedField.name : "No Field Loaded"}</span><span className={t.textDim}>/</span><span className={`text-blue-500 font-bold text-xs lg:text-base`}>{activeTaskId ? fields.find(f => f.id === selectedFieldId)?.tasks.find(t => t.id === activeTaskId)?.name : "No Active Task"}</span></div></div></div>
                     <div className="flex-1 flex justify-center"><div className={`flex items-center gap-4 px-6 py-1.5 rounded-xl border-2 ${Math.abs(crossTrackError)>5?'bg-red-900/20 border-red-500':`${theme==='dark'?'bg-slate-900/60':'bg-white/60'} ${t.borderCard}`}`}><ArrowLeftRight className={`w-5 h-5 ${t.textDim}`}/><div className="flex flex-col items-center w-28"><span className={`text-4xl font-black ${t.textMain}`}>{Math.abs(crossTrackError).toFixed(1)}</span></div><ArrowLeftRight className={`w-5 h-5 ${t.textDim}`}/></div></div>
@@ -1486,7 +1596,6 @@ const App = () => {
                     </div>
                 </header>
 
-                {/* BOTTOM BAR */}
                 <div className={`absolute bottom-0 left-0 right-0 h-[14%] min-h-[70px] ${t.bgBottom} backdrop-blur-xl border-t ${t.border} flex items-center justify-between px-[3%] z-30`}>
                     {/* Left Buttons */}
                     <div className="flex gap-4 h-full py-2">
@@ -1500,9 +1609,9 @@ const App = () => {
                 </div>
 
                 {/* MODALS */}
+                {/* ... existing modals ... */}
                 {fieldManagerOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}>{renderFieldManager()}</div>}
                 
-                {/* NEW: LINES PANEL */}
                 {linesPanelOpen && (
                     <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}>
                         <div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col p-6`}>
@@ -1514,7 +1623,9 @@ const App = () => {
                     </div>
                 )}
                 
-                {settingsOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}><div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col`}><div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl lg:text-2xl font-bold flex items-center gap-3 ${t.textMain}`}><Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />Settings</h2></div><nav className="flex-1 overflow-y-auto p-4 space-y-2"><SettingsTab theme={t} label="Display" icon={Monitor} active={settingsTab === 'display'} onClick={() => setSettingsTab('display')} /><SettingsTab theme={t} label="Vehicle" icon={Tractor} active={settingsTab === 'vehicle'} onClick={() => setSettingsTab('vehicle')} /><SettingsTab theme={t} label="Implement" icon={Ruler} active={settingsTab === 'implement'} onClick={() => setSettingsTab('implement')} /><SettingsTab theme={t} label="Guidance" icon={Navigation} active={settingsTab === 'guidance'} onClick={() => setSettingsTab('guidance')} /><SettingsTab theme={t} label="RTK / GNSS" icon={Radio} active={settingsTab === 'rtk'} onClick={() => setSettingsTab('rtk')} /></nav></div><div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}><div className={`flex items-center justify-between p-6 lg:p-8 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><h3 className={`text-lg lg:text-xl font-medium ${t.textSub} uppercase tracking-widest`}>{settingsTab} CONFIGURATION</h3><button onClick={() => setSettingsOpen(false)} className={`p-2 lg:p-3 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}><X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} /></button></div><div className="flex-1 p-6 lg:p-10 overflow-y-auto"><div className="max-w-4xl">{renderSettingsContent()}</div></div><div className={`p-4 lg:p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`}>Cancel</button><button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg">Save Changes</button></div></div></div>}
+                {settingsOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}><div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col`}><div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl lg:text-2xl font-bold flex items-center gap-3 ${t.textMain}`}><Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />Settings</h2></div><nav className="flex-1 overflow-y-auto p-4 space-y-2"><SettingsTab theme={t} label="Display" icon={Monitor} active={settingsTab === 'display'} onClick={() => setSettingsTab('display')} /><SettingsTab theme={t} label="Vehicle" icon={Tractor} active={settingsTab === 'vehicle'} onClick={() => setSettingsTab('vehicle')} /><SettingsTab theme={t} label="Implement" icon={Ruler} active={settingsTab === 'implement'} onClick={() => setSettingsTab('implement')} /><SettingsTab theme={t} label="Guidance" icon={Navigation} active={settingsTab === 'guidance'} onClick={() => setSettingsTab('guidance')} /><SettingsTab theme={t} label="RTK / GNSS" icon={Radio} active={settingsTab === 'rtk'} onClick={() => setSettingsTab('rtk')} /></nav></div><div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}><div className={`flex items-center justify-between p-6 lg:p-8 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><h3 className={`text-lg lg:text-xl font-medium ${t.textSub} uppercase tracking-widest`}>{settingsTab} CONFIGURATION</h3><button onClick={() => setSettingsOpen(false)} className={`p-2 lg:p-3 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}><X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} /></button></div><div className="flex-1 p-6 lg:p-10 overflow-y-auto"><div className="max-w-4xl">{renderSettingsContent()}</div></div><div className={`p-4 lg:p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`} onClick={() => setSettingsOpen(false)}>Cancel</button><button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg" onClick={() => { setSettingsOpen(false); showNotification("Settings Saved Successfully", "success"); }}>Save Changes</button></div></div></div>}
+                
+                {/* ... other modals (quick menu, line name, etc) ... */}
                 {menuOpen && !fieldManagerOpen && !lineModeModalOpen && !linesPanelOpen && !manualHeadingModalOpen && !boundaryAlertOpen && !deleteModalOpen && (
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-lg border ${t.borderCard} shadow-2xl flex flex-col max-h-[85vh]`}><div className={`p-4 border-b ${t.divider} flex justify-between items-center`}><div className="flex items-center gap-2"><Menu className="w-5 h-5 text-blue-500" /><h3 className={`font-bold text-lg ${t.textMain}`}>Quick Menu</h3></div><button onClick={() => setMenuOpen(false)} className={`px-3 py-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} rounded-lg text-xs hover:brightness-95 border ${t.borderCard} ${t.textMain}`}>Close</button></div><div className="p-4 grid grid-cols-2 gap-3 overflow-y-auto"><div className={`col-span-2 p-3 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}><div className="flex items-center gap-2 mb-3"><Gauge className="w-5 h-5 text-orange-500" /><span className={`font-bold ${t.textMain} text-sm`}>Manual Drive</span></div><div className="grid grid-cols-2 gap-4"><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Speed</span><div className="flex items-center gap-2"><input type="range" min="-5" max="15" value={manualTargetSpeed} onChange={(e) => updateManualSpeed(Number(e.target.value))} className="w-full accent-orange-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><span className={`font-mono font-bold text-lg w-12 text-center ${t.textMain}`}>{manualTargetSpeed}</span></div></div><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Steering ({steeringAngle}°)</span><div className="flex items-center gap-1"><button onClick={() => updateSteering(Math.max(steeringAngle - 5, -35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCcw className={`w-4 h-4 ${t.textMain}`} /></button><input type="range" min="-35" max="35" value={steeringAngle} onChange={(e) => updateSteering(Number(e.target.value))} className="w-full accent-blue-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><button onClick={() => updateSteering(Math.min(steeringAngle + 5, 35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCw className={`w-4 h-4 ${t.textMain}`} /></button></div></div></div><p className={`text-[10px] ${t.textSub} mt-2 text-center`}>*Arrow Keys: ↑ ↓ ← →</p></div><QuickAction theme={t} icon={Video} label="Camera" sub="Monitor" /><QuickAction theme={t} icon={AlertTriangle} label="Diagnostics" sub="Errors" /><QuickAction theme={t} icon={Ruler} label="Implement" sub="Width" /><QuickAction theme={t} icon={LocateFixed} label="Calibrate" sub="IMU" /><QuickAction theme={t} icon={Activity} label="Terrain" sub="Comp." /><QuickAction theme={t} icon={Save} label="Save Line" sub="Track" /><QuickAction theme={t} icon={Navigation} label="NMEA" sub="Out" /></div></div></div>
                 )}
