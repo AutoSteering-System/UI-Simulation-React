@@ -369,6 +369,8 @@ const App = () => {
   
   // Multiple Line Mode
   const [isMultiLineMode, setIsMultiLineMode] = useState(true); // Default ON
+  // NEW: Manual offset for Single Line Mode
+  const [manualOffset, setManualOffset] = useState(0);
 
   const [satelliteCount, setSatelliteCount] = useState(12);
   const [notification, setNotification] = useState(null);
@@ -436,7 +438,8 @@ const App = () => {
       type: null,
       points: null,
       isMulti: false,
-      width: 0
+      width: 0,
+      manualOffset: 0
   });
 
   // Sync guidanceRef with state
@@ -448,6 +451,7 @@ const App = () => {
         type: guidanceLine,
         isMulti: isMultiLineMode, 
         width: implementSettings.width * PIXELS_PER_METER,
+        manualOffset: manualOffset,
         points: { 
             a: pointA, 
             b: pointB, 
@@ -456,7 +460,7 @@ const App = () => {
             pivot: { center: pivotCenter, radius: pivotRadius }
         }
     };
-  }, [guidanceLine, pointA, pointB, aPlusPoint, aPlusHeading, curvePoints, pivotCenter, pivotRadius, activeLineId, fields, selectedFieldId, isMultiLineMode, implementSettings.width]);
+  }, [guidanceLine, pointA, pointB, aPlusPoint, aPlusHeading, curvePoints, pivotCenter, pivotRadius, activeLineId, fields, selectedFieldId, isMultiLineMode, implementSettings.width, manualOffset]);
 
 
   const t = theme === 'dark' ? {
@@ -592,6 +596,9 @@ const App = () => {
                  if (guide.isMulti && guide.width > 0) {
                      const laneIdx = Math.round(xte / guide.width);
                      xte = xte - (laneIdx * guide.width);
+                 } else {
+                     // SINGLE LINE MODE: Subtract manualOffset (Snap to vehicle when toggled)
+                     xte = xte - guide.manualOffset;
                  }
 
                  let headingErr = normalizeAngle(lineHeading - p.heading);
@@ -619,6 +626,34 @@ const App = () => {
             else {
                 if (p.steeringAngle > 0) p.steeringAngle = Math.max(0, p.steeringAngle - 20 * dt);
                 else if (p.steeringAngle < 0) p.steeringAngle = Math.min(0, p.steeringAngle + 20 * dt);
+            }
+
+            // NEW: Snap Line to Vehicle in Single Mode (Manual Driving)
+            if (!guidanceRef.current.isMulti && guidanceRef.current.type) {
+                const guide = guidanceRef.current;
+                let currentSnapOffset = 0;
+                // Calculate distance from original line
+                if (guide.type === 'STRAIGHT_AB' && guide.points.a && guide.points.b) {
+                   const ax = guide.points.a.x; const ay = guide.points.a.y;
+                   const bx = guide.points.b.x; const by = guide.points.b.y;
+                   const dx = bx - ax; const dy = by - ay;
+                   const len = Math.hypot(dx, dy);
+                   if (len > 0) {
+                       currentSnapOffset = ((bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax)) / len;
+                   }
+                } else if (guide.type === 'A_PLUS' && guide.points.aplus && guide.points.aplus.point) {
+                    const ax = guide.points.aplus.point.x;
+                    const ay = guide.points.aplus.point.y;
+                    const h = guide.points.aplus.heading;
+                    const rad = h * Math.PI / 180;
+                    const ux = Math.sin(rad);
+                    const uy = -Math.cos(rad);
+                    const vax = p.x - ax; const vay = p.y - ay;
+                    currentSnapOffset = vax * (-uy) + vay * (ux);
+                }
+                
+                // Update state
+                setManualOffset(currentSnapOffset);
             }
         }
 
@@ -692,6 +727,50 @@ const App = () => {
 
 
   // --- 5. LOGIC & HANDLERS ---
+  
+  // NEW: Handler for Toggling Multi-Line Mode to calculate Offset
+  const handleToggleMultiLine = () => {
+      const nextMode = !isMultiLineMode;
+      setIsMultiLineMode(nextMode);
+      
+      if (!nextMode) {
+          // Switching TO Single Mode -> Snap to current vehicle position (calculate offset)
+          // Using current state from physics refs or state is tricky, but worldPos is updated
+          // We recalculate XTE here.
+          
+          let calculatedOffset = 0;
+          const guide = guidanceRef.current;
+          const p = worldPos; 
+          
+          if (guide && guide.points) {
+              if (guide.type === 'STRAIGHT_AB' && guide.points.a && guide.points.b) {
+                  const ax = guide.points.a.x; const ay = guide.points.a.y;
+                  const bx = guide.points.b.x; const by = guide.points.b.y;
+                  const dx = bx - ax; const dy = by - ay;
+                  const len = Math.hypot(dx, dy);
+                  if (len > 0) {
+                      calculatedOffset = ((bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax)) / len;
+                  }
+              } else if (guide.type === 'A_PLUS' && guide.points.aplus && guide.points.aplus.point && guide.points.aplus.heading != null) {
+                  const ax = guide.points.aplus.point.x;
+                  const ay = guide.points.aplus.point.y;
+                  const h = guide.points.aplus.heading;
+                  const rad = h * Math.PI / 180;
+                  const ux = Math.sin(rad);
+                  const uy = -Math.cos(rad);
+                  const vax = p.x - ax; const vay = p.y - ay;
+                  calculatedOffset = vax * (-uy) + vay * (ux);
+              }
+          }
+          
+          setManualOffset(calculatedOffset);
+          showNotification("Single Line: Snapped to Vehicle", "info");
+      } else {
+          setManualOffset(0);
+          showNotification("Multi Line: Grid Mode", "info");
+      }
+  };
+
   const toggleSteering = () => {
     if (!guidanceLine && steeringMode === 'MANUAL') return showNotification("Set Line first!", "warning");
     if (steeringMode === 'MANUAL') {
@@ -1171,9 +1250,9 @@ const App = () => {
       } else {
            // Single Line Mode (Only main line or current target line)
            // Let's show current target line for navigation
-           const w = implementSettings.width * PIXELS_PER_METER;
            const nx = -uy; const ny = ux;
-           const offset = w * currentLaneIndex;
+           // In single mode, the line is offset by manualOffset (snapped on toggle)
+           const offset = manualOffset;
            
            elements.push(
                <line 
@@ -1225,9 +1304,8 @@ const App = () => {
                     );
                 }
              } else {
-                const w = implementSettings.width * PIXELS_PER_METER;
                 const nx = -uy; const ny = ux;
-                const offset = w * currentLaneIndex;
+                const offset = manualOffset;
                 elements.push(
                    <line 
                        key="target-line"
@@ -1405,7 +1483,7 @@ const App = () => {
             <div className="space-y-4">
                 <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Dẫn hướng (Guidance)</h3>
                 <div className="grid grid-cols-1 gap-4">
-                    <div onClick={() => setIsMultiLineMode(!isMultiLineMode)} className={`flex items-center justify-between p-4 ${t.bgInput} border ${t.borderCard} rounded-xl cursor-pointer`}>
+                    <div onClick={handleToggleMultiLine} className={`flex items-center justify-between p-4 ${t.bgInput} border ${t.borderCard} rounded-xl cursor-pointer`}>
                         <span className={`font-bold ${t.textMain}`}>Straight Line Multiple</span>
                         <div className={`w-12 h-7 rounded-full p-1 transition-colors ${isMultiLineMode ? 'bg-green-500' : 'bg-slate-400'}`}>
                             <div className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform ${isMultiLineMode ? 'translate-x-5' : ''}`}></div>
@@ -1829,7 +1907,7 @@ const App = () => {
                     {/* MULTI-LINE OPTION */}
                     <div className="col-span-2 mt-4 flex items-center justify-between p-4 rounded-xl border border-slate-700/50 bg-slate-800/30">
                         <span className="text-sm font-bold text-white">Straight Line Multiple</span>
-                        <div onClick={() => setIsMultiLineMode(!isMultiLineMode)} className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-colors ${isMultiLineMode ? 'bg-blue-600' : 'bg-slate-600'}`}>
+                        <div onClick={handleToggleMultiLine} className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-colors ${isMultiLineMode ? 'bg-blue-600' : 'bg-slate-600'}`}>
                             <div className={`w-4 h-4 rounded-full bg-white shadow-sm transform transition-transform ${isMultiLineMode ? 'translate-x-6' : ''}`} />
                         </div>
                     </div>
