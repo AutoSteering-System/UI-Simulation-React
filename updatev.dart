@@ -155,12 +155,13 @@ const TractorVehicle = ({ mode, steeringAngle, implementWidth, vehicleSettings }
   const ppm = PIXELS_PER_METER;
   
   // Dimensions (converted to pixels)
-  const wheelbase = (vehicleSettings?.wheelbase || 2.85) * ppm;
-  const frontOuterW = (vehicleSettings?.frontAxleWidth || 1.53) * ppm;
-  const rearOuterW = (vehicleSettings?.rearAxleWidth || 2.71) * ppm;
+  const wheelbase = (vehicleSettings?.wheelbase || 2.5) * ppm;
+  const frontOuterW = (vehicleSettings?.frontAxleWidth || 1.95) * ppm;
+  const rearOuterW = (vehicleSettings?.rearAxleWidth || 2.65) * ppm;
   const rearHitch = (vehicleSettings?.rearHitch || 1.1) * ppm;
   
   // Positioning (Center of SVG is 50, 90 for 100x180)
+  // Let's place the Rear Axle at Y=100 (slightly below center to leave room for implement)
   const rAxleY = 100;
   const fAxleY = rAxleY - wheelbase;
   
@@ -1142,17 +1143,47 @@ const App = () => {
       // Main Line (Index 0)
       // Highlight: if currentLaneIndex === 0, make it thicker and darker blue. Else lighter.
       // Solid lines requested: remove strokeDasharray
-      elements.push(<line key="main" x1={x1} y1={y1} x2={x2} y2={y2} stroke={currentLaneIndex === 0 ? "#2563eb" : "#93c5fd"} strokeWidth={currentLaneIndex === 0 ? "4" : "2"} />);
-
+      
       if (isMultiLineMode) {
           const w = implementSettings.width * PIXELS_PER_METER;
           const nx = -uy; const ny = ux; 
-          for (let i = 1; i <= 6; i++) { // Render 6 lines
-               // Right side (positive index)
-               elements.push(<line key={`r${i}`} x1={x1 + nx*w*i} y1={y1 + ny*w*i} x2={x2 + nx*w*i} y2={y2 + ny*w*i} stroke={currentLaneIndex === i ? "#2563eb" : "#93c5fd"} strokeWidth={currentLaneIndex === i ? "4" : "2"} />);
-               // Left side (negative index)
-               elements.push(<line key={`l${i}`} x1={x1 - nx*w*i} y1={y1 - ny*w*i} x2={x2 - nx*w*i} y2={y2 - ny*w*i} stroke={currentLaneIndex === -i ? "#2563eb" : "#93c5fd"} strokeWidth={currentLaneIndex === -i ? "4" : "2"} />);
+          
+          // Draw dynamic range of lines centered around current lane (UPDATED TO +/- 6 lines)
+          for (let i = currentLaneIndex - 6; i <= currentLaneIndex + 6; i++) {
+              const offset = w * i;
+              const isActive = i === currentLaneIndex;
+              const strokeColor = isActive ? "#2563eb" : "#93c5fd";
+              const strokeWidth = isActive ? "4" : "2";
+              
+              // Only apply dash to line 0 if needed, otherwise solid
+              // Usually guidance lines are solid.
+              
+              elements.push(
+                <line 
+                    key={`line-${i}`} 
+                    x1={x1 + nx * offset} y1={y1 + ny * offset} 
+                    x2={x2 + nx * offset} y2={y2 + ny * offset} 
+                    stroke={strokeColor} 
+                    strokeWidth={strokeWidth} 
+                />
+              );
           }
+      } else {
+           // Single Line Mode (Only main line or current target line)
+           // Let's show current target line for navigation
+           const w = implementSettings.width * PIXELS_PER_METER;
+           const nx = -uy; const ny = ux;
+           const offset = w * currentLaneIndex;
+           
+           elements.push(
+               <line 
+                   key="target-line"
+                   x1={x1 + nx * offset} y1={y1 + ny * offset} 
+                   x2={x2 + nx * offset} y2={y2 + ny * offset} 
+                   stroke="#2563eb" 
+                   strokeWidth="4" 
+               />
+           );
       }
       return elements;
     }
@@ -1169,16 +1200,44 @@ const App = () => {
         const isPreview = !guidanceLine;
         const elements = [];
         
-        // Preview line is red dashed. Active lines are blue solid.
-        elements.push(<line key="main" x1={x1} y1={y1} x2={x2} y2={y2} stroke={isPreview ? "red" : (currentLaneIndex === 0 ? "#2563eb" : "#93c5fd")} strokeWidth={currentLaneIndex === 0 ? "4" : "2"} strokeDasharray={isPreview ? "15, 10" : "0"} />);
-        
-        if (!isPreview && isMultiLineMode) {
-           const w = implementSettings.width * PIXELS_PER_METER;
-           const nx = -uy; const ny = ux;
-           for (let i = 1; i <= 6; i++) {
-               elements.push(<line key={`r${i}`} x1={x1 + nx*w*i} y1={y1 + ny*w*i} x2={x2 + nx*w*i} y2={y2 + ny*w*i} stroke={currentLaneIndex === i ? "#2563eb" : "#93c5fd"} strokeWidth={currentLaneIndex === i ? "4" : "2"} />);
-               elements.push(<line key={`l${i}`} x1={x1 - nx*w*i} y1={y1 - ny*w*i} x2={x2 - nx*w*i} y2={y2 - ny*w*i} stroke={currentLaneIndex === -i ? "#2563eb" : "#93c5fd"} strokeWidth={currentLaneIndex === -i ? "4" : "2"} />);
-          }
+        if (isPreview) {
+             elements.push(<line key="preview" x1={x1} y1={y1} x2={x2} y2={y2} stroke="red" strokeWidth="2" strokeDasharray="15, 10" />);
+        } else {
+             if (isMultiLineMode) {
+                const w = implementSettings.width * PIXELS_PER_METER;
+                const nx = -uy; const ny = ux;
+                
+                // UPDATED TO +/- 6 lines
+                for (let i = currentLaneIndex - 6; i <= currentLaneIndex + 6; i++) {
+                    const offset = w * i;
+                    const isActive = i === currentLaneIndex;
+                    const strokeColor = isActive ? "#2563eb" : "#93c5fd";
+                    const strokeWidth = isActive ? "4" : "2";
+
+                    elements.push(
+                        <line 
+                            key={`line-${i}`}
+                            x1={x1 + nx * offset} y1={y1 + ny * offset} 
+                            x2={x2 + nx * offset} y2={y2 + ny * offset} 
+                            stroke={strokeColor} 
+                            strokeWidth={strokeWidth} 
+                        />
+                    );
+                }
+             } else {
+                const w = implementSettings.width * PIXELS_PER_METER;
+                const nx = -uy; const ny = ux;
+                const offset = w * currentLaneIndex;
+                elements.push(
+                   <line 
+                       key="target-line"
+                       x1={x1 + nx * offset} y1={y1 + ny * offset} 
+                       x2={x2 + nx * offset} y2={y2 + ny * offset} 
+                       stroke="#2563eb" 
+                       strokeWidth="4" 
+                   />
+               );
+             }
         }
         return elements;
     }
@@ -1347,7 +1406,7 @@ const App = () => {
                 <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Dẫn hướng (Guidance)</h3>
                 <div className="grid grid-cols-1 gap-4">
                     <div onClick={() => setIsMultiLineMode(!isMultiLineMode)} className={`flex items-center justify-between p-4 ${t.bgInput} border ${t.borderCard} rounded-xl cursor-pointer`}>
-                        <span className={`font-bold ${t.textMain}`}>Show Multiple Lines</span>
+                        <span className={`font-bold ${t.textMain}`}>Straight Line Multiple</span>
                         <div className={`w-12 h-7 rounded-full p-1 transition-colors ${isMultiLineMode ? 'bg-green-500' : 'bg-slate-400'}`}>
                             <div className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform ${isMultiLineMode ? 'translate-x-5' : ''}`}></div>
                         </div>
@@ -1769,7 +1828,7 @@ const App = () => {
                     <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-2xl border ${t.borderCard} shadow-2xl p-6`}><div className="flex justify-between items-center mb-6"><h3 className={`text-xl font-bold ${t.textMain}`}>Select Guidance Mode</h3><button onClick={() => setLineModeModalOpen(false)} className={`p-2 rounded-lg hover:bg-slate-800/50 ${t.textDim}`}><X className="w-6 h-6" /></button></div><div className="grid grid-cols-2 gap-4"><button onClick={() => selectLineMode('STRAIGHT_AB')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'STRAIGHT_AB' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><GitCommitHorizontal className={`w-12 h-12 ${lineType === 'STRAIGHT_AB' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Straight AB</span><span className={`text-xs ${t.textSub}`}>Standard straight line A to B</span></button><button onClick={() => selectLineMode('A_PLUS')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'A_PLUS' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><ArrowUpFromDot className={`w-12 h-12 ${lineType === 'A_PLUS' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>A+ Heading</span><span className={`text-xs ${t.textSub}`}>Straight line with defined heading</span></button><button onClick={() => selectLineMode('CURVE')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'CURVE' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><Spline className={`w-12 h-12 ${lineType === 'CURVE' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Curve</span><span className={`text-xs ${t.textSub}`}>Adaptive curved guidance</span></button><button onClick={() => selectLineMode('PIVOT')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'PIVOT' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><CircleDashed className={`w-12 h-12 ${lineType === 'PIVOT' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Pivot</span><span className={`text-xs ${t.textSub}`}>Center pivot circular pattern</span></button>
                     {/* MULTI-LINE OPTION */}
                     <div className="col-span-2 mt-4 flex items-center justify-between p-4 rounded-xl border border-slate-700/50 bg-slate-800/30">
-                        <span className="text-sm font-bold text-white">Multiple Lines</span>
+                        <span className="text-sm font-bold text-white">Straight Line Multiple</span>
                         <div onClick={() => setIsMultiLineMode(!isMultiLineMode)} className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-colors ${isMultiLineMode ? 'bg-blue-600' : 'bg-slate-600'}`}>
                             <div className={`w-4 h-4 rounded-full bg-white shadow-sm transform transition-transform ${isMultiLineMode ? 'translate-x-6' : ''}`} />
                         </div>
