@@ -1886,37 +1886,81 @@ const App = () => {
     }
   };
 
-  const renderLinesPanel = () => {
+const renderLinesPanel = () => {
     const activeField = fields.find(f => f.id === selectedFieldId);
     const lines = activeField?.lines || [];
-
+    
     return (
-        <div className={`flex-1 p-8 flex flex-col ${t.textMain}`}>
-             <div className="mb-6 flex items-center gap-2">
-                 <h3 className="text-xl font-bold flex items-center gap-2"><Route className="w-6 h-6 text-blue-500"/> Guidance Lines</h3>
-             </div>
-             <div className="flex-1 overflow-y-auto space-y-4">
-                 <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
-                    <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Saved Lines for {activeField.name}</h4></div>
-                    {lines && lines.length > 0 ? (
-                            <div className="space-y-2">
-                            {lines.map((l) => (
-                                <div key={l.id} className={`flex items-center justify-between p-3 rounded-lg border ${t.borderCard}`}>
-                                    <div className="flex items-center gap-3">{l.type === 'CURVE' ? <Spline className="w-5 h-5 text-purple-500" /> : <GitCommitHorizontal className="w-5 h-5 text-blue-500" />}<span className={t.textMain}>{l.name}</span></div>
-                                    <div className="flex items-center gap-2"><span className={`text-xs ${t.textSub}`}>{l.date}</span><button onClick={() => confirmDelete('line', l.id)} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button><button onClick={() => handleLoadLine(l)} className={`px-3 py-1 rounded text-xs font-bold ${activeLineId === l.id ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500'}`}>{activeLineId === l.id ? 'Active' : 'Load'}</button></div>
+        <div className={`w-full h-full flex flex-col ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}>
+            {/* Header với nút X */}
+            <div className={`flex items-center justify-between p-6 border-b ${t.divider}`}>
+                <h2 className={`text-xl font-bold ${t.textMain}`}>Lines Management</h2>
+                <button 
+                    onClick={() => setLinesPanelOpen(false)} 
+                    className={`p-2 rounded-lg ${t.activeItem} hover:brightness-95 transition-all`}
+                >
+                    <X className="w-5 h-5" />
+                </button>
+            </div>
+            
+            {/* Nội dung panel */}
+            <div className="flex-1 overflow-y-auto p-6">
+                {lines.length === 0 ? (
+                    <div className={`text-center py-12 ${t.textDim}`}>
+                        <Navigation className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                        <p className="text-lg">No lines created yet</p>
+                        <p className="text-sm mt-2">Create your first guidance line to get started</p>
+                    </div>
+                ) : (
+                    <div className="space-y-4">
+                        {lines.map((line, index) => (
+                            <div key={line.id} className={`p-4 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-50'} border ${t.borderCard} rounded-xl`}>
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                        <div className={`w-3 h-3 rounded-full ${line.active ? 'bg-green-500' : 'bg-gray-400'}`}></div>
+                                        <span className={`font-medium ${t.textMain}`}>{line.name || `Line ${index + 1}`}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <button 
+                                            onClick={() => setActiveLineId(line.id)} 
+                                            className={`px-3 py-1 text-sm rounded-lg ${line.active ? 'bg-green-600 text-white' : `border ${t.borderCard} ${t.textSub} hover:bg-opacity-10 hover:bg-current`}`}
+                                        >
+                                            {line.active ? 'Active' : 'Activate'}
+                                        </button>
+                                        <button 
+                                            onClick={() => deleteLine(line.id)} 
+                                            className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                        </button>
+                                    </div>
                                 </div>
-                            ))}
+                                <div className={`mt-3 text-sm ${t.textSub}`}>
+                                    <p>Length: {line.length?.toFixed(1) || 'N/A'} m</p>
+                                    <p>Created: {new Date(line.createdAt).toLocaleDateString()}</p>
+                                </div>
                             </div>
-                    ) : (<div className={`text-center py-4 ${t.textDim}`}>No lines saved</div>)}
-                 </div>
-                 
-                 <button onClick={() => { setLinesPanelOpen(false); setLineModeModalOpen(true); }} className="w-full py-4 rounded-xl border-2 border-dashed border-blue-500/50 text-blue-500 font-bold hover:bg-blue-500/10 flex flex-col items-center gap-2">
-                    <Plus className="w-6 h-6" /><span>Create New Line</span>
-                 </button>
-             </div>
+                        ))}
+                    </div>
+                )}
+                
+                {/* Nút tạo line mới */}
+                <div className="mt-6 flex justify-center">
+                    <button 
+                        onClick={() => {
+                            setLinesPanelOpen(false);
+                            setLineModeModalOpen(true);
+                        }} 
+                        className="px-6 py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-500 transition-colors flex items-center gap-2"
+                    >
+                        <Plus className="w-5 h-5" />
+                        Create New Line
+                    </button>
+                </div>
+            </div>
         </div>
     );
-  };
+};
 
   const renderFieldManager = () => {
       const activeField = fields.find(f => f.id === selectedFieldId);
@@ -1972,7 +2016,7 @@ const App = () => {
       }
 
       return (
-          <div className="flex h-full">
+          <div className="flex h-full w-full">
               <div className={`w-[35%] border-r ${t.border} ${t.bgPanel} flex flex-col`}>
                   <div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl font-bold flex items-center gap-3 ${t.textMain}`}><LayoutGrid className="w-6 h-6 text-blue-500" />Field Manager</h2></div>
                   <div className="p-4"><button onClick={() => { setViewMode('CREATE_FIELD'); setNewFieldName(''); setCurrentFieldBoundaries([]); }} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold flex justify-center gap-2 hover:bg-blue-500"><Plus className="w-5 h-5" /> New Field</button></div>
