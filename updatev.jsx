@@ -111,7 +111,6 @@ const checkSelfIntersection = (points) => {
     if (points.length < 4) return null;
     
     // Iterate backwards to find the most recent crossing
-    // Restored loop condition i >= 2 to avoid false positives on very sharp turns or start
     for (let i = points.length - 2; i >= 2; i--) { 
         const p1 = points[i];
         const p2 = points[i+1];
@@ -140,6 +139,117 @@ const normalizeAngle = (angle) => {
     if (a > 180) a -= 360;
     if (a < -180) a += 360;
     return a;
+};
+
+// Helper to calculate distance from point to line segment
+const pointToSegmentDistance = (px, py, x1, y1, x2, y2) => {
+    const A = px - x1;
+    const B = py - y1;
+    const C = x2 - x1;
+    const D = y2 - y1;
+
+    const dot = A * C + B * D;
+    const len_sq = C * C + D * D;
+    let param = -1;
+    if (len_sq !== 0) // in case of 0 length line
+        param = dot / len_sq;
+
+    let xx, yy;
+
+    if (param < 0) {
+        xx = x1;
+        yy = y1;
+    }
+    else if (param > 1) {
+        xx = x2;
+        yy = y2;
+    }
+    else {
+        xx = x1 + param * C;
+        yy = y1 + param * D;
+    }
+
+    const dx = px - xx;
+    const dy = py - yy;
+    
+    // Calculate cross product for signed distance (relative to segment direction)
+    // Cross = C * dy_raw - D * dx_raw
+    const cross = C * (py - y1) - D * (px - x1);
+    
+    return {
+        distance: Math.sqrt(dx * dx + dy * dy),
+        x: xx,
+        y: yy,
+        cross: cross
+    };
+}
+
+// NEW: Advanced Curve Offset Algorithm (Vertex Normals)
+// Ensures curves are parallel and smooth, not deformed
+const getOffsetPolyline = (points, offset) => {
+    if (offset === 0) return points.map(p => `${p.x},${p.y}`).join(' ');
+    if (points.length < 2) return "";
+
+    const newPoints = [];
+    
+    // 1. Calculate normals for each segment
+    const segmentNormals = [];
+    for (let i = 0; i < points.length - 1; i++) {
+        const dx = points[i+1].x - points[i].x;
+        const dy = points[i+1].y - points[i].y;
+        const len = Math.hypot(dx, dy);
+        if (len === 0) segmentNormals.push({ x: 0, y: 0 }); 
+        else segmentNormals.push({ x: -dy / len, y: dx / len }); // Perpendicular vector (-y, x)
+    }
+
+    // 2. Offset Start Point (using first segment normal)
+    newPoints.push({
+        x: points[0].x + segmentNormals[0].x * offset,
+        y: points[0].y + segmentNormals[0].y * offset
+    });
+
+    // 3. Offset Intermediate Points (using average "miter" normal of adjacent segments)
+    for (let i = 1; i < points.length - 1; i++) {
+        const n1 = segmentNormals[i-1];
+        const n2 = segmentNormals[i];
+        
+        // Bisector vector
+        let bx = n1.x + n2.x;
+        let by = n1.y + n2.y;
+        const blen = Math.hypot(bx, by);
+        
+        if (blen > 0.001) {
+            // Normalize bisector
+            bx /= blen;
+            by /= blen;
+            
+            // Scale factor to keep constant width (1 / dot(n, b))
+            // This prevents the line from getting thinner at sharp corners
+            const dot = n1.x * bx + n1.y * by;
+            const scale = (dot > 0.1) ? (1 / dot) : 1; 
+            
+            newPoints.push({
+                x: points[i].x + bx * offset * scale,
+                y: points[i].y + by * offset * scale
+            });
+        } else {
+            // Parallel segments or 180 turn
+            newPoints.push({
+                x: points[i].x + n1.x * offset,
+                y: points[i].y + n1.y * offset
+            });
+        }
+    }
+
+    // 4. Offset End Point (using last segment normal)
+    const lastIdx = points.length - 1;
+    const lastNormIdx = segmentNormals.length - 1;
+    newPoints.push({
+        x: points[lastIdx].x + segmentNormals[lastNormIdx].x * offset,
+        y: points[lastIdx].y + segmentNormals[lastNormIdx].y * offset
+    });
+
+    return newPoints.map(p => `${p.x},${p.y}`).join(' ');
 };
 
 
@@ -598,13 +708,61 @@ const App = () => {
                  lineHeading = h;
                  validLine = true;
              }
+             else if (guide.type === 'PIVOT' && guide.points.pivot && guide.points.pivot.center && guide.points.pivot.radius) {
+                 const cx = guide.points.pivot.center.x;
+                 const cy = guide.points.pivot.center.y;
+                 const baseR = guide.points.pivot.radius;
+                 const dist = Math.hypot(p.x - cx, p.y - cy);
+                 xte = dist - baseR; // Raw XTE from center
+                 
+                 // Calculate Heading (Tangent)
+                 const angleToCenter = Math.atan2(p.y - cy, p.x - cx);
+                 // Assuming clockwise/counter-clockwise logic based on current heading
+                 const vehicleAngle = p.heading * Math.PI / 180;
+                 // Tangent is +/- 90 degrees from radial vector
+                 let tan1 = angleToCenter + Math.PI/2;
+                 let tan2 = angleToCenter - Math.PI/2;
+                 
+                 // Normalize angles
+                 const normAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+                 const diff1 = Math.abs(normAngle(tan1 - vehicleAngle));
+                 const diff2 = Math.abs(normAngle(tan2 - vehicleAngle));
+                 
+                 // Pick closer tangent
+                 lineHeading = (diff1 < diff2 ? tan1 : tan2) * 180 / Math.PI;
+                 validLine = true;
+             }
+             else if (guide.type === 'CURVE' && guide.points.curve && guide.points.curve.length > 1) {
+                 // Basic curve following: Find closest segment
+                 let minDist = Infinity;
+                 let bestSeg = null;
+                 
+                 for(let i=0; i<guide.points.curve.length-1; i++) {
+                     const p1 = guide.points.curve[i];
+                     const p2 = guide.points.curve[i+1];
+                     const info = pointToSegmentDistance(p.x, p.y, p1.x, p1.y, p2.x, p2.y);
+                     if (info.distance < minDist) {
+                         minDist = info.distance;
+                         bestSeg = { p1, p2, cross: info.cross };
+                     }
+                 }
+                 
+                 if (bestSeg) {
+                     // Determine side (cross product)
+                     const len = Math.hypot(bestSeg.p2.x - bestSeg.p1.x, bestSeg.p2.y - bestSeg.p1.y);
+                     xte = bestSeg.cross / len; // Distance to Base Curve
+                     
+                     const dx = bestSeg.p2.x - bestSeg.p1.x;
+                     const dy = bestSeg.p2.y - bestSeg.p1.y;
+                     lineHeading = Math.atan2(dx, -dy) * 180 / Math.PI;
+                     validLine = true;
+                 }
+             }
 
              if (validLine) {
                  // MULTI-LINE OFFSET LOGIC & LANE LOCKING
+                 // Applies to ALL line types now including Curve/Pivot
                  if (guide.isMulti && guide.width > 0) {
-                     // 1. If we have a locked lane (activeLaneRef), use it
-                     // 2. Otherwise calculate current lane (fallback, shouldn't happen if lock works)
-                     
                      let targetLaneIndex = 0;
                      
                      if (activeLaneRef.current !== null) {
@@ -672,6 +830,27 @@ const App = () => {
                     const uy = -Math.cos(rad);
                     const vax = p.x - ax; const vay = p.y - ay;
                     currentSnapOffset = vax * (-uy) + vay * (ux);
+                } else if (guide.type === 'PIVOT' && guide.points.pivot && guide.points.pivot.center && guide.points.pivot.radius) {
+                    const cx = guide.points.pivot.center.x;
+                    const cy = guide.points.pivot.center.y;
+                    const baseR = guide.points.pivot.radius;
+                    const dist = Math.hypot(p.x - cx, p.y - cy);
+                    currentSnapOffset = dist - baseR;
+                } else if (guide.type === 'CURVE' && guide.points.curve && guide.points.curve.length > 1) {
+                     // Approximate closest point for snapping
+                     let minDist = Infinity;
+                     let bestCross = 0;
+                     for(let i=0; i<guide.points.curve.length-1; i++) {
+                         const p1 = guide.points.curve[i];
+                         const p2 = guide.points.curve[i+1];
+                         const info = pointToSegmentDistance(p.x, p.y, p1.x, p1.y, p2.x, p2.y);
+                         if (info.distance < minDist) {
+                             minDist = info.distance;
+                             const segLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+                             bestCross = info.cross / segLen;
+                         }
+                     }
+                     currentSnapOffset = bestCross;
                 }
                 
                 // Update state
@@ -826,6 +1005,36 @@ const App = () => {
                  const uy = -Math.cos(rad); 
                  const vax = p.x - ax; const vay = p.y - ay;
                  rawXte = vax * (-uy) + vay * (ux);
+             } else if (guide.type === 'PIVOT' && guide.points.pivot && guide.points.pivot.center) {
+                 const cx = guide.points.pivot.center.x;
+                 const cy = guide.points.pivot.center.y;
+                 const r = guide.points.pivot.radius;
+                 const dist = Math.hypot(p.x - cx, p.y - cy);
+                 rawXte = dist - r;
+             } else if (guide.type === 'CURVE' && guide.points.curve) {
+                 // Simplified locking for Curve: Assume 0 for now as 'closest segment' logic is heavy
+                 // In a real app, you'd run the pointToSegment logic here
+                 // For now, let's assume rawXte is roughly 0 relative to "some" curve, 
+                 // effectively locking to nearest parallel curve if we implemented full XTE check
+                 // Here we will just let the loop find the nearest curve lane
+                 
+                 // Reuse XTE logic from loop? No, loop runs every frame.
+                 // We duplicate logic briefly or trust the loop to set it on first frame
+                 // To force a lock, we really need the distance calculation here.
+                 // COPY-PASTE logic from Loop for simple robustness:
+                 let minDist = Infinity;
+                 let bestCross = 0;
+                 for(let i=0; i<guide.points.curve.length-1; i++) {
+                     const p1 = guide.points.curve[i];
+                     const p2 = guide.points.curve[i+1];
+                     const info = pointToSegmentDistance(p.x, p.y, p1.x, p1.y, p2.x, p2.y);
+                     if (info.distance < minDist) {
+                         minDist = info.distance;
+                         const segLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+                         bestCross = info.cross / segLen;
+                     }
+                 }
+                 rawXte = bestCross;
              }
              
              // LOCK LANE
@@ -1279,6 +1488,28 @@ const App = () => {
              const vax = p.x - ax; const vay = p.y - ay;
              xte = vax * (-uy) + vay * (ux);
          }
+         else if (guide.type === 'PIVOT' && guide.points.pivot && guide.points.pivot.center && guide.points.pivot.radius) {
+             const cx = guide.points.pivot.center.x;
+             const cy = guide.points.pivot.center.y;
+             const r = guide.points.pivot.radius;
+             const dist = Math.hypot(p.x - cx, p.y - cy);
+             xte = dist - r;
+         }
+         else if (guide.type === 'CURVE' && guide.points.curve) {
+             let minDist = Infinity;
+             let bestCross = 0;
+             for(let i=0; i<guide.points.curve.length-1; i++) {
+                 const p1 = guide.points.curve[i];
+                 const p2 = guide.points.curve[i+1];
+                 const info = pointToSegmentDistance(p.x, p.y, p1.x, p1.y, p2.x, p2.y);
+                 if (info.distance < minDist) {
+                     minDist = info.distance;
+                     const segLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+                     bestCross = info.cross / segLen;
+                 }
+             }
+             xte = bestCross;
+         }
          
          currentLaneIndex = Math.round(xte / guide.width);
     }
@@ -1289,19 +1520,12 @@ const App = () => {
       const x1 = pointA.x - ux * 10000; const y1 = pointA.y - uy * 10000; const x2 = pointA.x + ux * 10000; const y2 = pointA.y + uy * 10000;
       
       const elements = [];
-      // Main Line (Index 0)
-      // Highlight: if currentLaneIndex === 0, make it thicker and darker blue. Else lighter.
-      // Solid lines requested: remove strokeDasharray
       
       if (isMultiLineMode) {
           const w = implementSettings.width * PIXELS_PER_METER;
           const nx = -uy; const ny = ux; 
-          
-          // Determine which lane index is "active" for highlighting
-          // If locked (Auto mode), highlight locked lane. Else highlight nearest.
           const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
 
-          // Draw dynamic range of lines centered around highlighted lane
           for (let i = highlightedLane - 6; i <= highlightedLane + 6; i++) {
               const offset = w * i;
               const isActive = i === highlightedLane;
@@ -1354,7 +1578,6 @@ const App = () => {
              if (isMultiLineMode) {
                 const w = implementSettings.width * PIXELS_PER_METER;
                 const nx = -uy; const ny = ux;
-                
                 const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
 
                 for (let i = highlightedLane - 6; i <= highlightedLane + 6; i++) {
@@ -1389,6 +1612,88 @@ const App = () => {
         }
         return elements;
     }
+
+    if (guidanceLine === 'PIVOT' && pivotCenter && pivotRadius) {
+        const elements = [];
+        if (isMultiLineMode) {
+            const w = implementSettings.width * PIXELS_PER_METER;
+            const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
+            
+            // Draw 5 lines (center + 2 each side)
+            for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
+                const r = pivotRadius + (i * w);
+                if (r > 0) {
+                    const isActive = i === highlightedLane;
+                    const strokeColor = isActive ? "#2563eb" : "#93c5fd";
+                    const strokeWidth = isActive ? "4" : "2";
+                    elements.push(
+                        <circle 
+                            key={`pivot-${i}`}
+                            cx={pivotCenter.x} cy={pivotCenter.y} r={r}
+                            fill="none"
+                            stroke={strokeColor}
+                            strokeWidth={strokeWidth}
+                        />
+                    );
+                }
+            }
+        } else {
+            // Single Mode
+            const r = pivotRadius + manualOffset;
+            if (r > 0) {
+                elements.push(
+                    <circle 
+                        key="target-pivot"
+                        cx={pivotCenter.x} cy={pivotCenter.y} r={r}
+                        fill="none"
+                        stroke="#2563eb"
+                        strokeWidth="4"
+                    />
+                );
+            }
+        }
+        return elements;
+    }
+
+    if (guidanceLine === 'CURVE' && curvePoints.length > 1) {
+        const elements = [];
+        
+        if (isMultiLineMode) {
+            const w = implementSettings.width * PIXELS_PER_METER;
+            const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
+            
+            // Draw 5 lines (center + 2 each side)
+            for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
+                const offset = i * w;
+                const isActive = i === highlightedLane;
+                const strokeColor = isActive ? "#2563eb" : "#93c5fd";
+                const strokeWidth = isActive ? "4" : "2";
+                
+                elements.push(
+                    <polyline 
+                        key={`curve-${i}`}
+                        points={getOffsetPolyline(curvePoints, offset)}
+                        fill="none"
+                        stroke={strokeColor}
+                        strokeWidth={strokeWidth}
+                    />
+                );
+            }
+        } else {
+            // Single Mode
+            elements.push(
+                <polyline 
+                    key="target-curve"
+                    points={getOffsetPolyline(curvePoints, manualOffset)}
+                    fill="none"
+                    stroke="#2563eb"
+                    strokeWidth="4"
+                />
+            );
+        }
+        return elements;
+    }
+
     return null;
   };
 
@@ -1444,6 +1749,9 @@ const App = () => {
                         <DockButton theme={t} icon={Target} label="Set A" color="blue" onClick={handleSetAPlus_PointA}/>
                         <DockButton theme={t} icon={ArrowLeftRight} label="Shift" color="gray"/>
                         <DockButton theme={t} icon={MapPin} label="Bound" color="orange" onClick={startBoundaryCreation}/>
+                        {/* Added Cancel Button */}
+                        <div className={`h-px ${t.divider} mx-1`}></div>
+                        <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/>
                       </> 
                     );
                 } else {
