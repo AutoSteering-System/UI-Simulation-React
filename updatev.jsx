@@ -64,7 +64,9 @@ import {
   PlusCircle,
   AlertCircle,
   Copy,
-  AlignJustify 
+  AlignJustify,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 // --- GEOMETRY HELPERS ---
@@ -371,6 +373,12 @@ const App = () => {
   const [isMultiLineMode, setIsMultiLineMode] = useState(true); // Default ON
   // NEW: Manual offset for Single Line Mode
   const [manualOffset, setManualOffset] = useState(0);
+  
+  // NEW: Toggle to show/hide lines
+  const [showGuidanceLines, setShowGuidanceLines] = useState(true);
+
+  // NEW: Locked Lane Index for Auto Steer
+  const activeLaneRef = useRef(null);
 
   const [satelliteCount, setSatelliteCount] = useState(12);
   const [notification, setNotification] = useState(null);
@@ -592,10 +600,24 @@ const App = () => {
              }
 
              if (validLine) {
-                 // MULTI-LINE OFFSET LOGIC
+                 // MULTI-LINE OFFSET LOGIC & LANE LOCKING
                  if (guide.isMulti && guide.width > 0) {
-                     const laneIdx = Math.round(xte / guide.width);
-                     xte = xte - (laneIdx * guide.width);
+                     // 1. If we have a locked lane (activeLaneRef), use it
+                     // 2. Otherwise calculate current lane (fallback, shouldn't happen if lock works)
+                     
+                     let targetLaneIndex = 0;
+                     
+                     if (activeLaneRef.current !== null) {
+                         // Use LOCKED LANE (The lane we were closest to when engaging auto)
+                         targetLaneIndex = activeLaneRef.current;
+                     } else {
+                         // Fallback dynamic calculation (e.g. initial frame before lock set)
+                         targetLaneIndex = Math.round(xte / guide.width);
+                     }
+                     
+                     // XTE is now relative to the LOCKED lane center
+                     xte = xte - (targetLaneIndex * guide.width);
+                     
                  } else {
                      // SINGLE LINE MODE: Subtract manualOffset (Snap to vehicle when toggled)
                      xte = xte - guide.manualOffset;
@@ -773,16 +795,61 @@ const App = () => {
 
   const toggleSteering = () => {
     if (!guidanceLine && steeringMode === 'MANUAL') return showNotification("Set Line first!", "warning");
-    if (steeringMode === 'MANUAL') {
-        setDragOffset({ x: 0, y: 0 });
+    
+    // Toggle Mode
+    const newMode = steeringMode === 'MANUAL' ? 'AUTO' : 'MANUAL';
+    
+    if (newMode === 'AUTO') {
+        // --- 1. AUTO ENGAGED Logic ---
+        
+        // 1a. Lock the Lane (Calculate lane index closest to vehicle NOW)
+        const guide = guidanceRef.current;
+        if (guide && guide.type && guide.isMulti && guide.width > 0) {
+             const p = worldPos;
+             let rawXte = 0;
+             
+             // Calculate RAW XTE (Distance from main AB line)
+             if (guide.type === 'STRAIGHT_AB' && guide.points.a && guide.points.b) {
+                const ax = guide.points.a.x; const ay = guide.points.a.y;
+                const bx = guide.points.b.x; const by = guide.points.b.y;
+                const dx = bx - ax; const dy = by - ay;
+                const len = Math.hypot(dx, dy);
+                if (len > 0) {
+                    rawXte = ((bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax)) / len;
+                }
+             } else if (guide.type === 'A_PLUS' && guide.points.aplus && guide.points.aplus.point) {
+                 const ax = guide.points.aplus.point.x;
+                 const ay = guide.points.aplus.point.y;
+                 const h = guide.points.aplus.heading;
+                 const rad = h * Math.PI / 180;
+                 const ux = Math.sin(rad);
+                 const uy = -Math.cos(rad); 
+                 const vax = p.x - ax; const vay = p.y - ay;
+                 rawXte = vax * (-uy) + vay * (ux);
+             }
+             
+             // LOCK LANE
+             const nearestLaneIndex = Math.round(rawXte / guide.width);
+             activeLaneRef.current = nearestLaneIndex; 
+             // showNotification(`Locked to Lane ${nearestLaneIndex}`, "info");
+        }
+        
+        // 1b. Close Action Dock & Stop Creating
+        setIsCreating(false);
+        setDockMenuOpen(false);
+        
+        showNotification("Auto Steer ENGAGED", "success");
     } else {
-        // Disengaging Auto Mode
-        // physics.current.targetSpeed = 0; // REMOVED: Do not reset speed to 0
+        // --- 2. MANUAL ENGAGED Logic ---
+        setDragOffset({ x: 0, y: 0 });
         physics.current.steeringAngle = 0;
+        
+        // Unlock lane (optional, or keep it until next auto engage)
+        activeLaneRef.current = null;
+        
+        showNotification("Manual Control Returned", "warning");
     }
-    setSteeringMode(prev => prev === 'MANUAL' ? 'AUTO' : 'MANUAL');
-    if (steeringMode === 'MANUAL') showNotification("Auto Steer ENGAGED", "success");
-    else showNotification("Manual Control Returned", "warning");
+    setSteeringMode(newMode);
   };
 
   const showNotification = (msg, type) => { setNotification({ msg, type }); setTimeout(() => setNotification(null), 3000); };
@@ -1182,6 +1249,9 @@ const App = () => {
   const getLineTypeIcon = () => { switch(lineType) { case 'STRAIGHT_AB': return GitCommitHorizontal; case 'A_PLUS': return ArrowUpFromDot; case 'CURVE': return Spline; case 'PIVOT': return CircleDashed; default: return GitCommitHorizontal; } };
 
   const renderGuidanceLine = () => {
+    // Check if lines should be shown
+    if (!showGuidanceLines) return null;
+
     // 1. Current Active Line from Logic
     let currentLaneIndex = 0;
     
@@ -1227,15 +1297,16 @@ const App = () => {
           const w = implementSettings.width * PIXELS_PER_METER;
           const nx = -uy; const ny = ux; 
           
-          // Draw dynamic range of lines centered around current lane (UPDATED TO +/- 6 lines)
-          for (let i = currentLaneIndex - 6; i <= currentLaneIndex + 6; i++) {
+          // Determine which lane index is "active" for highlighting
+          // If locked (Auto mode), highlight locked lane. Else highlight nearest.
+          const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
+
+          // Draw dynamic range of lines centered around highlighted lane
+          for (let i = highlightedLane - 6; i <= highlightedLane + 6; i++) {
               const offset = w * i;
-              const isActive = i === currentLaneIndex;
+              const isActive = i === highlightedLane;
               const strokeColor = isActive ? "#2563eb" : "#93c5fd";
               const strokeWidth = isActive ? "4" : "2";
-              
-              // Only apply dash to line 0 if needed, otherwise solid
-              // Usually guidance lines are solid.
               
               elements.push(
                 <line 
@@ -1248,10 +1319,8 @@ const App = () => {
               );
           }
       } else {
-           // Single Line Mode (Only main line or current target line)
-           // Let's show current target line for navigation
+           // Single Line Mode
            const nx = -uy; const ny = ux;
-           // In single mode, the line is offset by manualOffset (snapped on toggle)
            const offset = manualOffset;
            
            elements.push(
@@ -1286,10 +1355,11 @@ const App = () => {
                 const w = implementSettings.width * PIXELS_PER_METER;
                 const nx = -uy; const ny = ux;
                 
-                // UPDATED TO +/- 6 lines
-                for (let i = currentLaneIndex - 6; i <= currentLaneIndex + 6; i++) {
+                const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
+
+                for (let i = highlightedLane - 6; i <= highlightedLane + 6; i++) {
                     const offset = w * i;
-                    const isActive = i === currentLaneIndex;
+                    const isActive = i === highlightedLane;
                     const strokeColor = isActive ? "#2563eb" : "#93c5fd";
                     const strokeWidth = isActive ? "4" : "2";
 
@@ -1332,6 +1402,20 @@ const App = () => {
                <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelBoundaryRecording}/>
             </div> 
           );
+      }
+
+      // 4. Default State (Collapsed Symbol)
+      // If Auto is engaged, show trim controls - TAKES PRECEDENCE over creation if Auto is active
+      if (steeringMode === 'AUTO') {
+           return ( 
+            <div className={`p-3 rounded-2xl ${t.bgCard} shadow-lg border ${t.borderCard} flex flex-col gap-2 pointer-events-auto w-[60px]`}>
+               <span className={`text-[8px] text-center ${t.textSub} font-bold uppercase`}>TRIM</span>
+               <DockButton theme={t} icon={CornerUpLeft} label="L 1cm" color="green" onClick={() => handleTrim('left')}/>
+               <DockButton theme={t} icon={CornerUpRight} label="R 1cm" color="green" onClick={() => handleTrim('right')}/>
+               <div className={`h-px ${t.divider}`}></div>
+               <DockButton theme={t} icon={Pause} label="Pause" color="orange" onClick={toggleSteering}/>
+            </div>
+           );
       }
 
       // 2. Creating a Line? Show specific line creation controls
@@ -1406,20 +1490,6 @@ const App = () => {
                <DockButton theme={t} icon={X} label="Close" color="gray" onClick={() => setDockMenuOpen(false)}/>
             </div>
           );
-      }
-
-      // 4. Default State (Collapsed Symbol)
-      // If Auto is engaged, show trim controls
-      if (steeringMode === 'AUTO') {
-           return ( 
-            <div className={`p-3 rounded-2xl ${t.bgCard} shadow-lg border ${t.borderCard} flex flex-col gap-2 pointer-events-auto w-[60px]`}>
-               <span className={`text-[8px] text-center ${t.textSub} font-bold uppercase`}>TRIM</span>
-               <DockButton theme={t} icon={CornerUpLeft} label="L 1cm" color="green" onClick={() => handleTrim('left')}/>
-               <DockButton theme={t} icon={CornerUpRight} label="R 1cm" color="green" onClick={() => handleTrim('right')}/>
-               <div className={`h-px ${t.divider}`}></div>
-               <DockButton theme={t} icon={Pause} label="Pause" color="orange" onClick={toggleSteering}/>
-            </div>
-           );
       }
 
       // Default Tool Symbol - PLUS CIRCLE floating button
@@ -1733,7 +1803,15 @@ const App = () => {
                         </button>
                     )}
 
-                    <div className="absolute right-24 bottom-32 z-20 flex flex-col gap-2"><button onClick={() => handleZoom('in')} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain}`}><Plus className="w-6 h-6"/></button><button onClick={() => handleZoom('out')} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain}`}><Minus className="w-6 h-6"/></button></div>
+                    {/* ZOOM & SHOW LINES CONTROLS */}
+                    <div className="absolute right-24 bottom-32 z-20 flex flex-col gap-2">
+                        <button onClick={() => setShowGuidanceLines(!showGuidanceLines)} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain} transition-all hover:bg-blue-50 dark:hover:bg-blue-900/30`}>
+                            {showGuidanceLines ? <Eye className="w-6 h-6 text-blue-500"/> : <EyeOff className="w-6 h-6 text-slate-400"/>}
+                        </button>
+                        <div className={`h-px ${t.divider}`}></div>
+                        <button onClick={() => handleZoom('in')} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain}`}><Plus className="w-6 h-6"/></button>
+                        <button onClick={() => handleZoom('out')} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain}`}><Minus className="w-6 h-6"/></button>
+                    </div>
                 </div>
 
                 {/* ... rest of the app ... */}
