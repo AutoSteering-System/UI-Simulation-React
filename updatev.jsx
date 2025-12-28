@@ -72,7 +72,7 @@ import {
 // --- GEOMETRY HELPERS ---
 
 const PIXELS_PER_METER = 15; 
-const DEFAULT_IMPLEMENT_WIDTH = 3.0; // Mặc định 3m
+const DEFAULT_IMPLEMENT_WIDTH = 3.0; // Default 3m
 
 // Calculate total length of a path in pixels
 const calculatePathLength = (points) => {
@@ -352,18 +352,18 @@ const TractorVehicle = ({ mode, steeringAngle, implementWidth, vehicleSettings }
 
         {/* === BODY WORK === */}
         
-        {/* Engine Hood (Nắp capo) - Thon gọn hơn */}
+        {/* Engine Hood - More compact */}
         <path d={`M${50 - frontOuterW*0.22} ${fAxleY - 5} 
                  L${50 + frontOuterW*0.22} ${fAxleY - 5} 
                  L${50 + rearOuterW*0.18} ${rAxleY - wheelbase*0.3} 
                  L${50 - rearOuterW*0.18} ${rAxleY - wheelbase*0.3} Z`} 
                  fill={bodyColor} stroke={bodyStroke} strokeWidth="1" />
         
-        {/* Hood Vents (Khe tản nhiệt) */}
+        {/* Hood Vents */}
         <rect x={50-4} y={fAxleY + 10} width="8" height="18" fill="rgba(0,0,0,0.2)" rx="1" />
         <rect x={50-4} y={fAxleY + 30} width="8" height="6" fill="rgba(0,0,0,0.2)" rx="1" />
         
-        {/* Exhaust Pipe (Ống xả - bên phải) */}
+        {/* Exhaust Pipe (right side) */}
         <rect x={50 + frontOuterW*0.2} y={fAxleY + 15} width="3" height="4" fill="#334155" />
         <circle cx={50 + frontOuterW*0.2 + 1.5} cy={fAxleY + 15} r="2" fill="#475569" />
 
@@ -452,6 +452,13 @@ const App = () => {
       offset: 0,
       delayOn: 0.5,
       delayOff: 0.2
+  });
+
+  const [rtkSettings, setRtkSettings] = useState({
+      ntripHost: 'rtk.sveaverken.com',
+      port: '2101',
+      mountpoint: 'VRS_RTCM32',
+      user: 'user123'
   });
 
   // UI States
@@ -624,14 +631,14 @@ const App = () => {
       val = val % 360;
       if (val < 0) val += 360;
       
-      if (val >= 337.5 || val < 22.5) return 'Bắc (North)';
-      if (val >= 22.5 && val < 67.5) return 'Đông Bắc (NE)';
-      if (val >= 67.5 && val < 112.5) return 'Đông (East)';
-      if (val >= 112.5 && val < 157.5) return 'Đông Nam (SE)';
-      if (val >= 157.5 && val < 202.5) return 'Nam (South)';
-      if (val >= 202.5 && val < 247.5) return 'Tây Nam (SW)';
-      if (val >= 247.5 && val < 292.5) return 'Tây (West)';
-      if (val >= 292.5 && val < 337.5) return 'Tây Bắc (NW)';
+      if (val >= 337.5 || val < 22.5) return 'North';
+      if (val >= 22.5 && val < 67.5) return 'Northeast (NE)';
+      if (val >= 67.5 && val < 112.5) return 'East';
+      if (val >= 112.5 && val < 157.5) return 'Southeast (SE)';
+      if (val >= 157.5 && val < 202.5) return 'South';
+      if (val >= 202.5 && val < 247.5) return 'Southwest (SW)';
+      if (val >= 247.5 && val < 292.5) return 'West';
+      if (val >= 292.5 && val < 337.5) return 'Northwest (NW)';
       return '';
   };
 
@@ -1216,7 +1223,7 @@ const App = () => {
       const pathLengthPx = calculatePathLength(tempBoundary);
       // 50 meters * PIXELS_PER_METER (easier testing)
       if (pathLengthPx < (50 * PIXELS_PER_METER)) {
-           showNotification(`Quãng đường quá ngắn (< 50m). Hãy chạy thêm!`, "warning");
+           showNotification(`Distance too short (< 50m). Run more!`, "warning");
            return;
       }
       
@@ -1248,7 +1255,7 @@ const App = () => {
           const count = viewMode === 'CREATE_FIELD' ? currentFieldBoundaries.length : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
           setTempBoundaryName(`Boundary ${count + 1}`);
           setBoundaryNameModalOpen(true);
-          showNotification("Đã cắt bỏ phần thừa!", "success");
+          showNotification("Excess removed!", "success");
           return;
       }
 
@@ -1282,13 +1289,13 @@ const App = () => {
               const count = viewMode === 'CREATE_FIELD' ? currentFieldBoundaries.length : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
               setTempBoundaryName(`Boundary ${count + 1}`);
               setBoundaryNameModalOpen(true);
-              showNotification("Đã đóng vòng biên", "success");
+              showNotification("Boundary closed", "success");
           } else {
-               showNotification("Tiếp tục ghi...", "info");
+               showNotification("Continue recording...", "info");
           }
       } else if (boundaryAlertType === 'INCOMPLETE') {
           if (choice === 'CONTINUE') {
-               showNotification("Tiếp tục ghi...", "info");
+               showNotification("Continue recording...", "info");
           } else {
               // Cancel
               cancelBoundaryRecording();
@@ -1820,10 +1827,10 @@ const App = () => {
 
   const renderSettingsContent = () => {
     switch (settingsTab) {
-        case 'display': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Màn hình (Display)</h3><div className="grid grid-cols-1 gap-4"><SettingSlider theme={t} label="Độ sáng (Brightness)" value={85} min={0} max={100} /><div className={`flex items-center justify-between p-4 lg:p-5 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} border ${t.borderCard} rounded-xl`}><div className="flex items-center gap-3">{theme === 'light' ? <Sun className="w-6 h-6 text-orange-500" /> : <Moon className="w-6 h-6 text-blue-400" />}<span className={`font-bold text-base lg:text-lg ${t.textMain}`}>Giao diện (Theme)</span></div><div className="flex bg-slate-700/20 p-1 rounded-lg"><button onClick={() => setTheme('light')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${theme === 'light' ? 'bg-white text-slate-900 shadow-md' : 'text-slate-500 hover:text-slate-700'}`}><Sun className="w-4 h-4" /> Sáng</button><button onClick={() => setTheme('dark')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${theme === 'dark' ? 'bg-slate-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}><Moon className="w-4 h-4" /> Tối</button></div></div><SettingToggle theme={t} label="Chế độ ban đêm tự động" active={false} /></div></div> );
+        case 'display': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Display</h3><div className="grid grid-cols-1 gap-4"><SettingSlider theme={t} label="Brightness" value={85} min={0} max={100} /><div className={`flex items-center justify-between p-4 lg:p-5 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} border ${t.borderCard} rounded-xl`}><div className="flex items-center gap-3">{theme === 'light' ? <Sun className="w-6 h-6 text-orange-500" /> : <Moon className="w-6 h-6 text-blue-400" />}<span className={`font-bold text-base lg:text-lg ${t.textMain}`}>Theme</span></div><div className="flex bg-slate-700/20 p-1 rounded-lg"><button onClick={() => setTheme('light')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${theme === 'light' ? 'bg-white text-slate-900 shadow-md' : 'text-slate-500 hover:text-slate-700'}`}><Sun className="w-4 h-4" /> Light</button><button onClick={() => setTheme('dark')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${theme === 'dark' ? 'bg-slate-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}><Moon className="w-4 h-4" /> Dark</button></div></div><SettingToggle theme={t} label="Auto dark mode" active={false} /></div></div> );
         case 'vehicle': return ( 
             <div className="space-y-4">
-                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Cấu hình Xe (Vehicle)</h3>
+                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Vehicle Configuration</h3>
                 <div className="grid grid-cols-2 gap-4">
                     <SettingInput theme={t} label="Vehicle Type" value={vehicleSettings.type} onChange={(e) => setVehicleSettings({...vehicleSettings, type: e.target.value})} />
                     <SettingInput theme={t} label="Wheelbase (m)" value={vehicleSettings.wheelbase} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, wheelbase: parseFloat(e.target.value) || 0})} />
@@ -1838,7 +1845,7 @@ const App = () => {
         );
         case 'implement': return ( 
             <div className="space-y-4">
-                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Nông cụ (Implement)</h3>
+                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Implement</h3>
                 <div className="grid grid-cols-2 gap-4">
                     <SettingInput theme={t} label="Implement Name" value={implementSettings.name} onChange={(e) => handleImplementChange('name', e.target.value)} />
                     <div className="flex flex-col gap-2">
@@ -1859,7 +1866,7 @@ const App = () => {
         );
         case 'guidance': return ( 
             <div className="space-y-4">
-                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Dẫn hướng (Guidance)</h3>
+                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Guidance</h3>
                 <div className="grid grid-cols-1 gap-4">
                     <div onClick={handleToggleMultiLine} className={`flex items-center justify-between p-4 ${t.bgInput} border ${t.borderCard} rounded-xl cursor-pointer`}>
                         <span className={`font-bold ${t.textMain}`}>Straight Line Multiple</span>
@@ -1874,7 +1881,7 @@ const App = () => {
                 </div>
             </div> 
         );
-        case 'rtk': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Kết nối RTK (GNSS)</h3><div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-lg border ${t.borderCard} mb-4`}><div className="flex items-center justify-between mb-2"><span className={`text-sm ${t.textSub}`}>Status</span><span className="text-green-500 font-bold">CONNECTED</span></div><div className={`h-2 ${theme === 'dark' ? 'bg-slate-700' : 'bg-gray-300'} rounded-full overflow-hidden`}><div className="h-full bg-green-500 w-[95%]"></div></div></div><div className="grid grid-cols-2 gap-4"><SettingInput theme={t} label="NTRIP Host" value="rtk.sveaverken.com" /><SettingInput theme={t} label="Port" value="2101" /><SettingInput theme={t} label="Mountpoint" value="VRS_RTCM32" /><SettingInput theme={t} label="User" value="user123" /></div></div> );
+        case 'rtk': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>RTK Connection (GNSS)</h3><div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-lg border ${t.borderCard} mb-4`}><div className="flex items-center justify-between mb-2"><span className={`text-sm ${t.textSub}`}>Status</span><span className="text-green-500 font-bold">CONNECTED</span></div><div className={`h-2 ${theme === 'dark' ? 'bg-slate-700' : 'bg-gray-300'} rounded-full overflow-hidden`}><div className="h-full bg-green-500 w-[95%]"></div></div></div><div className="grid grid-cols-2 gap-4"><SettingInput theme={t} label="NTRIP Host" value={rtkSettings.ntripHost} onChange={(e) => setRtkSettings({...rtkSettings, ntripHost: e.target.value})} /><SettingInput theme={t} label="Port" value={rtkSettings.port} onChange={(e) => setRtkSettings({...rtkSettings, port: e.target.value})} /><SettingInput theme={t} label="Mountpoint" value={rtkSettings.mountpoint} onChange={(e) => setRtkSettings({...rtkSettings, mountpoint: e.target.value})} /><SettingInput theme={t} label="User" value={rtkSettings.user} onChange={(e) => setRtkSettings({...rtkSettings, user: e.target.value})} /></div></div> );
         default: return <div className={t.textDim}>Select a menu item</div>;
     }
   };
@@ -2242,24 +2249,24 @@ const App = () => {
                                 </div>
                             </div>
                             <h3 className={`text-xl font-bold ${t.textMain} mb-2`}>
-                                {boundaryAlertType === 'AUTO_CLOSE' ? 'Đóng vòng biên?' : 'Biên chưa khép kín'}
+                                {boundaryAlertType === 'AUTO_CLOSE' ? 'Close boundary?' : 'Boundary not closed'}
                             </h3>
                             <p className={`${t.textSub} mb-6`}>
                                 {boundaryAlertType === 'AUTO_CLOSE' 
-                                    ? 'Xe đang ở gần điểm bắt đầu. Bạn có muốn tự động nối biên thành một vòng khép kín?' 
-                                    : 'Xe chưa chạy cắt qua đường biên cũ. Bạn muốn tiếp tục chạy để hoàn thành hay hủy bỏ?'}
+                                    ? 'Vehicle is near starting point. Do you want to automatically connect boundary into a closed loop?' 
+                                    : 'Vehicle has not crossed the old boundary line. Do you want to continue running to complete or cancel?'}
                             </p>
                             
                             <div className="flex justify-center gap-3">
                                 {boundaryAlertType === 'AUTO_CLOSE' ? (
                                     <>
-                                        <button onClick={() => handleBoundaryAlertConfirm('NO')} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Tiếp tục chạy</button>
-                                        <button onClick={() => handleBoundaryAlertConfirm('YES')} className="px-6 py-2 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500">Đóng vòng</button>
+                                        <button onClick={() => handleBoundaryAlertConfirm('NO')} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Continue running</button>
+                                        <button onClick={() => handleBoundaryAlertConfirm('YES')} className="px-6 py-2 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500">Close loop</button>
                                     </>
                                 ) : (
                                     <>
-                                        <button onClick={() => handleBoundaryAlertConfirm('CANCEL')} className={`px-6 py-2 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold`}>Hủy bỏ</button>
-                                        <button onClick={() => handleBoundaryAlertConfirm('CONTINUE')} className="px-6 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500">Tiếp tục chạy</button>
+                                        <button onClick={() => handleBoundaryAlertConfirm('CANCEL')} className={`px-6 py-2 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold`}>Cancel</button>
+                                        <button onClick={() => handleBoundaryAlertConfirm('CONTINUE')} className="px-6 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500">Continue running</button>
                                     </>
                                 )}
                             </div>
@@ -2276,13 +2283,13 @@ const App = () => {
                                     <Trash2 className="w-8 h-8 text-red-500" />
                                 </div>
                             </div>
-                            <h3 className={`text-xl font-bold ${t.textMain} mb-2`}>Xác nhận xóa?</h3>
+                            <h3 className={`text-xl font-bold ${t.textMain} mb-2`}>Confirm delete?</h3>
                             <p className={`${t.textSub} mb-6`}>
-                                Hành động này không thể hoàn tác. Bạn có chắc chắn muốn xóa mục này?
+                                This action cannot be undone. Are you sure you want to delete this item?
                             </p>
                             <div className="flex justify-center gap-3">
-                                <button onClick={() => setDeleteModalOpen(false)} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Hủy</button>
-                                <button onClick={executeDelete} className="px-6 py-2 rounded-lg bg-red-600 text-white font-bold hover:bg-red-500">Xóa vĩnh viễn</button>
+                                <button onClick={() => setDeleteModalOpen(false)} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Cancel</button>
+                                <button onClick={executeDelete} className="px-6 py-2 rounded-lg bg-red-600 text-white font-bold hover:bg-red-500">Delete permanently</button>
                             </div>
                         </div>
                     </div>
