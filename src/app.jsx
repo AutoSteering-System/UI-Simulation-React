@@ -8,6 +8,38 @@ const App = () => {
     }
   });
 
+  const { state, actions } = window.MockBackend.useStore();
+  const {
+    vehicleSettings,
+    implementSettings,
+    rtkSettings,
+    lineType,
+    isMultiLineMode,
+    manualOffset,
+    showGuidanceLines,
+    guidanceLine,
+    pointA,
+    pointB,
+    aPlusPoint,
+    aPlusHeading,
+    isRecordingCurve,
+    curvePoints,
+    pivotCenter,
+    pivotRadius,
+    coverageTrail,
+    fields,
+    selectedFieldId,
+    activeTaskId,
+    loadedField,
+    activeBoundaryIdx,
+    activeLineId,
+    viewMode,
+    newFieldName,
+    isRecordingBoundary,
+    tempBoundary,
+    currentFieldBoundaries
+  } = state;
+
   const [steeringMode, setSteeringMode] = useState('MANUAL');
   const [isRecording, setIsRecording] = useState(false);
   const [rtkStatus, setRtkStatus] = useState('FIX');
@@ -36,34 +68,6 @@ const App = () => {
       lastTime: 0
   });
   
-  // Settings States (Real-time updates)
-  const [vehicleSettings, setVehicleSettings] = useState({
-      type: 'Tractor 4WD',
-      wheelbase: 2.5, 
-      frontAxleWidth: 1.95, // UPDATED DEFAULT
-      rearAxleWidth: 2.65,  // UPDATED DEFAULT
-      antennaHeight: 3.20, 
-      antennaOffset: 0, 
-      rearHitch: 1.10, 
-      turnRadius: 6.5
-  });
-
-  const [implementSettings, setImplementSettings] = useState({
-      name: 'Planter_6R',
-      width: DEFAULT_IMPLEMENT_WIDTH, // 3.0m
-      overlap: 0.1,
-      offset: 0,
-      delayOn: 0.5,
-      delayOff: 0.2
-  });
-
-  const [rtkSettings, setRtkSettings] = useState({
-      ntripHost: 'rtk.sveaverken.com',
-      port: '2101',
-      mountpoint: 'VRS_RTCM32',
-      user: 'user123'
-  });
-
   // UI States
   const [menuOpen, setMenuOpen] = useState(false); 
   const [settingsOpen, setSettingsOpen] = useState(false); 
@@ -87,15 +91,6 @@ const App = () => {
   const [tempLineName, setTempLineName] = useState('');
   const [tempManualHeading, setTempManualHeading] = useState('0.0'); 
   const [settingsTab, setSettingsTab] = useState('display'); 
-  const [lineType, setLineType] = useState('STRAIGHT_AB'); 
-  
-  // Multiple Line Mode
-  const [isMultiLineMode, setIsMultiLineMode] = useState(true); // Default ON
-  // NEW: Manual offset for Single Line Mode
-  const [manualOffset, setManualOffset] = useState(0);
-  
-  // NEW: Toggle to show/hide lines
-  const [showGuidanceLines, setShowGuidanceLines] = useState(true);
 
   // NEW: Locked Lane Index for Auto Steer
   const activeLaneRef = useRef(null);
@@ -109,57 +104,6 @@ const App = () => {
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const keysPressed = useRef({});
   const [currentTime, setCurrentTime] = useState('');
-
-  // DATA STATES
-  const [fields, setFields] = useState([
-      { 
-        id: 1, 
-        name: "Home_Field_01", 
-        area: "12.5 ha", 
-        lastUsed: "Today", 
-        boundaries: [], 
-        lines: [ 
-            { id: 101, name: "Main AB", type: "STRAIGHT_AB", isMulti: true, date: "2023-10-01", points: { a: {x: -50, y: -200}, b: {x: -50, y: 200} } },
-        ],
-        tasks: [
-             { id: 201, name: "Spring Planting", type: "Planting", date: "2023-10-15", status: "Paused" }
-        ] 
-      },
-      { 
-        id: 2, 
-        name: "North_Sector_B", 
-        area: "8.2 ha", 
-        lastUsed: "Yesterday", 
-        boundaries: [], 
-        lines: [],
-        tasks: [] 
-      },
-  ]);
-  const [selectedFieldId, setSelectedFieldId] = useState(1);
-  const [activeTaskId, setActiveTaskId] = useState(null);
-
-  const [loadedField, setLoadedField] = useState(null); 
-  const [activeBoundaryIdx, setActiveBoundaryIdx] = useState(0); 
-  const [activeLineId, setActiveLineId] = useState(null);
-  
-  // --- LINE CREATION STATES ---
-  const [pointA, setPointA] = useState(null); 
-  const [pointB, setPointB] = useState(null); 
-  const [aPlusPoint, setAPlusPoint] = useState(null);
-  const [aPlusHeading, setAPlusHeading] = useState(null);
-  const [isRecordingCurve, setIsRecordingCurve] = useState(false);
-  const [curvePoints, setCurvePoints] = useState([]);
-  const [pivotCenter, setPivotCenter] = useState(null);
-  const [pivotRadius, setPivotRadius] = useState(null);
-  const [guidanceLine, setGuidanceLine] = useState(null); 
-  const [coverageTrail, setCoverageTrail] = useState([]); 
-  
-  // FIELD CREATION STATES
-  const [viewMode, setViewMode] = useState('LIST'); 
-  const [newFieldName, setNewFieldName] = useState('');
-  const [isRecordingBoundary, setIsRecordingBoundary] = useState(false);
-  const [tempBoundary, setTempBoundary] = useState([]); 
-  const [currentFieldBoundaries, setCurrentFieldBoundaries] = useState([]);
 
   // Store refs to guidance data for physics loop
   const guidanceRef = useRef({
@@ -464,7 +408,7 @@ const App = () => {
                 }
                 
                 // Update state
-                setManualOffset(currentSnapOffset);
+                actions.setManualOffset(currentSnapOffset);
             }
         }
 
@@ -531,9 +475,9 @@ const App = () => {
           return [...prev, pt];
       };
 
-      if (isRecording) setCoverageTrail(prev => shouldRecord(prev, { x: newPos.x, y: newPos.y, h: newHeading }));
-      if (isRecordingCurve) setCurvePoints(prev => shouldRecord(prev, { x: newPos.x, y: newPos.y }));
-      if (isRecordingBoundary) setTempBoundary(prev => shouldRecord(prev, { x: newPos.x, y: newPos.y }));
+      if (isRecording) actions.setCoverageTrail(prev => shouldRecord(prev, { x: newPos.x, y: newPos.y, h: newHeading }));
+      if (isRecordingCurve) actions.setCurvePoints(prev => shouldRecord(prev, { x: newPos.x, y: newPos.y }));
+      if (isRecordingBoundary) actions.setTempBoundary(prev => shouldRecord(prev, { x: newPos.x, y: newPos.y }));
   }, [worldPos, isRecording, isRecordingCurve, isRecordingBoundary, heading]);
 
 
@@ -542,7 +486,7 @@ const App = () => {
   // NEW: Handler for Toggling Multi-Line Mode to calculate Offset
   const handleToggleMultiLine = () => {
       const nextMode = !isMultiLineMode;
-      setIsMultiLineMode(nextMode);
+      actions.setIsMultiLineMode(nextMode);
       
       if (!nextMode) {
           // Switching TO Single Mode -> Snap to current vehicle position (calculate offset)
@@ -574,10 +518,10 @@ const App = () => {
               }
           }
           
-          setManualOffset(calculatedOffset);
+          actions.setManualOffset(calculatedOffset);
           showNotification("Single Line: Snapped to Vehicle", "info");
       } else {
-          setManualOffset(0);
+          actions.setManualOffset(0);
           showNotification("Multi Line: Grid Mode", "info");
       }
   };
@@ -686,7 +630,7 @@ const App = () => {
   };
   const handleMapMouseUp = () => { setIsDraggingMap(false); };
 
-  const resetLines = () => { setPointA(null); setPointB(null); setAPlusPoint(null); setAPlusHeading(null); setCurvePoints([]); setIsRecordingCurve(false); setPivotCenter(null); setPivotRadius(null); setGuidanceLine(null); setActiveLineId(null); };
+  const resetLines = () => { actions.setPointA(null); actions.setPointB(null); actions.setAPlusPoint(null); actions.setAPlusHeading(null); actions.setCurvePoints([]); actions.setIsRecordingCurve(false); actions.setPivotCenter(null); actions.setPivotRadius(null); actions.setGuidanceLine(null); actions.setActiveLineId(null); };
   
   const cancelLineCreation = () => { 
       resetLines(); 
@@ -697,7 +641,7 @@ const App = () => {
   
   const updateManualSpeed = (val) => { physics.current.targetSpeed = val; setManualTargetSpeed(val); };
   const updateSteering = (val) => { physics.current.steeringAngle = val; setSteeringAngle(val); };
-  const startFieldCreation = () => { setViewMode('CREATE_FIELD'); setNewFieldName(''); setCurrentFieldBoundaries([]); };
+  const startFieldCreation = () => { actions.setViewMode('CREATE_FIELD'); actions.setNewFieldName(''); actions.setCurrentFieldBoundaries([]); };
   const handleTaskAction = (task, action) => { 
         const newStatus = action === 'start' ? 'In Progress' : action === 'pause' ? 'Paused' : 'Done'; 
         const updatedFields = fields.map(f => { 
@@ -706,23 +650,23 @@ const App = () => {
                 return { ...f, tasks: newTasks }; 
             } return f; 
         }); 
-        setFields(updatedFields); 
-        if (action === 'start') setActiveTaskId(task.id); 
-        else if (action === 'finish') setActiveTaskId(null); 
+        actions.setFields(updatedFields); 
+        if (action === 'start') actions.setActiveTaskId(task.id); 
+        else if (action === 'finish') actions.setActiveTaskId(null); 
   }
 
   const handleLoadLine = (line) => {
-      setActiveLineId(line.id);
-      setLineType(line.type);
-      setPointA(line.points.a);
-      setPointB(line.points.b);
-      setAPlusPoint(line.points.aplus?.point);
-      setAPlusHeading(line.points.aplus?.heading);
-      setCurvePoints(line.points.curve || []);
-      setPivotCenter(line.points.pivot?.center);
-      setPivotRadius(line.points.pivot?.radius);
-      setGuidanceLine(line.type);
-      if (line.isMulti !== undefined) setIsMultiLineMode(line.isMulti);
+      actions.setActiveLineId(line.id);
+      actions.setLineType(line.type);
+      actions.setPointA(line.points.a);
+      actions.setPointB(line.points.b);
+      actions.setAPlusPoint(line.points.aplus?.point);
+      actions.setAPlusHeading(line.points.aplus?.heading);
+      actions.setCurvePoints(line.points.curve || []);
+      actions.setPivotCenter(line.points.pivot?.center);
+      actions.setPivotRadius(line.points.pivot?.radius);
+      actions.setGuidanceLine(line.type);
+      if (line.isMulti !== undefined) actions.setIsMultiLineMode(line.isMulti);
       setLinesPanelOpen(false);
       showNotification(`Loaded Line: ${line.name}`, "success");
   };
@@ -743,32 +687,32 @@ const App = () => {
         date: new Date().toISOString().split('T')[0],
         points: { a: pointA, b: pointB, curve: curvePoints, pivot: { center: pivotCenter, radius: pivotRadius }, aplus: { point: aPlusPoint, heading: aPlusHeading } }
     };
-    setFields(prev => prev.map(f => { if (f.id === selectedFieldId) { return { ...f, lines: [...(f.lines || []), newLine] }; } return f; }));
-    setLineNameModalOpen(false); setTempLineName(''); setActiveLineId(newLine.id);
+    actions.setFields(prev => prev.map(f => { if (f.id === selectedFieldId) { return { ...f, lines: [...(f.lines || []), newLine] }; } return f; }));
+    setLineNameModalOpen(false); setTempLineName(''); actions.setActiveLineId(newLine.id);
     setIsCreating(false); // Stop creating
     setDockMenuOpen(true); // RETURN TO DOCK MENU
     showNotification("Line Saved Successfully", "success");
-    if (loadedField && loadedField.id === selectedFieldId) { setLoadedField(prev => ({ ...prev, lines: [...(prev.lines || []), newLine] })); }
+    if (loadedField && loadedField.id === selectedFieldId) { actions.setLoadedField(prev => ({ ...prev, lines: [...(prev.lines || []), newLine] })); }
   };
 
   const handleABButtonClick = () => {
-      if (!pointA) { resetLines(); setPointA({ ...worldPos }); showNotification("Point A Set. Drive > 10m to set B.", "info"); }
+      if (!pointA) { resetLines(); actions.setPointA({ ...worldPos }); showNotification("Point A Set. Drive > 10m to set B.", "info"); }
       else if (!pointB) { 
           const dist = Math.hypot(worldPos.x - pointA.x, worldPos.y - pointA.y);
           if (dist < 50) { showNotification(`Too short! Drive ${((50 - dist)/5).toFixed(1)}m more.`, "warning"); return; } 
-          setPointB({ ...worldPos }); setGuidanceLine('STRAIGHT_AB'); showNotification("AB Line Created!", "success"); setTimeout(openSaveLineModal, 500); 
+          actions.setPointB({ ...worldPos }); actions.setGuidanceLine('STRAIGHT_AB'); showNotification("AB Line Created!", "success"); setTimeout(openSaveLineModal, 500); 
       }
-      else { resetLines(); setPointA({ ...worldPos }); showNotification("Point A Reset", "info"); }
+      else { resetLines(); actions.setPointA({ ...worldPos }); showNotification("Point A Reset", "info"); }
   };
   
   // --- A+ LINE SPECIFIC FUNCTIONS ---
   const handleSetAPlus_PointA = () => {
-      setAPlusPoint({ ...worldPos });
+      actions.setAPlusPoint({ ...worldPos });
       showNotification("Point A Set. Select Heading.", "info");
   };
 
   const handleSetAPlus_HeadingCurrent = () => {
-      setAPlusHeading(heading);
+      actions.setAPlusHeading(heading);
       showNotification(`Heading Set to Current: ${heading.toFixed(1)}°`, "info");
   };
 
@@ -778,7 +722,7 @@ const App = () => {
           showNotification("Invalid heading (0-360)", "warning");
           return;
       }
-      setAPlusHeading(num);
+      actions.setAPlusHeading(num);
       setManualHeadingModalOpen(false);
       showNotification(`Heading Set Manually: ${num.toFixed(1)}°`, "info");
   };
@@ -787,23 +731,23 @@ const App = () => {
       if (!aPlusPoint) return showNotification("Please Set Point A first", "warning");
       if (aPlusHeading === null || aPlusHeading === undefined) return showNotification("Please Set Heading first", "warning");
       
-      setGuidanceLine('A_PLUS');
+      actions.setGuidanceLine('A_PLUS');
       showNotification("A+ Line Created!", "success");
       setTimeout(openSaveLineModal, 500);
   };
 
   const handleRecordCurve = () => { 
       if (isRecordingCurve) { 
-          setIsRecordingCurve(false); 
-          if (curvePoints.length > 2) { setGuidanceLine('CURVE'); showNotification("Curve Saved!", "success"); setTimeout(openSaveLineModal, 500); } 
-          else { showNotification("Curve too short!", "error"); setCurvePoints([]); } 
-      } else { resetLines(); setIsRecordingCurve(true); setCurvePoints([{...worldPos}]); showNotification("Recording Curve...", "info"); } 
+          actions.setIsRecordingCurve(false); 
+          if (curvePoints.length > 2) { actions.setGuidanceLine('CURVE'); showNotification("Curve Saved!", "success"); setTimeout(openSaveLineModal, 500); } 
+          else { showNotification("Curve too short!", "error"); actions.setCurvePoints([]); } 
+      } else { resetLines(); actions.setIsRecordingCurve(true); actions.setCurvePoints([{...worldPos}]); showNotification("Recording Curve...", "info"); } 
   };
-  const handleSetCenter = () => { resetLines(); setPivotCenter({ ...worldPos }); showNotification("Pivot Center Set. Drive to Edge.", "info"); };
-  const handleSetRadius = () => { if (!pivotCenter) return showNotification("Set Center first", "warning"); const radius = Math.hypot(worldPos.x - pivotCenter.x, worldPos.y - pivotCenter.y); if (radius < 50) return showNotification("Radius too small!", "warning"); setPivotRadius(radius); setGuidanceLine('PIVOT'); showNotification("Pivot Created!", "success"); setTimeout(openSaveLineModal, 500); };
+  const handleSetCenter = () => { resetLines(); actions.setPivotCenter({ ...worldPos }); showNotification("Pivot Center Set. Drive to Edge.", "info"); };
+  const handleSetRadius = () => { if (!pivotCenter) return showNotification("Set Center first", "warning"); const radius = Math.hypot(worldPos.x - pivotCenter.x, worldPos.y - pivotCenter.y); if (radius < 50) return showNotification("Radius too small!", "warning"); actions.setPivotRadius(radius); actions.setGuidanceLine('PIVOT'); showNotification("Pivot Created!", "success"); setTimeout(openSaveLineModal, 500); };
   
   const selectLineMode = (type) => { 
-      setLineType(type); 
+      actions.setLineType(type); 
       setLineModeModalOpen(false); 
       // Reset logic but keep mode
       resetLines(); 
@@ -815,7 +759,7 @@ const App = () => {
   const startBoundaryCreation = () => {
      setFieldManagerOpen(false);
      setDockMenuOpen(false); // Close menu
-     setIsRecordingBoundary(true); 
+     actions.setIsRecordingBoundary(true); 
      physics.current.targetSpeed = 5; 
      showNotification("Drive to record boundary...", "info"); 
   };
@@ -851,8 +795,8 @@ const App = () => {
 
           // Update preview and proceed
           setPreviewBoundary(loopPoints); 
-          setTempBoundary([]); 
-          setIsRecordingBoundary(false);
+          actions.setTempBoundary([]); 
+          actions.setIsRecordingBoundary(false);
           physics.current.targetSpeed = 0;
           
           const count = viewMode === 'CREATE_FIELD' ? currentFieldBoundaries.length : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
@@ -885,8 +829,8 @@ const App = () => {
               // Auto close logic
               const closedLoop = [...tempBoundary, tempBoundary[0]]; // Snap to start
               setPreviewBoundary(closedLoop);
-              setTempBoundary([]);
-              setIsRecordingBoundary(false);
+              actions.setTempBoundary([]);
+              actions.setIsRecordingBoundary(false);
               physics.current.targetSpeed = 0;
               
               const count = viewMode === 'CREATE_FIELD' ? currentFieldBoundaries.length : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
@@ -921,9 +865,9 @@ const App = () => {
       if (viewMode === 'CREATE_FIELD') {
           // Add new boundary to list
           updatedBoundaries = [...currentFieldBoundaries, newBoundaryObj];
-          setCurrentFieldBoundaries(updatedBoundaries);
+          actions.setCurrentFieldBoundaries(updatedBoundaries);
           // Set as active immediately for preview
-          setActiveBoundaryIdx(updatedBoundaries.length - 1);
+          actions.setActiveBoundaryIdx(updatedBoundaries.length - 1);
       } else {
           // Update existing field
           const activeField = fields.find(f => f.id === selectedFieldId);
@@ -935,28 +879,28 @@ const App = () => {
               }
               return f;
           });
-          setFields(updatedFields);
+          actions.setFields(updatedFields);
           
           // Force update loaded field to reflect changes immediately
           const updatedActiveField = updatedFields.find(f => f.id === selectedFieldId);
-          setLoadedField(updatedActiveField); 
+          actions.setLoadedField(updatedActiveField); 
           
-          setActiveBoundaryIdx(updatedBoundaries.length - 1);
+          actions.setActiveBoundaryIdx(updatedBoundaries.length - 1);
       }
       
       setBoundaryNameModalOpen(false);
       setPreviewBoundary(null); 
-      setTempBoundary([]);
+      actions.setTempBoundary([]);
       setTempBoundaryName('');
-      setIsRecordingBoundary(false);
+      actions.setIsRecordingBoundary(false);
       setDockMenuOpen(true); 
       showNotification("Boundary Saved & Active!", "success");
   }
 
   const cancelBoundaryRecording = () => {
-    setIsRecordingBoundary(false);
+    actions.setIsRecordingBoundary(false);
     physics.current.targetSpeed = 0;
-    setTempBoundary([]);
+    actions.setTempBoundary([]);
     setPreviewBoundary(null); 
     setDockMenuOpen(true); 
     showNotification("Recording Cancelled", "info");
@@ -980,13 +924,13 @@ const App = () => {
                 }
                 return f;
             });
-            setFields(updatedFields);
+            actions.setFields(updatedFields);
             
             if (loadedField && loadedField.id === selectedFieldId) {
                 const newBounds = loadedField.boundaries.filter((_, i) => i !== index);
-                setLoadedField({...loadedField, boundaries: newBounds});
+                actions.setLoadedField({...loadedField, boundaries: newBounds});
             }
-            if (activeBoundaryIdx === index) setActiveBoundaryIdx(0);
+            if (activeBoundaryIdx === index) actions.setActiveBoundaryIdx(0);
             showNotification("Boundary Deleted", "info");
       } else if (type === 'line') {
             const updatedFields = fields.map(f => {
@@ -996,15 +940,15 @@ const App = () => {
                 }
                 return f;
             });
-            setFields(updatedFields);
+            actions.setFields(updatedFields);
             
             if (loadedField && loadedField.id === selectedFieldId) {
                 const newLines = loadedField.lines.filter(l => l.id !== id);
-                setLoadedField({...loadedField, lines: newLines});
+                actions.setLoadedField({...loadedField, lines: newLines});
             }
             if (activeLineId === id) {
-                setActiveLineId(null);
-                setGuidanceLine(null);
+                actions.setActiveLineId(null);
+                actions.setGuidanceLine(null);
                 resetLines();
             }
             showNotification("Line Deleted", "info");
@@ -1016,9 +960,9 @@ const App = () => {
                 }
                 return f;
             });
-            setFields(updatedFields);
+            actions.setFields(updatedFields);
             if (activeTaskId === id) {
-                setActiveTaskId(null);
+                actions.setActiveTaskId(null);
             }
             showNotification("Task Deleted", "info");
       }
@@ -1029,10 +973,10 @@ const App = () => {
   const handleDeleteField = () => {
       if (fields.length <= 1) { showNotification("Cannot delete the last field!", "warning"); return; }
       const updatedFields = fields.filter(f => f.id !== selectedFieldId);
-      setFields(updatedFields);
+      actions.setFields(updatedFields);
       if (updatedFields.length > 0) {
-          setSelectedFieldId(updatedFields[0].id);
-          if (loadedField && loadedField.id === selectedFieldId) { setLoadedField(null); setCoverageTrail([]); }
+          actions.setSelectedFieldId(updatedFields[0].id);
+          if (loadedField && loadedField.id === selectedFieldId) { actions.setLoadedField(null); actions.setCoverageTrail([]); }
       }
       showNotification("Field Deleted", "error");
   };
@@ -1040,20 +984,20 @@ const App = () => {
       if (!newFieldName) return showNotification("Enter field name", "warning");
       const area = (currentFieldBoundaries.reduce((acc, b) => acc + b.points.length, 0) * 0.05).toFixed(1);
       const newField = { id: Date.now(), name: newFieldName, area: area + " ha", lastUsed: "Just now", boundaries: currentFieldBoundaries, lines: [], tasks: [] }; 
-      setFields(prev => [...prev, newField]); 
-      setSelectedFieldId(newField.id); 
-      setViewMode('LIST'); 
+      actions.setFields(prev => [...prev, newField]); 
+      actions.setSelectedFieldId(newField.id); 
+      actions.setViewMode('LIST'); 
       showNotification("Field Saved Successfully", "success"); 
   };
-  const startTaskCreation = () => setViewMode('CREATE_TASK');
-  const saveNewTask = (type) => { const activeField = fields.find(f => f.id === selectedFieldId); const newTask = { id: Date.now(), name: `${type} ${new Date().getFullYear()}`, type, date: "Today", status: "Pending" }; const updatedFields = fields.map(f => { if (f.id === selectedFieldId) return { ...f, tasks: [newTask, ...f.tasks] }; return f; }); setFields(updatedFields); setViewMode('LIST'); showNotification(`Task "${newTask.name}" Created`, "success"); };
+  const startTaskCreation = () => actions.setViewMode('CREATE_TASK');
+  const saveNewTask = (type) => { const activeField = fields.find(f => f.id === selectedFieldId); const newTask = { id: Date.now(), name: `${type} ${new Date().getFullYear()}`, type, date: "Today", status: "Pending" }; const updatedFields = fields.map(f => { if (f.id === selectedFieldId) return { ...f, tasks: [newTask, ...f.tasks] }; return f; }); actions.setFields(updatedFields); actions.setViewMode('LIST'); showNotification(`Task "${newTask.name}" Created`, "success"); };
   
   const handleLoadField = () => { 
       const field = fields.find(f => f.id === selectedFieldId); 
-      setLoadedField(field); 
+      actions.setLoadedField(field); 
       showNotification(`Loaded Field: ${field.name}`, "success"); 
       setFieldManagerOpen(false); 
-      setCoverageTrail([]); 
+      actions.setCoverageTrail([]); 
       resetLines(); 
       setDragOffset({x:0, y:0}); 
 
@@ -1343,7 +1287,7 @@ const App = () => {
                 
                 const handleCancelAB = () => {
                     if (pointA && !pointB) {
-                        setPointA(null);
+                        actions.setPointA(null);
                         showNotification("Reset to Set A", "info");
                     } else {
                         cancelLineCreation();
@@ -1367,7 +1311,7 @@ const App = () => {
                 } else {
                     content = ( 
                         <>
-                            <DockButton theme={t} icon={RotateCcw} label="Reset A" color="orange" onClick={() => { setAPlusPoint({ ...worldPos }); setAPlusHeading(null); showNotification("Point A Reset to Current Position", "info"); }}/>
+                            <DockButton theme={t} icon={RotateCcw} label="Reset A" color="orange" onClick={() => { actions.setAPlusPoint({ ...worldPos }); actions.setAPlusHeading(null); showNotification("Point A Reset to Current Position", "info"); }}/>
                             <DockButton theme={t} icon={Compass} label={aPlusHeading !== null ? `${aPlusHeading.toFixed(0)}°` : "Head"} color={aPlusHeading !== null ? "green" : "blue"} onClick={handleSetAPlus_HeadingCurrent}/>
                             <DockButton theme={t} icon={Keyboard} label="Input" color="gray" onClick={() => { setManualHeadingModalOpen(true); setTempManualHeading(heading.toFixed(1)); }}/>
                             <div className={`h-px ${t.divider} mx-1`}></div>
@@ -1376,7 +1320,7 @@ const App = () => {
                                 <DockButton theme={t} icon={Check} label="OK" color="green" onClick={handleConfirmAPlus}/>
                             )}
                             
-                            <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={() => { setAPlusPoint(null); setAPlusHeading(null); }}/>
+                            <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={() => { actions.setAPlusPoint(null); actions.setAPlusHeading(null); }}/>
                         </> 
                     );
                 }
@@ -1425,7 +1369,7 @@ const App = () => {
 
   // HANDLER FOR REAL-TIME IMPLEMENT CHANGE
   const handleImplementChange = (key, value) => {
-      setImplementSettings(prev => ({ ...prev, [key]: value }));
+      actions.setImplementSettings(prev => ({ ...prev, [key]: value }));
   };
 
   const renderSettingsContent = () => {
@@ -1435,14 +1379,14 @@ const App = () => {
             <div className="space-y-4">
                 <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Vehicle Configuration</h3>
                 <div className="grid grid-cols-2 gap-4">
-                    <SettingInput theme={t} label="Vehicle Type" value={vehicleSettings.type} onChange={(e) => setVehicleSettings({...vehicleSettings, type: e.target.value})} />
-                    <SettingInput theme={t} label="Wheelbase (m)" value={vehicleSettings.wheelbase} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, wheelbase: parseFloat(e.target.value) || 0})} />
-                    <SettingInput theme={t} label="Front Axle Width (m)" value={vehicleSettings.frontAxleWidth} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, frontAxleWidth: parseFloat(e.target.value) || 0})} />
-                    <SettingInput theme={t} label="Rear Axle Width (m)" value={vehicleSettings.rearAxleWidth} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, rearAxleWidth: parseFloat(e.target.value) || 0})} />
-                    <SettingInput theme={t} label="Antenna Height (m)" value={vehicleSettings.antennaHeight} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, antennaHeight: parseFloat(e.target.value) || 0})} />
-                    <SettingInput theme={t} label="Antenna Offset X (m)" value={vehicleSettings.antennaOffset} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, antennaOffset: parseFloat(e.target.value) || 0})} />
-                    <SettingInput theme={t} label="Rear Hitch Length (m)" value={vehicleSettings.rearHitch} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, rearHitch: parseFloat(e.target.value) || 0})} />
-                    <SettingInput theme={t} label="Turning Radius (m)" value={vehicleSettings.turnRadius} type="number" onChange={(e) => setVehicleSettings({...vehicleSettings, turnRadius: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Vehicle Type" value={vehicleSettings.type} onChange={(e) => actions.setVehicleSettings({...vehicleSettings, type: e.target.value})} />
+                    <SettingInput theme={t} label="Wheelbase (m)" value={vehicleSettings.wheelbase} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, wheelbase: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Front Axle Width (m)" value={vehicleSettings.frontAxleWidth} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, frontAxleWidth: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Rear Axle Width (m)" value={vehicleSettings.rearAxleWidth} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, rearAxleWidth: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Antenna Height (m)" value={vehicleSettings.antennaHeight} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, antennaHeight: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Antenna Offset X (m)" value={vehicleSettings.antennaOffset} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, antennaOffset: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Rear Hitch Length (m)" value={vehicleSettings.rearHitch} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, rearHitch: parseFloat(e.target.value) || 0})} />
+                    <SettingInput theme={t} label="Turning Radius (m)" value={vehicleSettings.turnRadius} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, turnRadius: parseFloat(e.target.value) || 0})} />
                 </div>
             </div> 
         );
@@ -1484,7 +1428,7 @@ const App = () => {
                 </div>
             </div> 
         );
-        case 'rtk': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>RTK Connection (GNSS)</h3><div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-lg border ${t.borderCard} mb-4`}><div className="flex items-center justify-between mb-2"><span className={`text-sm ${t.textSub}`}>Status</span><span className="text-green-500 font-bold">CONNECTED</span></div><div className={`h-2 ${theme === 'dark' ? 'bg-slate-700' : 'bg-gray-300'} rounded-full overflow-hidden`}><div className="h-full bg-green-500 w-[95%]"></div></div></div><div className="grid grid-cols-2 gap-4"><SettingInput theme={t} label="NTRIP Host" value={rtkSettings.ntripHost} onChange={(e) => setRtkSettings({...rtkSettings, ntripHost: e.target.value})} /><SettingInput theme={t} label="Port" value={rtkSettings.port} onChange={(e) => setRtkSettings({...rtkSettings, port: e.target.value})} /><SettingInput theme={t} label="Mountpoint" value={rtkSettings.mountpoint} onChange={(e) => setRtkSettings({...rtkSettings, mountpoint: e.target.value})} /><SettingInput theme={t} label="User" value={rtkSettings.user} onChange={(e) => setRtkSettings({...rtkSettings, user: e.target.value})} /></div></div> );
+        case 'rtk': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>RTK Connection (GNSS)</h3><div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-lg border ${t.borderCard} mb-4`}><div className="flex items-center justify-between mb-2"><span className={`text-sm ${t.textSub}`}>Status</span><span className="text-green-500 font-bold">CONNECTED</span></div><div className={`h-2 ${theme === 'dark' ? 'bg-slate-700' : 'bg-gray-300'} rounded-full overflow-hidden`}><div className="h-full bg-green-500 w-[95%]"></div></div></div><div className="grid grid-cols-2 gap-4"><SettingInput theme={t} label="NTRIP Host" value={rtkSettings.ntripHost} onChange={(e) => actions.setRtkSettings({...rtkSettings, ntripHost: e.target.value})} /><SettingInput theme={t} label="Port" value={rtkSettings.port} onChange={(e) => actions.setRtkSettings({...rtkSettings, port: e.target.value})} /><SettingInput theme={t} label="Mountpoint" value={rtkSettings.mountpoint} onChange={(e) => actions.setRtkSettings({...rtkSettings, mountpoint: e.target.value})} /><SettingInput theme={t} label="User" value={rtkSettings.user} onChange={(e) => actions.setRtkSettings({...rtkSettings, user: e.target.value})} /></div></div> );
         default: return <div className={t.textDim}>Select a menu item</div>;
     }
   };
@@ -1525,7 +1469,7 @@ const renderLinesPanel = () => {
                                     </div>
                                     <div className="flex items-center gap-2">
                                         <button 
-                                            onClick={() => setActiveLineId(line.id)} 
+                                            onClick={() => actions.setActiveLineId(line.id)} 
                                             className={`px-3 py-1 text-sm rounded-lg ${line.active ? 'bg-green-600 text-white' : `border ${t.borderCard} ${t.textSub} hover:bg-opacity-10 hover:bg-current`}`}
                                         >
                                             {line.active ? 'Active' : 'Activate'}
@@ -1572,18 +1516,18 @@ const renderLinesPanel = () => {
       if (viewMode === 'CREATE_FIELD') {
           rightContent = (
               <div className="flex-1 flex flex-col p-8 overflow-y-auto">
-                  <div className="mb-6 flex items-center gap-2"><button onClick={() => setViewMode('LIST')} className={`p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800`}><ArrowLeftRight className="w-5 h-5 rotate-180" /></button><h3 className="text-xl font-bold">Create New Field</h3></div>
+                  <div className="mb-6 flex items-center gap-2"><button onClick={() => actions.setViewMode('LIST')} className={`p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800`}><ArrowLeftRight className="w-5 h-5 rotate-180" /></button><h3 className="text-xl font-bold">Create New Field</h3></div>
                   <div className="max-w-2xl w-full space-y-6">
-                      <div><label className={`block text-sm font-bold mb-2 ${t.textSub}`}>FIELD NAME</label><input type="text" value={newFieldName} onChange={e => setNewFieldName(e.target.value)} placeholder="Ex: South Farm 02" className={`w-full p-4 rounded-xl border ${t.borderCard} ${t.bgInput} focus:border-blue-500 outline-none`} /></div>
+                      <div><label className={`block text-sm font-bold mb-2 ${t.textSub}`}>FIELD NAME</label><input type="text" value={newFieldName} onChange={e => actions.setNewFieldName(e.target.value)} placeholder="Ex: South Farm 02" className={`w-full p-4 rounded-xl border ${t.borderCard} ${t.bgInput} focus:border-blue-500 outline-none`} /></div>
                       <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}><div className="flex justify-between items-center mb-4"><span className="font-bold">Boundaries Recorded</span><span className={`text-xs ${currentFieldBoundaries.length > 0 ? 'text-green-500' : 'text-orange-500'}`}>{currentFieldBoundaries.length} loops saved</span></div><div className="space-y-3">{currentFieldBoundaries.length > 0 && <div className="h-20 bg-green-500/10 rounded-lg flex items-center justify-center border border-green-500/30 text-green-600 font-bold mb-2"><CheckCircle2 className="w-6 h-6 mr-2"/> {currentFieldBoundaries.length} Boundaries Ready</div>}<button onClick={startBoundaryCreation} className="w-full py-4 rounded-xl border-2 border-dashed border-blue-500/50 text-blue-500 font-bold hover:bg-blue-500/10 flex flex-col items-center gap-2"><Tractor className="w-8 h-8" /><span>{currentFieldBoundaries.length > 0 ? "Record Another Boundary" : "Drive to Record Boundary"}</span></button></div></div>
-                      <div className="pt-6 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-4"><button onClick={() => setViewMode('LIST')} className="px-6 py-3 rounded-xl border font-bold text-slate-500">Cancel</button><button onClick={saveNewField} className="px-8 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg">Save Field</button></div>
+                      <div className="pt-6 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-4"><button onClick={() => actions.setViewMode('LIST')} className="px-6 py-3 rounded-xl border font-bold text-slate-500">Cancel</button><button onClick={saveNewField} className="px-8 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg">Save Field</button></div>
                   </div>
               </div>
           );
       } else if (viewMode === 'CREATE_TASK') {
           rightContent = (
               <div className="flex-1 flex flex-col p-8 overflow-y-auto">
-                  <div className="mb-6 flex items-center gap-2"><button onClick={() => setViewMode('LIST')} className={`p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800`}><ArrowLeftRight className="w-5 h-5 rotate-180" /></button><h3 className="text-xl font-bold">New Task</h3></div>
+                  <div className="mb-6 flex items-center gap-2"><button onClick={() => actions.setViewMode('LIST')} className={`p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800`}><ArrowLeftRight className="w-5 h-5 rotate-180" /></button><h3 className="text-xl font-bold">New Task</h3></div>
                   <div className="grid grid-cols-2 gap-6 max-w-2xl"><TaskOptionButton icon={Tractor} label="Tillage / Plowing" onClick={() => saveNewTask("Tillage")} t={t} /><TaskOptionButton icon={Sprout} label="Planting / Seeding" onClick={() => saveNewTask("Planting")} t={t} /><TaskOptionButton icon={Droplets} label="Spraying" onClick={() => saveNewTask("Spraying")} t={t} /><TaskOptionButton icon={Scissors} label="Harvesting" onClick={() => saveNewTask("Harvesting")} t={t} /></div>
               </div>
           );
@@ -1599,7 +1543,7 @@ const renderLinesPanel = () => {
                         <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
                             <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Boundaries</h4><button onClick={startBoundaryCreation} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> Add Boundary</button></div>
                             {boundaries.length > 0 ? (
-                                <div className="space-y-2">{boundaries.map((b, i) => (<div key={i} onClick={() => setActiveBoundaryIdx(i)} className={`w-full flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all ${activeBoundaryIdx === i ? t.selectedItem : `${t.borderCard} hover:brightness-95`}`}><div className="flex items-center gap-3"><MapIcon className={`w-5 h-5 ${activeBoundaryIdx === i ? 'text-blue-500' : t.textDim}`} /><span className={t.textMain}>{b.name || `Boundary ${i + 1}`}</span></div><div className="flex items-center gap-2"><button onClick={(e) => { e.stopPropagation(); confirmDelete('boundary', null, i); }} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button>{activeBoundaryIdx === i && <span className="text-xs bg-blue-500 text-white px-2 py-1 rounded">Active</span>}</div></div>))}</div>
+                                <div className="space-y-2">{boundaries.map((b, i) => (<div key={i} onClick={() => actions.setActiveBoundaryIdx(i)} className={`w-full flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all ${activeBoundaryIdx === i ? t.selectedItem : `${t.borderCard} hover:brightness-95`}`}><div className="flex items-center gap-3"><MapIcon className={`w-5 h-5 ${activeBoundaryIdx === i ? 'text-blue-500' : t.textDim}`} /><span className={t.textMain}>{b.name || `Boundary ${i + 1}`}</span></div><div className="flex items-center gap-2"><button onClick={(e) => { e.stopPropagation(); confirmDelete('boundary', null, i); }} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button>{activeBoundaryIdx === i && <span className="text-xs bg-blue-500 text-white px-2 py-1 rounded">Active</span>}</div></div>))}</div>
                             ) : (<div className={`text-center py-4 ${t.textDim} border-2 border-dashed border-slate-500/30 rounded-lg`}>No boundaries</div>)}
                         </div>
                         {/* LINES SECTION */}
@@ -1622,8 +1566,8 @@ const renderLinesPanel = () => {
           <div className="flex h-full w-full">
               <div className={`w-[35%] border-r ${t.border} ${t.bgPanel} flex flex-col`}>
                   <div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl font-bold flex items-center gap-3 ${t.textMain}`}><LayoutGrid className="w-6 h-6 text-blue-500" />Field Manager</h2></div>
-                  <div className="p-4"><button onClick={() => { setViewMode('CREATE_FIELD'); setNewFieldName(''); setCurrentFieldBoundaries([]); }} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold flex justify-center gap-2 hover:bg-blue-500"><Plus className="w-5 h-5" /> New Field</button></div>
-                  <div className="flex-1 overflow-y-auto p-4 space-y-2">{fields.map(f => (<button key={f.id} onClick={() => { setSelectedFieldId(f.id); setViewMode('LIST'); }} className={`w-full text-left p-4 rounded-xl border transition-all ${selectedFieldId === f.id ? t.selectedItem : `${t.bgCard} ${t.border} hover:brightness-95`}`}><div className="flex justify-between items-start"><div className="flex gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center ${selectedFieldId === f.id ? 'bg-blue-500 text-white' : 'bg-slate-300 dark:bg-slate-800 text-slate-500'}`}><MapIcon className="w-6 h-6" /></div><div><h4 className={`font-bold ${t.textMain}`}>{f.name}</h4><span className={`text-xs ${t.textSub}`}>{f.area}</span></div></div>{selectedFieldId === f.id && <CheckCircle2 className="w-5 h-5 text-blue-500" />}</div></button>))}</div>
+                  <div className="p-4"><button onClick={() => { actions.setViewMode('CREATE_FIELD'); actions.setNewFieldName(''); actions.setCurrentFieldBoundaries([]); }} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold flex justify-center gap-2 hover:bg-blue-500"><Plus className="w-5 h-5" /> New Field</button></div>
+                  <div className="flex-1 overflow-y-auto p-4 space-y-2">{fields.map(f => (<button key={f.id} onClick={() => { actions.setSelectedFieldId(f.id); actions.setViewMode('LIST'); }} className={`w-full text-left p-4 rounded-xl border transition-all ${selectedFieldId === f.id ? t.selectedItem : `${t.bgCard} ${t.border} hover:brightness-95`}`}><div className="flex justify-between items-start"><div className="flex gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center ${selectedFieldId === f.id ? 'bg-blue-500 text-white' : 'bg-slate-300 dark:bg-slate-800 text-slate-500'}`}><MapIcon className="w-6 h-6" /></div><div><h4 className={`font-bold ${t.textMain}`}>{f.name}</h4><span className={`text-xs ${t.textSub}`}>{f.area}</span></div></div>{selectedFieldId === f.id && <CheckCircle2 className="w-5 h-5 text-blue-500" />}</div></button>))}</div>
               </div>
               <div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>{rightContent}</div>
           </div>
@@ -1767,7 +1711,7 @@ const renderLinesPanel = () => {
 
                     {/* ZOOM & SHOW LINES CONTROLS */}
                     <div className="absolute right-24 bottom-32 z-20 flex flex-col gap-2">
-                        <button onClick={() => setShowGuidanceLines(!showGuidanceLines)} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain} transition-all hover:bg-blue-50 dark:hover:bg-blue-900/30`}>
+                        <button onClick={() => actions.setShowGuidanceLines(!showGuidanceLines)} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain} transition-all hover:bg-blue-50 dark:hover:bg-blue-900/30`}>
                             {showGuidanceLines ? <Eye className="w-6 h-6 text-blue-500"/> : <EyeOff className="w-6 h-6 text-slate-400"/>}
                         </button>
                         <div className={`h-px ${t.divider}`}></div>
@@ -1879,7 +1823,7 @@ const renderLinesPanel = () => {
                                 autoFocus
                             />
                             <div className="flex justify-end gap-3">
-                                <button onClick={() => {setBoundaryNameModalOpen(false); setDockMenuOpen(true); setIsRecordingBoundary(false); setTempBoundary([])}} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Cancel</button>
+                                <button onClick={() => {setBoundaryNameModalOpen(false); setDockMenuOpen(true); actions.setIsRecordingBoundary(false); actions.setTempBoundary([])}} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Cancel</button>
                                 <button onClick={handleSaveBoundary} className="px-6 py-2 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500">Save</button>
                             </div>
                         </div>
