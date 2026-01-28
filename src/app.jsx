@@ -85,7 +85,7 @@ const App = () => {
 
   const [tempLineName, setTempLineName] = useState('');
   const [tempManualHeading, setTempManualHeading] = useState('0.0'); 
-  const [settingsTab, setSettingsTab] = useState('display'); 
+  const [settingsTab, setSettingsTab] = useState('overview'); 
 
   // NEW: Locked Lane Index for Auto Steer
   const activeLaneRef = useRef(null);
@@ -1423,6 +1423,62 @@ const App = () => {
                 </div>
             </div> 
         );
+        case 'overview': {
+            const quickTiles = [
+              { id: 'calibration', label: 'Calibration', desc: 'Vehicle, implement, angle sensor', icon: Gauge },
+              { id: 'rtk', label: 'RTK / GNSS', desc: 'Status + NTRIP settings', icon: Radio },
+              { id: 'vehicle', label: 'Vehicle', desc: 'Type, wheelbase, axle width', icon: Tractor },
+              { id: 'implement', label: 'Implement', desc: 'Width, offset, overlap', icon: Ruler },
+              { id: 'guidance', label: 'Guidance', desc: 'Lines, auto-steer behavior', icon: Navigation },
+              { id: 'display', label: 'Display', desc: 'Theme, UI preferences', icon: Monitor }
+            ];
+
+            return (
+              <div className="space-y-6">
+                <div className="flex items-start justify-between gap-6">
+                  <div>
+                    <h3 className={`text-2xl font-bold ${t.textMain}`}>Quick Settings</h3>
+                    <p className={`${t.textSub} text-sm`}>Tap a tile to jump to the most used configuration screens.</p>
+                  </div>
+                  <div className={`px-4 py-2 rounded-lg border ${t.borderCard} ${t.textSub} text-xs font-bold uppercase`}>System Overview</div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {quickTiles.map((tile) => (
+                    <button
+                      key={tile.id}
+                      onClick={() => setSettingsTab(tile.id)}
+                      className={`text-left ${t.bgPanel} border ${t.borderCard} rounded-2xl p-5 hover:brightness-95 transition`}
+                    >
+                      <div className="flex items-center justify-between mb-4">
+                        <div className={`w-12 h-12 rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
+                          <tile.icon className="w-6 h-6 text-blue-500" />
+                        </div>
+                        <ChevronRight className={`${t.textDim} w-5 h-5`} />
+                      </div>
+                      <div className={`text-lg font-bold ${t.textMain}`}>{tile.label}</div>
+                      <div className={`text-xs ${t.textSub} mt-1`}>{tile.desc}</div>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-4 rounded-xl border ${t.borderCard}`}>
+                    <div className={`text-[10px] uppercase ${t.textSub}`}>RTK Status</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus}</div>
+                  </div>
+                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-4 rounded-xl border ${t.borderCard}`}>
+                    <div className={`text-[10px] uppercase ${t.textSub}`}>Satellites</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{satelliteCount}</div>
+                  </div>
+                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-4 rounded-xl border ${t.borderCard}`}>
+                    <div className={`text-[10px] uppercase ${t.textSub}`}>Angle Sensor</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{steeringAngle.toFixed(1)}°</div>
+                  </div>
+                </div>
+              </div>
+            );
+        }
         case 'calibration': {
             const calibCards = [
               {
@@ -2001,7 +2057,7 @@ const renderLinesPanel = () => {
                     </div>
                 )}
                 
-                {settingsOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}><div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col`}><div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl lg:text-2xl font-bold flex items-center gap-3 ${t.textMain}`}><Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />Settings</h2></div><nav className="flex-1 overflow-y-auto p-4 space-y-2"><SettingsTab theme={t} label="Display" icon={Monitor} active={settingsTab === 'display'} onClick={() => setSettingsTab('display')} /><SettingsTab theme={t} label="Vehicle" icon={Tractor} active={settingsTab === 'vehicle'} onClick={() => setSettingsTab('vehicle')} /><SettingsTab theme={t} label="Implement" icon={Ruler} active={settingsTab === 'implement'} onClick={() => setSettingsTab('implement')} /><SettingsTab theme={t} label="Guidance" icon={Navigation} active={settingsTab === 'guidance'} onClick={() => setSettingsTab('guidance')} /><SettingsTab theme={t} label="Calibration" icon={Gauge} active={settingsTab === 'calibration'} onClick={() => setSettingsTab('calibration')} /><SettingsTab theme={t} label="RTK / GNSS" icon={Radio} active={settingsTab === 'rtk'} onClick={() => setSettingsTab('rtk')} /></nav></div><div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}><div className={`flex items-center justify-between p-6 lg:p-8 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><h3 className={`text-lg lg:text-xl font-medium ${t.textSub} uppercase tracking-widest`}>{settingsTab} CONFIGURATION</h3><button onClick={() => setSettingsOpen(false)} className={`p-2 lg:p-3 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}><X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} /></button></div><div className="flex-1 p-6 lg:p-10 overflow-y-auto"><div className="max-w-4xl">{renderSettingsContent()}</div></div><div className={`p-4 lg:p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`} onClick={() => setSettingsOpen(false)}>Cancel</button><button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg" onClick={() => { setSettingsOpen(false); showNotification("Settings Saved Successfully", "success"); }}>Save Changes</button></div></div></div>}
+                {settingsOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}><div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col`}><div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl lg:text-2xl font-bold flex items-center gap-3 ${t.textMain}`}><Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />Settings</h2></div><nav className="flex-1 overflow-y-auto p-4 space-y-2"><SettingsTab theme={t} label="Overview" icon={LayoutGrid} active={settingsTab === 'overview'} onClick={() => setSettingsTab('overview')} /><SettingsTab theme={t} label="Display" icon={Monitor} active={settingsTab === 'display'} onClick={() => setSettingsTab('display')} /><SettingsTab theme={t} label="Vehicle" icon={Tractor} active={settingsTab === 'vehicle'} onClick={() => setSettingsTab('vehicle')} /><SettingsTab theme={t} label="Implement" icon={Ruler} active={settingsTab === 'implement'} onClick={() => setSettingsTab('implement')} /><SettingsTab theme={t} label="Guidance" icon={Navigation} active={settingsTab === 'guidance'} onClick={() => setSettingsTab('guidance')} /><SettingsTab theme={t} label="Calibration" icon={Gauge} active={settingsTab === 'calibration'} onClick={() => setSettingsTab('calibration')} /><SettingsTab theme={t} label="RTK / GNSS" icon={Radio} active={settingsTab === 'rtk'} onClick={() => setSettingsTab('rtk')} /></nav></div><div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}><div className={`flex items-center justify-between p-6 lg:p-8 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><h3 className={`text-lg lg:text-xl font-medium ${t.textSub} uppercase tracking-widest`}>{settingsTab} CONFIGURATION</h3><button onClick={() => setSettingsOpen(false)} className={`p-2 lg:p-3 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}><X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} /></button></div><div className="flex-1 p-6 lg:p-10 overflow-y-auto"><div className="max-w-4xl">{renderSettingsContent()}</div></div><div className={`p-4 lg:p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`} onClick={() => setSettingsOpen(false)}>Cancel</button><button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg" onClick={() => { setSettingsOpen(false); showNotification("Settings Saved Successfully", "success"); }}>Save Changes</button></div></div></div>}
                 {menuOpen && !fieldManagerOpen && !lineModeModalOpen && !linesPanelOpen && !manualHeadingModalOpen && !boundaryAlertOpen && !deleteModalOpen && (
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-lg border ${t.borderCard} shadow-2xl flex flex-col max-h-[85vh]`}><div className={`p-4 border-b ${t.divider} flex justify-between items-center`}><div className="flex items-center gap-2"><Menu className="w-5 h-5 text-blue-500" /><h3 className={`font-bold text-lg ${t.textMain}`}>Quick Menu</h3></div><button onClick={() => setMenuOpen(false)} className={`px-3 py-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} rounded-lg text-xs hover:brightness-95 border ${t.borderCard} ${t.textMain}`}>Close</button></div><div className="p-4 grid grid-cols-2 gap-3 overflow-y-auto"><div className={`col-span-2 p-3 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}><div className="flex items-center gap-2 mb-3"><Gauge className="w-5 h-5 text-orange-500" /><span className={`font-bold ${t.textMain} text-sm`}>Manual Drive</span></div><div className="grid grid-cols-2 gap-4"><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Speed</span><div className="flex items-center gap-2"><input type="range" min="-5" max="15" value={manualTargetSpeed} onChange={(e) => updateManualSpeed(Number(e.target.value))} className="w-full accent-orange-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><span className={`font-mono font-bold text-lg w-12 text-center ${t.textMain}`}>{manualTargetSpeed}</span></div></div><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Steering ({steeringAngle}Â°)</span><div className="flex items-center gap-1"><button onClick={() => updateSteering(Math.max(steeringAngle - 5, -35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCcw className={`w-4 h-4 ${t.textMain}`} /></button><input type="range" min="-35" max="35" value={steeringAngle} onChange={(e) => updateSteering(Number(e.target.value))} className="w-full accent-blue-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><button onClick={() => updateSteering(Math.min(steeringAngle + 5, 35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCw className={`w-4 h-4 ${t.textMain}`} /></button></div></div></div><p className={`text-[10px] ${t.textSub} mt-2 text-center`}>*Arrow Keys: â†‘ â†“ â† â†’</p></div><QuickAction theme={t} icon={Video} label="Camera" sub="Monitor" /><QuickAction theme={t} icon={AlertTriangle} label="Diagnostics" sub="Errors" /><QuickAction theme={t} icon={Ruler} label="Implement" sub="Width" /><QuickAction theme={t} icon={LocateFixed} label="Calibrate" sub="IMU" /><QuickAction theme={t} icon={Activity} label="Terrain" sub="Comp." /><QuickAction theme={t} icon={Save} label="Save Line" sub="Track" /><QuickAction theme={t} icon={Navigation} label="NMEA" sub="Out" /></div></div></div>
                 )}
