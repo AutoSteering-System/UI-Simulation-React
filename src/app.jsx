@@ -1,13 +1,6 @@
 const { useState, useEffect, useRef } = React;
 
 const App = () => {
-  // --- SYSTEM STATES ---
-  useEffect(() => {
-    if (window.lucide && window.lucide.createIcons) {
-      window.lucide.createIcons();
-    }
-  });
-
   const { state, actions } = window.MockBackend.useStore();
   const {
     vehicleSettings,

@@ -1,7 +1,10 @@
+const { Icon } = window.IconLibrary;
+
 const makeIconComponent = (name) => ({ className, ...rest }) => (
-  <i data-lucide={name} className={className} {...rest} />
+  <Icon name={name} className={className} {...rest} />
 );
 
+// --- Dưới đây giữ nguyên danh sách icon cũ ---
 const MapIcon = makeIconComponent('map');
 const LayoutGrid = makeIconComponent('layout-grid');
 const Settings = makeIconComponent('settings');
