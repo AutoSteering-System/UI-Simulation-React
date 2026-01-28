@@ -69,6 +69,8 @@ const App = () => {
   const [lineModeModalOpen, setLineModeModalOpen] = useState(false); 
   const [lineNameModalOpen, setLineNameModalOpen] = useState(false);
   const [manualHeadingModalOpen, setManualHeadingModalOpen] = useState(false);
+  const [rtkAdvancedOpen, setRtkAdvancedOpen] = useState(false);
+  const [gnssTab, setGnssTab] = useState('GNSS');
   
   // Boundary States
   const [boundaryNameModalOpen, setBoundaryNameModalOpen] = useState(false);
@@ -1421,7 +1423,175 @@ const App = () => {
                 </div>
             </div> 
         );
-        case 'rtk': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>RTK Connection (GNSS)</h3><div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-lg border ${t.borderCard} mb-4`}><div className="flex items-center justify-between mb-2"><span className={`text-sm ${t.textSub}`}>Status</span><span className="text-green-500 font-bold">CONNECTED</span></div><div className={`h-2 ${theme === 'dark' ? 'bg-slate-700' : 'bg-gray-300'} rounded-full overflow-hidden`}><div className="h-full bg-green-500 w-[95%]"></div></div></div><div className="grid grid-cols-2 gap-4"><SettingInput theme={t} label="NTRIP Host" value={rtkSettings.ntripHost} onChange={(e) => actions.setRtkSettings({...rtkSettings, ntripHost: e.target.value})} /><SettingInput theme={t} label="Port" value={rtkSettings.port} onChange={(e) => actions.setRtkSettings({...rtkSettings, port: e.target.value})} /><SettingInput theme={t} label="Mountpoint" value={rtkSettings.mountpoint} onChange={(e) => actions.setRtkSettings({...rtkSettings, mountpoint: e.target.value})} /><SettingInput theme={t} label="User" value={rtkSettings.user} onChange={(e) => actions.setRtkSettings({...rtkSettings, user: e.target.value})} /></div></div> );
+        case 'rtk': {
+            const rtkQuality = rtkStatus === 'FIX' ? 95 : rtkStatus === 'FLOAT' ? 75 : rtkStatus === 'DIFF' ? 55 : 20;
+            const rtkLabel = rtkStatus === 'FIX' ? 'CONNECTED' : rtkStatus === 'FLOAT' ? 'FLOAT' : rtkStatus === 'DIFF' ? 'DIFF' : 'DISCONNECTED';
+            const rtkBadge = rtkStatus === 'FIX' ? 'text-green-500' : rtkStatus === 'FLOAT' ? 'text-yellow-500' : rtkStatus === 'DIFF' ? 'text-orange-500' : 'text-red-500';
+            const rtkBar = rtkStatus === 'FIX' ? 'bg-green-500' : rtkStatus === 'FLOAT' ? 'bg-yellow-500' : rtkStatus === 'DIFF' ? 'bg-orange-500' : 'bg-red-500';
+            const gnssTabs = ['GNSS', 'RNSS', 'SBAS'];
+            const usedSatellites = [
+              { label: 'GPS', count: 8, color: 'bg-blue-500' },
+              { label: 'GLONASS', count: 4, color: 'bg-red-500' },
+              { label: 'BEIDOU', count: 6, color: 'bg-emerald-500' },
+              { label: 'GALILEO', count: 5, color: 'bg-yellow-500' }
+            ];
+            const unusedSatellites = [
+              { label: 'GPS', count: 10, color: 'bg-blue-500' },
+              { label: 'GLONASS', count: 3, color: 'bg-red-500' },
+              { label: 'BEIDOU', count: 8, color: 'bg-emerald-500' },
+              { label: 'GALILEO', count: 2, color: 'bg-yellow-500' }
+            ];
+            const skyPoints = [
+              { id: 15, az: 15, el: 70 },
+              { id: 7, az: 40, el: 35 },
+              { id: 29, az: 95, el: 60 },
+              { id: 42, az: 140, el: 20 },
+              { id: 66, az: 210, el: 45 },
+              { id: 25, az: 250, el: 25 },
+              { id: 86, az: 315, el: 15 }
+            ];
+            const skySize = 260;
+            const skyRadius = 110;
+
+            return (
+              <div className="space-y-6">
+                <h3 className={`text-xl font-bold mb-2 border-b ${t.borderCard} pb-2 ${t.textMain}`}>RTK / GNSS Status</h3>
+
+                <div className="flex gap-2 border-b border-slate-300/40">
+                  {gnssTabs.map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setGnssTab(tab)}
+                      className={`px-5 py-2 text-sm font-bold rounded-t-lg border ${gnssTab === tab ? `${t.borderCard} ${t.textMain} ${t.bgPanel}` : `border-transparent ${t.textSub}`}`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+
+                <div className={`${t.bgPanel} border ${t.borderCard} rounded-xl p-5`}>
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <div className={`text-xs uppercase tracking-widest ${t.textSub}`}>Link Status</div>
+                      <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus}</div>
+                    </div>
+                    <div className={`text-sm font-black ${rtkBadge}`}>{rtkLabel}</div>
+                  </div>
+                  <div className={`h-2 ${theme === 'dark' ? 'bg-slate-700' : 'bg-gray-200'} rounded-full overflow-hidden`}>
+                    <div className={`h-full ${rtkBar}`} style={{ width: `${rtkQuality}%` }}></div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-12 gap-6 items-center">
+                  <div className="col-span-3">
+                    <div className={`text-xs uppercase ${t.textSub} mb-3`}>Satellites Used</div>
+                    <div className="space-y-3">
+                      {usedSatellites.map((item) => (
+                        <div key={item.label} className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className={`w-2.5 h-2.5 rounded-full ${item.color}`}></span>
+                            <span className={`text-sm ${t.textMain}`}>{item.label}</span>
+                          </div>
+                          <span className={`text-sm font-bold ${t.textMain}`}>{item.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="col-span-6 flex justify-center">
+                    <div className={`rounded-full border ${t.borderCard} p-4 ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-50'}`}>
+                      <svg width={skySize} height={skySize} viewBox={`0 0 ${skySize} ${skySize}`}>
+                        <circle cx={skySize / 2} cy={skySize / 2} r={skyRadius} fill="none" stroke={theme === 'dark' ? '#475569' : '#cbd5f5'} strokeWidth="2" />
+                        <circle cx={skySize / 2} cy={skySize / 2} r={skyRadius * 0.66} fill="none" stroke={theme === 'dark' ? '#475569' : '#cbd5f5'} strokeWidth="1" />
+                        <circle cx={skySize / 2} cy={skySize / 2} r={skyRadius * 0.33} fill="none" stroke={theme === 'dark' ? '#475569' : '#cbd5f5'} strokeWidth="1" />
+                        <line x1={skySize / 2} y1={skySize / 2 - skyRadius} x2={skySize / 2} y2={skySize / 2 + skyRadius} stroke={theme === 'dark' ? '#64748b' : '#94a3b8'} strokeWidth="1" />
+                        <line x1={skySize / 2 - skyRadius} y1={skySize / 2} x2={skySize / 2 + skyRadius} y2={skySize / 2} stroke={theme === 'dark' ? '#64748b' : '#94a3b8'} strokeWidth="1" />
+                        {skyPoints.map((sat) => {
+                          const r = (1 - sat.el / 90) * skyRadius;
+                          const theta = (sat.az - 90) * (Math.PI / 180);
+                          const x = skySize / 2 + r * Math.cos(theta);
+                          const y = skySize / 2 + r * Math.sin(theta);
+                          return (
+                            <g key={sat.id}>
+                              <circle cx={x} cy={y} r="11" fill={theme === 'dark' ? '#0f172a' : '#ffffff'} stroke={theme === 'dark' ? '#94a3b8' : '#64748b'} strokeWidth="1" />
+                              <text x={x} y={y + 4} textAnchor="middle" fontSize="10" fill={theme === 'dark' ? '#e2e8f0' : '#0f172a'}>
+                                {sat.id}
+                              </text>
+                            </g>
+                          );
+                        })}
+                      </svg>
+                    </div>
+                  </div>
+
+                  <div className="col-span-3">
+                    <div className={`text-xs uppercase ${t.textSub} mb-3`}>Satellites Unused</div>
+                    <div className="space-y-3">
+                      {unusedSatellites.map((item) => (
+                        <div key={item.label} className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className={`w-2.5 h-2.5 rounded-full ${item.color} opacity-40`}></span>
+                            <span className={`text-sm ${t.textMain}`}>{item.label}</span>
+                          </div>
+                          <span className={`text-sm font-bold ${t.textMain}`}>{item.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-4 gap-4">
+                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-xl border ${t.borderCard}`}>
+                    <div className={`text-[10px] uppercase ${t.textSub}`}>Correction Age</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '0.7s' : '—'}</div>
+                  </div>
+                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-xl border ${t.borderCard}`}>
+                    <div className={`text-[10px] uppercase ${t.textSub}`}>Latency</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '220ms' : '—'}</div>
+                  </div>
+                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-xl border ${t.borderCard}`}>
+                    <div className={`text-[10px] uppercase ${t.textSub}`}>Baseline</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '12.4 km' : '—'}</div>
+                  </div>
+                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-xl border ${t.borderCard}`}>
+                    <div className={`text-[10px] uppercase ${t.textSub}`}>Accuracy (H/V)</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '2.2 cm / 3.1 cm' : '—'}</div>
+                  </div>
+                </div>
+
+                <div className={`${theme === 'dark' ? 'bg-slate-900/60' : 'bg-gray-50'} p-4 rounded-xl border ${t.borderCard}`}>
+                  <button
+                    onClick={() => setRtkAdvancedOpen((prev) => !prev)}
+                    className={`w-full flex items-center justify-between text-sm font-bold ${t.textMain}`}
+                  >
+                    <span>NTRIP Settings</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${rtkAdvancedOpen ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {rtkAdvancedOpen && (
+                    <div className="mt-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <SettingInput theme={t} label="NTRIP Host" value={rtkSettings.ntripHost} onChange={(e) => actions.setRtkSettings({...rtkSettings, ntripHost: e.target.value})} />
+                        <SettingInput theme={t} label="Port" value={rtkSettings.port} onChange={(e) => actions.setRtkSettings({...rtkSettings, port: e.target.value})} />
+                        <SettingInput theme={t} label="Mountpoint" value={rtkSettings.mountpoint} onChange={(e) => actions.setRtkSettings({...rtkSettings, mountpoint: e.target.value})} />
+                        <SettingInput theme={t} label="User" value={rtkSettings.user} onChange={(e) => actions.setRtkSettings({...rtkSettings, user: e.target.value})} />
+                      </div>
+                      <div className="mt-4 grid grid-cols-2 gap-4">
+                        <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-3 rounded-lg border ${t.borderCard}`}>
+                          <div className={`text-[10px] uppercase ${t.textSub}`}>Stream</div>
+                          <div className={`text-sm font-bold ${t.textMain}`}>RTCM3</div>
+                        </div>
+                        <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-3 rounded-lg border ${t.borderCard}`}>
+                          <div className={`text-[10px] uppercase ${t.textSub}`}>Update Rate</div>
+                          <div className={`text-sm font-bold ${t.textMain}`}>1 Hz</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+        }
         default: return <div className={t.textDim}>Select a menu item</div>;
     }
   };
