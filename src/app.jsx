@@ -1,4 +1,4 @@
-const { useState, useEffect, useRef } = React;
+﻿const { useState, useEffect, useRef } = React;
 
 const App = () => {
   const { state, actions } = window.MockBackend.useStore();
@@ -708,7 +708,7 @@ const App = () => {
 
   const handleSetAPlus_HeadingCurrent = () => {
       actions.setAPlusHeading(heading);
-      showNotification(`Heading Set to Current: ${heading.toFixed(1)}°`, "info");
+      showNotification(`Heading Set to Current: ${heading.toFixed(1)}Â°`, "info");
   };
 
   const handleSetAPlus_HeadingManual = (val) => {
@@ -719,7 +719,7 @@ const App = () => {
       }
       actions.setAPlusHeading(num);
       setManualHeadingModalOpen(false);
-      showNotification(`Heading Set Manually: ${num.toFixed(1)}°`, "info");
+      showNotification(`Heading Set Manually: ${num.toFixed(1)}Â°`, "info");
   };
 
   const handleConfirmAPlus = () => {
@@ -1307,7 +1307,7 @@ const App = () => {
                     content = ( 
                         <>
                             <DockButton theme={t} icon={RotateCcw} label="Reset A" color="orange" onClick={() => { actions.setAPlusPoint({ ...worldPos }); actions.setAPlusHeading(null); showNotification("Point A Reset to Current Position", "info"); }}/>
-                            <DockButton theme={t} icon={Compass} label={aPlusHeading !== null ? `${aPlusHeading.toFixed(0)}°` : "Head"} color={aPlusHeading !== null ? "green" : "blue"} onClick={handleSetAPlus_HeadingCurrent}/>
+                            <DockButton theme={t} icon={Compass} label={aPlusHeading !== null ? `${aPlusHeading.toFixed(0)}Â°` : "Head"} color={aPlusHeading !== null ? "green" : "blue"} onClick={handleSetAPlus_HeadingCurrent}/>
                             <DockButton theme={t} icon={Keyboard} label="Input" color="gray" onClick={() => { setManualHeadingModalOpen(true); setTempManualHeading(heading.toFixed(1)); }}/>
                             <div className={`h-px ${t.divider} mx-1`}></div>
                             
@@ -1423,6 +1423,85 @@ const App = () => {
                 </div>
             </div> 
         );
+        case 'calibration': {
+            const calibCards = [
+              {
+                title: 'Vehicle Calibration',
+                status: 'OK',
+                detail: 'Steering angle, wheelbase, axle width',
+                actions: [
+                  { label: 'Run Calibration', tone: 'primary', onClick: () => showNotification('Vehicle calibration started', 'success') },
+                  { label: 'Reset', tone: 'ghost', onClick: () => showNotification('Vehicle calibration reset', 'info') }
+                ],
+                meta: { label: 'Last', value: 'Today 08:45' }
+              },
+              {
+                title: 'Implement Calibration',
+                status: 'Needs Check',
+                detail: 'Width, overlap, offset, delay on/off',
+                actions: [
+                  { label: 'Run Calibration', tone: 'primary', onClick: () => showNotification('Implement calibration started', 'success') },
+                  { label: 'Reset', tone: 'ghost', onClick: () => showNotification('Implement calibration reset', 'info') }
+                ],
+                meta: { label: 'Last', value: 'Yesterday 17:20' }
+              },
+              {
+                title: 'Angle Sensor Calibration',
+                status: 'OK',
+                detail: 'Zero, range, live angle check',
+                actions: [
+                  { label: 'Calibrate Sensor', tone: 'primary', onClick: () => showNotification('Angle sensor calibration started', 'success') },
+                  { label: 'Zero Offset', tone: 'ghost', onClick: () => showNotification('Angle sensor zeroed', 'info') }
+                ],
+                meta: { label: 'Live', value: `${steeringAngle.toFixed(1)}°` }
+              }
+            ];
+
+            const statusClass = (status) => {
+              if (status === 'OK') return 'bg-green-500/10 text-green-500 border-green-500/40';
+              if (status === 'Needs Check') return 'bg-yellow-500/10 text-yellow-500 border-yellow-500/40';
+              return 'bg-slate-500/10 text-slate-500 border-slate-500/40';
+            };
+
+            return (
+              <div className="space-y-6">
+                <h3 className={`text-xl font-bold mb-2 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Calibration</h3>
+                <p className={`${t.textSub} text-sm`}>All calibration tasks are centralized here for quick access.</p>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                  {calibCards.map((card) => (
+                    <div key={card.title} className={`${t.bgPanel} border ${t.borderCard} rounded-2xl p-5 flex flex-col gap-4`}>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className={`text-base font-bold ${t.textMain}`}>{card.title}</div>
+                          <div className={`text-xs ${t.textSub}`}>{card.detail}</div>
+                        </div>
+                        <span className={`text-xs font-bold px-3 py-1 rounded-full border ${statusClass(card.status)}`}>{card.status}</span>
+                      </div>
+
+                      <div className={`text-sm ${t.textSub}`}>{card.meta.label}: <span className={`${t.textMain} font-semibold`}>{card.meta.value}</span></div>
+
+                      <div className="flex gap-3">
+                        {card.actions.map((action) => (
+                          <button
+                            key={action.label}
+                            onClick={action.onClick}
+                            className={
+                              action.tone === 'primary'
+                                ? 'px-4 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500'
+                                : `px-4 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold hover:brightness-95`
+                            }
+                          >
+                            {action.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+        }
         case 'rtk': {
             const rtkQuality = rtkStatus === 'FIX' ? 95 : rtkStatus === 'FLOAT' ? 75 : rtkStatus === 'DIFF' ? 55 : 20;
             const rtkLabel = rtkStatus === 'FIX' ? 'CONNECTED' : rtkStatus === 'FLOAT' ? 'FLOAT' : rtkStatus === 'DIFF' ? 'DIFF' : 'DISCONNECTED';
@@ -1543,19 +1622,19 @@ const App = () => {
                 <div className="grid grid-cols-4 gap-4">
                   <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-xl border ${t.borderCard}`}>
                     <div className={`text-[10px] uppercase ${t.textSub}`}>Correction Age</div>
-                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '0.7s' : '—'}</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '0.7s' : 'â€”'}</div>
                   </div>
                   <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-xl border ${t.borderCard}`}>
                     <div className={`text-[10px] uppercase ${t.textSub}`}>Latency</div>
-                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '220ms' : '—'}</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '220ms' : 'â€”'}</div>
                   </div>
                   <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-xl border ${t.borderCard}`}>
                     <div className={`text-[10px] uppercase ${t.textSub}`}>Baseline</div>
-                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '12.4 km' : '—'}</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '12.4 km' : 'â€”'}</div>
                   </div>
                   <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-xl border ${t.borderCard}`}>
                     <div className={`text-[10px] uppercase ${t.textSub}`}>Accuracy (H/V)</div>
-                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '2.2 cm / 3.1 cm' : '—'}</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '2.2 cm / 3.1 cm' : 'â€”'}</div>
                   </div>
                 </div>
 
@@ -1602,7 +1681,7 @@ const renderLinesPanel = () => {
     
     return (
         <div className={`w-full h-full flex flex-col ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}>
-            {/* Header với nút X */}
+            {/* Header vá»›i nÃºt X */}
             <div className={`flex items-center justify-between p-6 border-b ${t.divider}`}>
                 <h2 className={`text-xl font-bold ${t.textMain}`}>Lines Management</h2>
                 <button 
@@ -1613,7 +1692,7 @@ const renderLinesPanel = () => {
                 </button>
             </div>
             
-            {/* Nội dung panel */}
+            {/* Ná»™i dung panel */}
             <div className="flex-1 overflow-y-auto p-6">
                 {lines.length === 0 ? (
                     <div className={`text-center py-12 ${t.textDim}`}>
@@ -1654,7 +1733,7 @@ const renderLinesPanel = () => {
                     </div>
                 )}
                 
-                {/* Nút tạo line mới */}
+                {/* NÃºt táº¡o line má»›i */}
                 <div className="mt-6 flex justify-center">
                     <button 
                         onClick={() => {
@@ -1716,7 +1795,7 @@ const renderLinesPanel = () => {
                         </div>
                         {/* TASKS SECTION */}
                         <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
-                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Tasks History</h4><button onClick={startTaskCreation} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> New Task</button></div>{activeField.tasks.length > 0 ? (<div className="space-y-2">{activeField.tasks.map(task => (<div key={task.id} className={`flex items-center justify-between p-4 rounded-lg border transition-all ${activeTaskId === task.id ? 'border-green-500 bg-green-500/10' : t.borderCard}`}><div className="flex items-center gap-4"><div className="p-2 rounded bg-blue-500/20 text-blue-500">{task.type === 'Planting' ? <Sprout className="w-5 h-5"/> : task.type === 'Spraying' ? <Droplets className="w-5 h-5"/> : <Tractor className="w-5 h-5"/>}</div><div><div className={`font-bold ${t.textMain}`}>{task.name}</div><div className={`text-xs ${t.textSub}`}>{task.date} • {task.status}</div></div></div><div className="flex gap-2">{activeTaskId === task.id ? (<><button onClick={() => handleTaskAction(task, 'pause')} className="p-2 bg-orange-500/20 text-orange-500 rounded-lg hover:bg-orange-500/30"><Pause className="w-4 h-4" /></button><button onClick={() => handleTaskAction(task, 'finish')} className="p-2 bg-green-500/20 text-green-500 rounded-lg hover:bg-green-500/30"><CheckSquare className="w-4 h-4" /></button></>) : (task.status !== 'Done' && (<><button onClick={() => handleTaskAction(task, 'start')} className="p-2 bg-blue-500/20 text-blue-500 rounded-lg hover:bg-blue-500/30"><PlayCircle className="w-4 h-4" /></button><button onClick={() => confirmDelete('task', task.id)} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button></>))}</div></div>))}</div>) : (<div className={`text-center py-8 ${t.textDim}`}>No tasks recorded yet.</div>)}</div>
+                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Tasks History</h4><button onClick={startTaskCreation} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> New Task</button></div>{activeField.tasks.length > 0 ? (<div className="space-y-2">{activeField.tasks.map(task => (<div key={task.id} className={`flex items-center justify-between p-4 rounded-lg border transition-all ${activeTaskId === task.id ? 'border-green-500 bg-green-500/10' : t.borderCard}`}><div className="flex items-center gap-4"><div className="p-2 rounded bg-blue-500/20 text-blue-500">{task.type === 'Planting' ? <Sprout className="w-5 h-5"/> : task.type === 'Spraying' ? <Droplets className="w-5 h-5"/> : <Tractor className="w-5 h-5"/>}</div><div><div className={`font-bold ${t.textMain}`}>{task.name}</div><div className={`text-xs ${t.textSub}`}>{task.date} â€¢ {task.status}</div></div></div><div className="flex gap-2">{activeTaskId === task.id ? (<><button onClick={() => handleTaskAction(task, 'pause')} className="p-2 bg-orange-500/20 text-orange-500 rounded-lg hover:bg-orange-500/30"><Pause className="w-4 h-4" /></button><button onClick={() => handleTaskAction(task, 'finish')} className="p-2 bg-green-500/20 text-green-500 rounded-lg hover:bg-green-500/30"><CheckSquare className="w-4 h-4" /></button></>) : (task.status !== 'Done' && (<><button onClick={() => handleTaskAction(task, 'start')} className="p-2 bg-blue-500/20 text-blue-500 rounded-lg hover:bg-blue-500/30"><PlayCircle className="w-4 h-4" /></button><button onClick={() => confirmDelete('task', task.id)} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button></>))}</div></div>))}</div>) : (<div className={`text-center py-8 ${t.textDim}`}>No tasks recorded yet.</div>)}</div>
                   </div>
                   <div className={`p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button onClick={handleDeleteField} className={`px-6 py-3 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 flex items-center gap-2`}><Trash2 className="w-5 h-5" /> Delete</button><button onClick={handleLoadField} className="px-8 py-3 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500 shadow-lg shadow-green-900/20 flex items-center gap-2"><CheckCircle2 className="w-5 h-5" /> Load Field</button></div>
               </div>
@@ -1888,7 +1967,7 @@ const renderLinesPanel = () => {
                     <div className="flex items-center gap-[4%] w-1/3"><div className="flex flex-col"><div className={`flex items-center gap-2 text-[10px] lg:text-xs ${t.textSub} uppercase tracking-wider font-bold`}><Layers className="w-3 h-3" /><span>Field / Task</span></div><div className="flex items-center gap-1 lg:gap-2"><span className={`${t.textMain} font-bold text-xs lg:text-base`}>{loadedField ? loadedField.name : "No Field Loaded"}</span><span className={t.textDim}>/</span><span className={`text-blue-500 font-bold text-xs lg:text-base`}>{activeTaskId ? fields.find(f => f.id === selectedFieldId)?.tasks.find(t => t.id === activeTaskId)?.name : "No Active Task"}</span></div></div></div>
                     <div className="flex-1 flex justify-center"><div className={`flex items-center gap-4 px-6 py-1.5 rounded-xl border-2 ${Math.abs(crossTrackError)>5?'bg-red-900/20 border-red-500':`${theme==='dark'?'bg-slate-900/60':'bg-white/60'} ${t.borderCard}`}`}><ArrowLeftRight className={`w-5 h-5 ${t.textDim}`}/><div className="flex flex-col items-center w-28"><span className={`text-4xl font-black ${t.textMain}`}>{Math.abs(crossTrackError).toFixed(1)}</span></div><ArrowLeftRight className={`w-5 h-5 ${t.textDim}`}/></div></div>
                     <div className="flex items-center justify-end gap-6 w-1/3">
-                        <div className="hidden lg:flex flex-col items-end mr-2"><span className={`font-bold ${t.textMain}`}>{getDisplayHeading()}°</span><span className={`text-xs ${t.textSub}`}>Heading</span></div>
+                        <div className="hidden lg:flex flex-col items-end mr-2"><span className={`font-bold ${t.textMain}`}>{getDisplayHeading()}Â°</span><span className={`text-xs ${t.textSub}`}>Heading</span></div>
                         <div className="flex flex-col items-end mr-2"><div className={`flex items-center gap-1 ${t.textMain}`}><Globe className="w-3 h-3 lg:w-4 lg:h-4 text-blue-500" /><span className="text-sm lg:text-base font-bold font-mono">{satelliteCount}</span></div><span className={`text-[9px] lg:text-[10px] ${t.textDim}`}>Sats</span></div>
                         <div className={`px-3 py-1 rounded border min-w-[70px] ${getRtkColor()}`}><span className="text-xs font-black">{rtkStatus}</span></div>
                     </div>
@@ -1922,9 +2001,9 @@ const renderLinesPanel = () => {
                     </div>
                 )}
                 
-                {settingsOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}><div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col`}><div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl lg:text-2xl font-bold flex items-center gap-3 ${t.textMain}`}><Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />Settings</h2></div><nav className="flex-1 overflow-y-auto p-4 space-y-2"><SettingsTab theme={t} label="Display" icon={Monitor} active={settingsTab === 'display'} onClick={() => setSettingsTab('display')} /><SettingsTab theme={t} label="Vehicle" icon={Tractor} active={settingsTab === 'vehicle'} onClick={() => setSettingsTab('vehicle')} /><SettingsTab theme={t} label="Implement" icon={Ruler} active={settingsTab === 'implement'} onClick={() => setSettingsTab('implement')} /><SettingsTab theme={t} label="Guidance" icon={Navigation} active={settingsTab === 'guidance'} onClick={() => setSettingsTab('guidance')} /><SettingsTab theme={t} label="RTK / GNSS" icon={Radio} active={settingsTab === 'rtk'} onClick={() => setSettingsTab('rtk')} /></nav></div><div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}><div className={`flex items-center justify-between p-6 lg:p-8 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><h3 className={`text-lg lg:text-xl font-medium ${t.textSub} uppercase tracking-widest`}>{settingsTab} CONFIGURATION</h3><button onClick={() => setSettingsOpen(false)} className={`p-2 lg:p-3 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}><X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} /></button></div><div className="flex-1 p-6 lg:p-10 overflow-y-auto"><div className="max-w-4xl">{renderSettingsContent()}</div></div><div className={`p-4 lg:p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`} onClick={() => setSettingsOpen(false)}>Cancel</button><button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg" onClick={() => { setSettingsOpen(false); showNotification("Settings Saved Successfully", "success"); }}>Save Changes</button></div></div></div>}
+                {settingsOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}><div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col`}><div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl lg:text-2xl font-bold flex items-center gap-3 ${t.textMain}`}><Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />Settings</h2></div><nav className="flex-1 overflow-y-auto p-4 space-y-2"><SettingsTab theme={t} label="Display" icon={Monitor} active={settingsTab === 'display'} onClick={() => setSettingsTab('display')} /><SettingsTab theme={t} label="Vehicle" icon={Tractor} active={settingsTab === 'vehicle'} onClick={() => setSettingsTab('vehicle')} /><SettingsTab theme={t} label="Implement" icon={Ruler} active={settingsTab === 'implement'} onClick={() => setSettingsTab('implement')} /><SettingsTab theme={t} label="Guidance" icon={Navigation} active={settingsTab === 'guidance'} onClick={() => setSettingsTab('guidance')} /><SettingsTab theme={t} label="Calibration" icon={Gauge} active={settingsTab === 'calibration'} onClick={() => setSettingsTab('calibration')} /><SettingsTab theme={t} label="RTK / GNSS" icon={Radio} active={settingsTab === 'rtk'} onClick={() => setSettingsTab('rtk')} /></nav></div><div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}><div className={`flex items-center justify-between p-6 lg:p-8 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><h3 className={`text-lg lg:text-xl font-medium ${t.textSub} uppercase tracking-widest`}>{settingsTab} CONFIGURATION</h3><button onClick={() => setSettingsOpen(false)} className={`p-2 lg:p-3 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}><X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} /></button></div><div className="flex-1 p-6 lg:p-10 overflow-y-auto"><div className="max-w-4xl">{renderSettingsContent()}</div></div><div className={`p-4 lg:p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`} onClick={() => setSettingsOpen(false)}>Cancel</button><button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg" onClick={() => { setSettingsOpen(false); showNotification("Settings Saved Successfully", "success"); }}>Save Changes</button></div></div></div>}
                 {menuOpen && !fieldManagerOpen && !lineModeModalOpen && !linesPanelOpen && !manualHeadingModalOpen && !boundaryAlertOpen && !deleteModalOpen && (
-                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-lg border ${t.borderCard} shadow-2xl flex flex-col max-h-[85vh]`}><div className={`p-4 border-b ${t.divider} flex justify-between items-center`}><div className="flex items-center gap-2"><Menu className="w-5 h-5 text-blue-500" /><h3 className={`font-bold text-lg ${t.textMain}`}>Quick Menu</h3></div><button onClick={() => setMenuOpen(false)} className={`px-3 py-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} rounded-lg text-xs hover:brightness-95 border ${t.borderCard} ${t.textMain}`}>Close</button></div><div className="p-4 grid grid-cols-2 gap-3 overflow-y-auto"><div className={`col-span-2 p-3 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}><div className="flex items-center gap-2 mb-3"><Gauge className="w-5 h-5 text-orange-500" /><span className={`font-bold ${t.textMain} text-sm`}>Manual Drive</span></div><div className="grid grid-cols-2 gap-4"><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Speed</span><div className="flex items-center gap-2"><input type="range" min="-5" max="15" value={manualTargetSpeed} onChange={(e) => updateManualSpeed(Number(e.target.value))} className="w-full accent-orange-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><span className={`font-mono font-bold text-lg w-12 text-center ${t.textMain}`}>{manualTargetSpeed}</span></div></div><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Steering ({steeringAngle}°)</span><div className="flex items-center gap-1"><button onClick={() => updateSteering(Math.max(steeringAngle - 5, -35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCcw className={`w-4 h-4 ${t.textMain}`} /></button><input type="range" min="-35" max="35" value={steeringAngle} onChange={(e) => updateSteering(Number(e.target.value))} className="w-full accent-blue-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><button onClick={() => updateSteering(Math.min(steeringAngle + 5, 35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCw className={`w-4 h-4 ${t.textMain}`} /></button></div></div></div><p className={`text-[10px] ${t.textSub} mt-2 text-center`}>*Arrow Keys: ↑ ↓ ← →</p></div><QuickAction theme={t} icon={Video} label="Camera" sub="Monitor" /><QuickAction theme={t} icon={AlertTriangle} label="Diagnostics" sub="Errors" /><QuickAction theme={t} icon={Ruler} label="Implement" sub="Width" /><QuickAction theme={t} icon={LocateFixed} label="Calibrate" sub="IMU" /><QuickAction theme={t} icon={Activity} label="Terrain" sub="Comp." /><QuickAction theme={t} icon={Save} label="Save Line" sub="Track" /><QuickAction theme={t} icon={Navigation} label="NMEA" sub="Out" /></div></div></div>
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-lg border ${t.borderCard} shadow-2xl flex flex-col max-h-[85vh]`}><div className={`p-4 border-b ${t.divider} flex justify-between items-center`}><div className="flex items-center gap-2"><Menu className="w-5 h-5 text-blue-500" /><h3 className={`font-bold text-lg ${t.textMain}`}>Quick Menu</h3></div><button onClick={() => setMenuOpen(false)} className={`px-3 py-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} rounded-lg text-xs hover:brightness-95 border ${t.borderCard} ${t.textMain}`}>Close</button></div><div className="p-4 grid grid-cols-2 gap-3 overflow-y-auto"><div className={`col-span-2 p-3 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}><div className="flex items-center gap-2 mb-3"><Gauge className="w-5 h-5 text-orange-500" /><span className={`font-bold ${t.textMain} text-sm`}>Manual Drive</span></div><div className="grid grid-cols-2 gap-4"><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Speed</span><div className="flex items-center gap-2"><input type="range" min="-5" max="15" value={manualTargetSpeed} onChange={(e) => updateManualSpeed(Number(e.target.value))} className="w-full accent-orange-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><span className={`font-mono font-bold text-lg w-12 text-center ${t.textMain}`}>{manualTargetSpeed}</span></div></div><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Steering ({steeringAngle}Â°)</span><div className="flex items-center gap-1"><button onClick={() => updateSteering(Math.max(steeringAngle - 5, -35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCcw className={`w-4 h-4 ${t.textMain}`} /></button><input type="range" min="-35" max="35" value={steeringAngle} onChange={(e) => updateSteering(Number(e.target.value))} className="w-full accent-blue-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><button onClick={() => updateSteering(Math.min(steeringAngle + 5, 35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCw className={`w-4 h-4 ${t.textMain}`} /></button></div></div></div><p className={`text-[10px] ${t.textSub} mt-2 text-center`}>*Arrow Keys: â†‘ â†“ â† â†’</p></div><QuickAction theme={t} icon={Video} label="Camera" sub="Monitor" /><QuickAction theme={t} icon={AlertTriangle} label="Diagnostics" sub="Errors" /><QuickAction theme={t} icon={Ruler} label="Implement" sub="Width" /><QuickAction theme={t} icon={LocateFixed} label="Calibrate" sub="IMU" /><QuickAction theme={t} icon={Activity} label="Terrain" sub="Comp." /><QuickAction theme={t} icon={Save} label="Save Line" sub="Track" /><QuickAction theme={t} icon={Navigation} label="NMEA" sub="Out" /></div></div></div>
                 )}
                 {lineNameModalOpen && (
                   <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6">
@@ -1959,7 +2038,7 @@ const renderLinesPanel = () => {
                                         className={`flex-1 p-4 rounded-xl border ${t.borderCard} ${t.bgInput} ${t.textMain} font-mono text-2xl font-bold text-center focus:border-blue-500 outline-none`} 
                                         autoFocus
                                     />
-                                    <span className={`text-2xl font-bold ${t.textSub}`}>°</span>
+                                    <span className={`text-2xl font-bold ${t.textSub}`}>Â°</span>
                                 </div>
                                 <div className={`text-center font-bold ${t.textSub} bg-blue-500/10 py-2 rounded-lg`}>
                                     {getCardinalDirection(tempManualHeading)}
@@ -2071,3 +2150,4 @@ const renderLinesPanel = () => {
     </div>
   );
 };
+
