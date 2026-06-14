@@ -2742,66 +2742,605 @@ const renderLinesPanel = () => {
 
   const renderFieldManager = () => {
       const activeField = fields.find(f => f.id === selectedFieldId);
+      const isLoadedActiveField = activeField && loadedField?.id === activeField.id;
+      const panelBg = theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50';
+      const softPanelBg = theme === 'dark' ? 'bg-slate-900/70' : 'bg-white';
+      const mutedPanelBg = theme === 'dark' ? 'bg-slate-900/45' : 'bg-slate-50';
+
+      const getLineIcon = (line) => {
+          if (line?.type === 'CURVE') return Spline;
+          if (line?.type === 'COMBINATION') return AlignJustify;
+          if (line?.type === 'PIVOT') return CircleDashed;
+          if (line?.type === 'A_PLUS') return ArrowUpFromDot;
+          return GitCommitHorizontal;
+      };
+
+      const getTaskIcon = (task) => {
+          if (task?.type === 'Planting') return Sprout;
+          if (task?.type === 'Spraying') return Droplets;
+          if (task?.type === 'Harvesting') return Scissors;
+          return Tractor;
+      };
+
+      const getLinePoints = (line) => {
+          const pts = [];
+          if (line?.points?.a) pts.push(line.points.a);
+          if (line?.points?.b) pts.push(line.points.b);
+          if (line?.points?.aplus?.point) pts.push(line.points.aplus.point);
+          if (Array.isArray(line?.points?.curve)) pts.push(...line.points.curve);
+          if (line?.points?.pivot?.center) pts.push(line.points.pivot.center);
+          return pts.filter(Boolean);
+      };
+
+      const createPreviewMapper = (field, draftBoundaries = []) => {
+          const boundaries = draftBoundaries.length > 0 ? draftBoundaries : (field?.boundaries || []);
+          const linePoints = (field?.lines || []).flatMap(getLinePoints);
+          const boundaryPoints = boundaries.flatMap(b => b?.points || b || []);
+          const sourcePoints = [...boundaryPoints, ...linePoints].filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+          const fallback = [{ x: -220, y: -130 }, { x: 230, y: 145 }];
+          const points = sourcePoints.length > 0 ? sourcePoints : fallback;
+          const xs = points.map(p => p.x);
+          const ys = points.map(p => p.y);
+          const minX = Math.min(...xs);
+          const maxX = Math.max(...xs);
+          const minY = Math.min(...ys);
+          const maxY = Math.max(...ys);
+          const spanX = Math.max(maxX - minX, 1);
+          const spanY = Math.max(maxY - minY, 1);
+          const pad = 34;
+          const width = 360;
+          const height = 230;
+          const scale = Math.min((width - pad * 2) / spanX, (height - pad * 2) / spanY);
+          const midX = (minX + maxX) / 2;
+          const midY = (minY + maxY) / 2;
+          return (pt) => ({
+              x: width / 2 + (pt.x - midX) * scale,
+              y: height / 2 + (pt.y - midY) * scale
+          });
+      };
+
+      const MiniFieldPreview = ({ field, draftBoundaries = [] }) => {
+          const boundaries = draftBoundaries.length > 0 ? draftBoundaries : (field?.boundaries || []);
+          const lines = field?.lines || [];
+          const mapPoint = createPreviewMapper(field, draftBoundaries);
+          const fieldId = field?.id || 'draft';
+          const hasBoundaries = boundaries.length > 0;
+          const defaultBoundary = '70,62 224,43 306,92 286,174 132,194 54,142';
+          const gridStroke = theme === 'dark' ? '#334155' : '#cbd5e1';
+          const boundaryFill = theme === 'dark' ? 'rgba(37,99,235,0.14)' : 'rgba(37,99,235,0.09)';
+          const boundaryStroke = theme === 'dark' ? '#60a5fa' : '#2563eb';
+
+          return (
+              <div className={`relative overflow-hidden rounded-xl border ${t.borderCard} ${mutedPanelBg}`}>
+                  <svg viewBox="0 0 360 230" className="w-full h-[230px] block" role="img" aria-label="Field preview">
+                      <defs>
+                          <pattern id={`field-grid-${fieldId}`} width="24" height="24" patternUnits="userSpaceOnUse">
+                              <path d="M 24 0 L 0 0 0 24" fill="none" stroke={gridStroke} strokeWidth="0.7" opacity={theme === 'dark' ? '0.26' : '0.42'} />
+                          </pattern>
+                      </defs>
+                      <rect width="360" height="230" fill={`url(#field-grid-${fieldId})`} />
+                      <rect width="360" height="230" fill={theme === 'dark' ? 'rgba(15,23,42,0.34)' : 'rgba(248,250,252,0.42)'} />
+                      {hasBoundaries ? (
+                          boundaries.map((boundary, index) => {
+                              const points = (boundary.points || boundary || []).filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+                              if (points.length < 2) return null;
+                              const previewPoints = points.map(mapPoint).map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+                              return (
+                                  <polygon
+                                      key={`${boundary.name || 'boundary'}-${index}`}
+                                      points={previewPoints}
+                                      fill={index === activeBoundaryIdx ? boundaryFill : 'rgba(100,116,139,0.08)'}
+                                      stroke={index === activeBoundaryIdx ? boundaryStroke : '#94a3b8'}
+                                      strokeWidth={index === activeBoundaryIdx ? 3 : 2}
+                                      strokeDasharray={index === activeBoundaryIdx ? 'none' : '7 6'}
+                                  />
+                              );
+                          })
+                      ) : (
+                          <polygon points={defaultBoundary} fill={boundaryFill} stroke={boundaryStroke} strokeWidth="2.5" strokeDasharray="9 7" />
+                      )}
+                      {lines.slice(0, 5).map((line, index) => {
+                          const points = getLinePoints(line);
+                          if (points.length < 2) return null;
+                          const previewPoints = points.map(mapPoint);
+                          const Icon = getLineIcon(line);
+                          return (
+                              <g key={line.id || index}>
+                                  <polyline
+                                      points={previewPoints.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
+                                      fill="none"
+                                      stroke={activeLineId === line.id ? '#2563eb' : '#38bdf8'}
+                                      strokeWidth={activeLineId === line.id ? 4 : 2}
+                                      strokeLinecap="round"
+                                      strokeOpacity={activeLineId === line.id ? 0.95 : 0.62}
+                                  />
+                                  {index === 0 && (
+                                      <foreignObject x="154" y="96" width="52" height="38">
+                                          <div className="h-full w-full flex items-center justify-center text-blue-500">
+                                              <Icon className="w-5 h-5" />
+                                          </div>
+                                      </foreignObject>
+                                  )}
+                              </g>
+                          );
+                      })}
+                      <circle cx="180" cy="115" r="5" fill="#f97316" stroke="white" strokeWidth="2" />
+                  </svg>
+                  {!hasBoundaries && (
+                      <div className={`absolute left-3 bottom-3 px-3 py-1.5 rounded-lg border ${t.borderCard} ${softPanelBg} text-[10px] font-bold uppercase ${t.textSub}`}>
+                          Preview boundary
+                      </div>
+                  )}
+              </div>
+          );
+      };
+
+      const StatCard = ({ icon: Icon, label, value, sub, tone = 'text-blue-500' }) => (
+          <div className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-4 min-w-0`}>
+              <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                      <div className={`text-[10px] font-black uppercase tracking-wider ${t.textSub}`}>{label}</div>
+                      <div className={`mt-1 text-2xl font-black leading-none ${t.textMain}`}>{value}</div>
+                      {sub && <div className={`mt-1 text-xs ${t.textDim} truncate`}>{sub}</div>}
+                  </div>
+                  <div className={`shrink-0 w-10 h-10 rounded-lg ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} flex items-center justify-center ${tone}`}>
+                      <Icon className="w-5 h-5" />
+                  </div>
+              </div>
+          </div>
+      );
+
+      const SectionTitle = ({ icon: Icon, title, actionLabel, onAction }) => (
+          <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="flex items-center gap-2 min-w-0">
+                  <Icon className="w-4 h-4 text-blue-500 shrink-0" />
+                  <h4 className={`font-black uppercase tracking-wider text-xs ${t.textSub} truncate`}>{title}</h4>
+              </div>
+              {actionLabel && (
+                  <button onClick={onAction} className="shrink-0 text-xs font-black text-blue-500 hover:text-blue-400 flex items-center gap-1">
+                      <Plus className="w-4 h-4" />
+                      {actionLabel}
+                  </button>
+              )}
+          </div>
+      );
+
+      const EmptyState = ({ label }) => (
+          <div className={`rounded-lg border border-dashed ${t.borderCard} ${mutedPanelBg} py-5 px-4 text-center text-sm ${t.textDim}`}>
+              {label}
+          </div>
+      );
 
       let rightContent;
       if (viewMode === 'CREATE_FIELD') {
+          const draftField = {
+              id: 'draft',
+              name: newFieldName || 'New Field',
+              boundaries: currentFieldBoundaries,
+              lines: [],
+              tasks: []
+          };
+
           rightContent = (
-              <div className="flex-1 flex flex-col p-8 overflow-y-auto">
-                  <div className="mb-6 flex items-center gap-2"><button onClick={() => actions.setViewMode('LIST')} className={`p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800`}><ArrowLeftRight className="w-5 h-5 rotate-180" /></button><h3 className="text-xl font-bold">Create New Field</h3></div>
-                  <div className="max-w-2xl w-full space-y-6">
-                      <div><label className={`block text-sm font-bold mb-2 ${t.textSub}`}>FIELD NAME</label><input type="text" value={newFieldName} onChange={e => actions.setNewFieldName(e.target.value)} placeholder="Ex: South Farm 02" className={`w-full p-4 rounded-xl border ${t.borderCard} ${t.bgInput} focus:border-blue-500 outline-none`} /></div>
-                      <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}><div className="flex justify-between items-center mb-4"><span className="font-bold">Boundaries Recorded</span><span className={`text-xs ${currentFieldBoundaries.length > 0 ? 'text-green-500' : 'text-orange-500'}`}>{currentFieldBoundaries.length} loops saved</span></div><div className="space-y-3">{currentFieldBoundaries.length > 0 && <div className="h-20 bg-green-500/10 rounded-lg flex items-center justify-center border border-green-500/30 text-green-600 font-bold mb-2"><CheckCircle2 className="w-6 h-6 mr-2"/> {currentFieldBoundaries.length} Boundaries Ready</div>}<button onClick={startBoundaryCreation} className="w-full py-4 rounded-xl border-2 border-dashed border-blue-500/50 text-blue-500 font-bold hover:bg-blue-500/10 flex flex-col items-center gap-2"><Tractor className="w-8 h-8" /><span>{currentFieldBoundaries.length > 0 ? "Record Another Boundary" : "Drive to Record Boundary"}</span></button></div></div>
-                      <div className="pt-6 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-4"><button onClick={() => actions.setViewMode('LIST')} className="px-6 py-3 rounded-xl border font-bold text-slate-500">Cancel</button><button onClick={saveNewField} className="px-8 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg">Save Field</button></div>
+              <div className="flex-1 min-h-0 flex flex-col">
+                  <div className={`px-5 lg:px-6 py-4 border-b ${t.divider} flex items-center justify-between gap-4 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
+                      <div className="flex items-center gap-3 min-w-0">
+                          <button onClick={() => actions.setViewMode('LIST')} className={`shrink-0 p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}>
+                              <ArrowLeftRight className="w-5 h-5 rotate-180" />
+                          </button>
+                          <div className="min-w-0">
+                              <div className={`text-[10px] font-black uppercase tracking-widest ${t.textSub}`}>Field setup</div>
+                              <h3 className={`text-xl font-black ${t.textMain} truncate`}>Create Field</h3>
+                          </div>
+                      </div>
+                      <button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}>
+                          <X className="w-5 h-5" />
+                      </button>
+                  </div>
+
+                  <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6">
+                      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)] gap-5 max-w-6xl">
+                          <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-5 space-y-5`}>
+                              <div>
+                                  <label className={`block text-[11px] font-black uppercase tracking-wider mb-2 ${t.textSub}`}>Field name</label>
+                                  <input
+                                      type="text"
+                                      value={newFieldName}
+                                      onChange={e => actions.setNewFieldName(e.target.value)}
+                                      placeholder="Ex: South Farm 02"
+                                      className={`w-full p-4 rounded-xl border ${t.borderCard} ${t.bgInput} ${t.textMain} focus:border-blue-500 outline-none`}
+                                  />
+                              </div>
+
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div className={`rounded-xl border ${t.borderCard} ${mutedPanelBg} p-4`}>
+                                      <div className="flex items-start justify-between gap-3">
+                                          <div>
+                                              <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Boundary capture</div>
+                                              <div className={`mt-1 text-sm ${t.textMain}`}>{currentFieldBoundaries.length} loop saved</div>
+                                          </div>
+                                          <MapPin className="w-5 h-5 text-orange-500" />
+                                      </div>
+                                      <button onClick={startBoundaryCreation} className="mt-4 w-full py-3 rounded-xl border-2 border-dashed border-blue-500/50 text-blue-500 font-black hover:bg-blue-500/10 flex items-center justify-center gap-2">
+                                          <Tractor className="w-5 h-5" />
+                                          {currentFieldBoundaries.length > 0 ? 'Record Another' : 'Record Boundary'}
+                                      </button>
+                                  </div>
+
+                                  <div className={`rounded-xl border ${t.borderCard} ${mutedPanelBg} p-4`}>
+                                      <div className="flex items-start justify-between gap-3">
+                                          <div>
+                                              <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Setup status</div>
+                                              <div className={`mt-1 text-sm ${t.textMain}`}>{currentFieldBoundaries.length > 0 ? 'Ready to save' : 'Boundary optional'}</div>
+                                          </div>
+                                          <CheckCircle2 className={`w-5 h-5 ${currentFieldBoundaries.length > 0 ? 'text-green-500' : t.textDim}`} />
+                                      </div>
+                                      <div className="mt-4 grid grid-cols-2 gap-2 text-center">
+                                          <div className={`rounded-lg border ${t.borderCard} p-3`}>
+                                              <div className={`text-xl font-black ${t.textMain}`}>{currentFieldBoundaries.length}</div>
+                                              <div className={`text-[10px] uppercase font-bold ${t.textSub}`}>Boundaries</div>
+                                          </div>
+                                          <div className={`rounded-lg border ${t.borderCard} p-3`}>
+                                              <div className={`text-xl font-black ${t.textMain}`}>0</div>
+                                              <div className={`text-[10px] uppercase font-bold ${t.textSub}`}>Tasks</div>
+                                          </div>
+                                      </div>
+                                  </div>
+                              </div>
+
+                              <div className={`pt-4 border-t ${t.divider} flex flex-wrap justify-end gap-3`}>
+                                  <button onClick={() => actions.setViewMode('LIST')} className={`px-5 py-3 rounded-lg border ${t.borderCard} ${t.textMain} font-bold hover:brightness-95`}>Cancel</button>
+                                  <button onClick={saveNewField} className="px-7 py-3 rounded-lg bg-blue-600 text-white font-black hover:bg-blue-500 shadow-lg shadow-blue-900/20 flex items-center gap-2">
+                                      <Save className="w-5 h-5" />
+                                      Save Field
+                                  </button>
+                              </div>
+                          </section>
+
+                          <section className="space-y-4">
+                              <MiniFieldPreview field={draftField} draftBoundaries={currentFieldBoundaries} />
+                              <div className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-4`}>
+                                  <SectionTitle icon={Layers} title="Create flow" />
+                                  <div className="space-y-3">
+                                      {['Name field', 'Record or import boundary', 'Save to field library'].map((step, index) => (
+                                          <div key={step} className="flex items-center gap-3">
+                                              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black ${index === 0 || (index === 1 && currentFieldBoundaries.length > 0) ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textSub}`}`}>
+                                                  {index + 1}
+                                              </div>
+                                              <span className={`text-sm font-bold ${t.textMain}`}>{step}</span>
+                                          </div>
+                                      ))}
+                                  </div>
+                              </div>
+                          </section>
+                      </div>
                   </div>
               </div>
           );
       } else if (viewMode === 'CREATE_TASK') {
+          const taskOptions = [
+              { type: 'Tillage', title: 'Tillage / Plowing', detail: 'Soil prep, ripping, leveling', icon: Tractor },
+              { type: 'Planting', title: 'Planting / Seeding', detail: 'Seed rows and pass tracking', icon: Sprout },
+              { type: 'Spraying', title: 'Spraying', detail: 'Coverage and section control', icon: Droplets },
+              { type: 'Harvesting', title: 'Harvesting', detail: 'Yield pass and area done', icon: Scissors }
+          ];
+
           rightContent = (
-              <div className="flex-1 flex flex-col p-8 overflow-y-auto">
-                  <div className="mb-6 flex items-center gap-2"><button onClick={() => actions.setViewMode('LIST')} className={`p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800`}><ArrowLeftRight className="w-5 h-5 rotate-180" /></button><h3 className="text-xl font-bold">New Task</h3></div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl"><TaskOptionButton icon={Tractor} label="Tillage / Plowing" onClick={() => saveNewTask("Tillage")} t={t} /><TaskOptionButton icon={Sprout} label="Planting / Seeding" onClick={() => saveNewTask("Planting")} t={t} /><TaskOptionButton icon={Droplets} label="Spraying" onClick={() => saveNewTask("Spraying")} t={t} /><TaskOptionButton icon={Scissors} label="Harvesting" onClick={() => saveNewTask("Harvesting")} t={t} /></div>
+              <div className="flex-1 min-h-0 flex flex-col">
+                  <div className={`px-5 lg:px-6 py-4 border-b ${t.divider} flex items-center justify-between gap-4 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
+                      <div className="flex items-center gap-3 min-w-0">
+                          <button onClick={() => actions.setViewMode('LIST')} className={`shrink-0 p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}>
+                              <ArrowLeftRight className="w-5 h-5 rotate-180" />
+                          </button>
+                          <div className="min-w-0">
+                              <div className={`text-[10px] font-black uppercase tracking-widest ${t.textSub}`}>{activeField?.name || 'No field selected'}</div>
+                              <h3 className={`text-xl font-black ${t.textMain} truncate`}>New Task</h3>
+                          </div>
+                      </div>
+                      <button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}>
+                          <X className="w-5 h-5" />
+                      </button>
+                  </div>
+
+                  <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6">
+                      <div className="max-w-4xl">
+                          <div className={`mb-5 rounded-xl border ${t.borderCard} ${softPanelBg} p-4 flex flex-wrap items-center justify-between gap-3`}>
+                              <div>
+                                  <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Task target</div>
+                                  <div className={`font-black ${t.textMain}`}>{activeField?.name || 'Select field first'}</div>
+                              </div>
+                              <div className={`text-sm ${t.textSub}`}>Creates a job under the selected field</div>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              {taskOptions.map(({ type, title, detail, icon: Icon }) => (
+                                  <button
+                                      key={type}
+                                      onClick={() => saveNewTask(type)}
+                                      className={`text-left rounded-xl border ${t.borderCard} ${softPanelBg} hover:border-blue-500 hover:bg-blue-500/5 transition-all p-5 flex items-start gap-4`}
+                                  >
+                                      <div className="shrink-0 w-12 h-12 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center">
+                                          <Icon className="w-6 h-6" />
+                                      </div>
+                                      <div className="min-w-0">
+                                          <div className={`font-black ${t.textMain}`}>{title}</div>
+                                          <div className={`mt-1 text-sm ${t.textSub}`}>{detail}</div>
+                                      </div>
+                                  </button>
+                              ))}
+                          </div>
+                      </div>
+                  </div>
               </div>
           );
       } else if (activeField) {
-          // OVERVIEW MODE
           const boundaries = activeField.boundaries || [];
           const lines = activeField.lines || [];
           const tasks = activeField.tasks || [];
+
           rightContent = (
-              <div className="flex-1 flex flex-col h-full">
-                  <div className={`p-6 border-b ${t.divider} flex justify-between items-center`}><h3 className={`text-lg font-bold uppercase ${t.textSub}`}>{activeField.name} OVERVIEW</h3><button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} hover:bg-slate-200 dark:hover:bg-slate-800`}><X className={`w-6 h-6 ${t.textMain}`} /></button></div>
-                  <div className="flex-1 p-8 overflow-y-auto space-y-8">
-                        {/* BOUNDARIES SECTION */}
-                        <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
-                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Boundaries</h4><button onClick={startBoundaryCreation} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> Add Boundary</button></div>
-                            {boundaries.length > 0 ? (
-                                <div className="space-y-2">{boundaries.map((b, i) => (<div key={i} onClick={() => actions.setActiveBoundaryIdx(i)} className={`w-full flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all ${activeBoundaryIdx === i ? t.selectedItem : `${t.borderCard} hover:brightness-95`}`}><div className="flex items-center gap-3"><MapIcon className={`w-5 h-5 ${activeBoundaryIdx === i ? 'text-blue-500' : t.textDim}`} /><span className={t.textMain}>{b.name || `Boundary ${i + 1}`}</span></div><div className="flex items-center gap-2"><button onClick={(e) => { e.stopPropagation(); confirmDelete('boundary', null, i); }} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button>{activeBoundaryIdx === i && <span className="text-xs bg-blue-500 text-white px-2 py-1 rounded">Active</span>}</div></div>))}</div>
-                            ) : (<div className={`text-center py-4 ${t.textDim} border-2 border-dashed border-slate-500/30 rounded-lg`}>No boundaries</div>)}
-                        </div>
-                        {/* LINES SECTION */}
-                        <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
-                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Saved Lines</h4></div>
-                            {lines && lines.length > 0 ? ( <div className="space-y-2">{lines.map((l) => (<div key={l.id} className={`flex items-center justify-between gap-3 p-3 rounded-lg border ${t.borderCard}`}><div className="flex items-center gap-3 min-w-0">{l.type === 'CURVE' ? <Spline className="shrink-0 w-5 h-5 text-purple-500" /> : l.type === 'COMBINATION' ? <AlignJustify className="shrink-0 w-5 h-5 text-purple-500" /> : <GitCommitHorizontal className="shrink-0 w-5 h-5 text-blue-500" />}<span className={`${t.textMain} truncate`}>{l.name}</span></div><div className="shrink-0 flex items-center gap-2"><span className={`text-xs ${t.textSub}`}>{l.date}</span><button onClick={() => confirmDelete('line', l.id)} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button><button onClick={() => handleLoadLine(l)} className={`px-3 py-1 rounded text-xs font-bold ${activeLineId === l.id ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500'}`}>{activeLineId === l.id ? 'Active' : 'Load'}</button></div></div>))}</div>) : (<div className={`text-center py-4 ${t.textDim}`}>No lines saved</div>)}
-                        </div>
-                        {/* TASKS SECTION */}
-                        <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
-                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Tasks History</h4><button onClick={startTaskCreation} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> New Task</button></div>{tasks.length > 0 ? (<div className="space-y-2">{tasks.map(task => (<div key={task.id} className={`flex items-center justify-between gap-3 p-4 rounded-lg border transition-all ${activeTaskId === task.id ? 'border-green-500 bg-green-500/10' : t.borderCard}`}><div className="flex items-center gap-4 min-w-0"><div className="shrink-0 p-2 rounded bg-blue-500/20 text-blue-500">{task.type === 'Planting' ? <Sprout className="w-5 h-5"/> : task.type === 'Spraying' ? <Droplets className="w-5 h-5"/> : <Tractor className="w-5 h-5"/>}</div><div className="min-w-0"><div className={`font-bold ${t.textMain} truncate`}>{task.name}</div><div className={`text-xs ${t.textSub}`}>{task.date} - {task.status}</div></div></div><div className="shrink-0 flex gap-2">{activeTaskId === task.id ? (<><button onClick={() => handleTaskAction(task, 'pause')} className="p-2 bg-orange-500/20 text-orange-500 rounded-lg hover:bg-orange-500/30"><Pause className="w-4 h-4" /></button><button onClick={() => handleTaskAction(task, 'finish')} className="p-2 bg-green-500/20 text-green-500 rounded-lg hover:bg-green-500/30"><CheckSquare className="w-4 h-4" /></button></>) : (task.status !== 'Done' && (<><button onClick={() => handleTaskAction(task, 'start')} className="p-2 bg-blue-500/20 text-blue-500 rounded-lg hover:bg-blue-500/30"><PlayCircle className="w-4 h-4" /></button><button onClick={() => confirmDelete('task', task.id)} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button></>))}</div></div>))}</div>) : (<div className={`text-center py-8 ${t.textDim}`}>No tasks recorded yet.</div>)}</div>
+              <div className="flex-1 min-h-0 flex flex-col">
+                  <div className={`px-5 lg:px-6 py-4 border-b ${t.divider} flex items-center justify-between gap-4 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
+                      <div className="min-w-0">
+                          <div className="flex items-center gap-2 min-w-0">
+                              <h3 className={`text-xl font-black ${t.textMain} truncate`}>{activeField.name}</h3>
+                              {isLoadedActiveField && <span className="shrink-0 px-2 py-1 rounded-md bg-green-500/15 text-green-500 text-[10px] font-black uppercase">Loaded</span>}
+                          </div>
+                          <div className={`mt-1 flex flex-wrap items-center gap-2 text-xs ${t.textSub}`}>
+                              <span>{activeField.area}</span>
+                              <span className={t.textDim}>/</span>
+                              <span>Last used {activeField.lastUsed || '--'}</span>
+                          </div>
+                      </div>
+                      <button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}>
+                          <X className="w-5 h-5" />
+                      </button>
                   </div>
-                  <div className={`p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button onClick={handleDeleteField} className={`px-6 py-3 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 flex items-center gap-2`}><Trash2 className="w-5 h-5" /> Delete</button><button onClick={handleLoadField} className="px-8 py-3 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500 shadow-lg shadow-green-900/20 flex items-center gap-2"><CheckCircle2 className="w-5 h-5" /> Load Field</button></div>
+
+                  <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6">
+                      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
+                          <StatCard icon={MapIcon} label="Area" value={activeField.area || '--'} sub="Saved field" />
+                          <StatCard icon={MapPin} label="Boundaries" value={boundaries.length} sub={activeBoundaryIdx >= 0 && boundaries[activeBoundaryIdx] ? boundaries[activeBoundaryIdx].name || `Boundary ${activeBoundaryIdx + 1}` : 'None'} tone="text-orange-500" />
+                          <StatCard icon={Route} label="Lines" value={lines.length} sub={activeLineId ? 'Guidance loaded' : 'Saved patterns'} tone="text-sky-500" />
+                          <StatCard icon={FileText} label="Tasks" value={tasks.length} sub={activeTaskId ? 'Task running' : 'Job history'} tone="text-green-500" />
+                      </div>
+
+                      <div className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)] gap-5">
+                          <section className="space-y-5 min-w-0">
+                              <MiniFieldPreview field={activeField} />
+
+                              <div className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-4`}>
+                                  <SectionTitle icon={MapPin} title="Boundaries" actionLabel="Add" onAction={startBoundaryCreation} />
+                                  {boundaries.length > 0 ? (
+                                      <div className="space-y-2">
+                                          {boundaries.map((boundary, index) => (
+                                              <div
+                                                  key={`${boundary.name || 'boundary'}-${index}`}
+                                                  role="button"
+                                                  tabIndex={0}
+                                                  onClick={() => actions.setActiveBoundaryIdx(index)}
+                                                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); actions.setActiveBoundaryIdx(index); } }}
+                                                  className={`w-full flex items-center justify-between gap-3 p-3 rounded-lg border text-left transition-all ${activeBoundaryIdx === index ? t.selectedItem : `${t.borderCard} ${mutedPanelBg} hover:brightness-95`}`}
+                                              >
+                                                  <div className="flex items-center gap-3 min-w-0">
+                                                      <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${activeBoundaryIdx === index ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} ${t.textSub}`}`}>
+                                                          <MapPin className="w-4 h-4" />
+                                                      </div>
+                                                      <div className="min-w-0">
+                                                          <div className={`font-bold ${t.textMain} truncate`}>{boundary.name || `Boundary ${index + 1}`}</div>
+                                                          <div className={`text-xs ${t.textSub}`}>{(boundary.points || boundary || []).length} points</div>
+                                                      </div>
+                                                  </div>
+                                                  <div className="shrink-0 flex items-center gap-2">
+                                                      {activeBoundaryIdx === index && <span className="hidden sm:inline px-2 py-1 rounded-md bg-blue-600 text-white text-[10px] font-black uppercase">Active</span>}
+                                                      <button
+                                                          onClick={(e) => { e.stopPropagation(); confirmDelete('boundary', null, index); }}
+                                                          className="p-2 rounded-lg text-red-500 hover:bg-red-500/10"
+                                                      >
+                                                          <Trash2 className="w-4 h-4" />
+                                                      </button>
+                                                  </div>
+                                              </div>
+                                          ))}
+                                      </div>
+                                  ) : (
+                                      <EmptyState label="No boundary saved. Record one to lock field shape." />
+                                  )}
+                              </div>
+                          </section>
+
+                          <section className="space-y-5 min-w-0">
+                              <div className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-4`}>
+                                  <SectionTitle
+                                      icon={Route}
+                                      title="Guidance Lines"
+                                      actionLabel="New"
+                                      onAction={() => {
+                                          setFieldManagerOpen(false);
+                                          setLineModeModalOpen(true);
+                                      }}
+                                  />
+                                  {lines.length > 0 ? (
+                                      <div className="space-y-2">
+                                          {lines.map((line) => {
+                                              const Icon = getLineIcon(line);
+                                              const active = activeLineId === line.id;
+                                              return (
+                                                  <div key={line.id} className={`flex items-center justify-between gap-3 p-3 rounded-lg border ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${mutedPanelBg}`}`}>
+                                                      <div className="flex items-center gap-3 min-w-0">
+                                                          <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-blue-500`}`}>
+                                                              <Icon className="w-4 h-4" />
+                                                          </div>
+                                                          <div className="min-w-0">
+                                                              <div className={`font-bold ${t.textMain} truncate`}>{line.name || 'Guidance line'}</div>
+                                                              <div className={`text-xs ${t.textSub}`}>{(line.type || 'LINE').replaceAll('_', ' ')} / {line.date || '--'}</div>
+                                                          </div>
+                                                      </div>
+                                                      <div className="shrink-0 flex items-center gap-2">
+                                                          <button onClick={() => confirmDelete('line', line.id)} className="p-2 rounded-lg text-red-500 hover:bg-red-500/10">
+                                                              <Trash2 className="w-4 h-4" />
+                                                          </button>
+                                                          <button onClick={() => handleLoadLine(line)} className={`px-3 py-2 rounded-lg text-xs font-black ${active ? 'bg-blue-600 text-white' : `border ${t.borderCard} ${t.textMain} hover:brightness-95`}`}>
+                                                              {active ? 'Active' : 'Load'}
+                                                          </button>
+                                                      </div>
+                                                  </div>
+                                              );
+                                          })}
+                                      </div>
+                                  ) : (
+                                      <EmptyState label="No saved guidance line for this field." />
+                                  )}
+                              </div>
+
+                              <div className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-4`}>
+                                  <SectionTitle icon={FileText} title="Tasks / Jobs" actionLabel="New" onAction={startTaskCreation} />
+                                  {tasks.length > 0 ? (
+                                      <div className="space-y-2">
+                                          {tasks.map((task) => {
+                                              const Icon = getTaskIcon(task);
+                                              const active = activeTaskId === task.id;
+                                              return (
+                                                  <div key={task.id} className={`flex items-center justify-between gap-3 p-3 rounded-lg border ${active ? 'border-green-500 bg-green-500/10' : `${t.borderCard} ${mutedPanelBg}`}`}>
+                                                      <div className="flex items-center gap-3 min-w-0">
+                                                          <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${active ? 'bg-green-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-green-500`}`}>
+                                                              <Icon className="w-4 h-4" />
+                                                          </div>
+                                                          <div className="min-w-0">
+                                                              <div className={`font-bold ${t.textMain} truncate`}>{task.name}</div>
+                                                              <div className={`text-xs ${t.textSub}`}>{task.date} / {task.status}</div>
+                                                          </div>
+                                                      </div>
+                                                      <div className="shrink-0 flex items-center gap-2">
+                                                          {active ? (
+                                                              <>
+                                                                  <button onClick={() => handleTaskAction(task, 'pause')} className="p-2 rounded-lg bg-orange-500/15 text-orange-500 hover:bg-orange-500/25">
+                                                                      <Pause className="w-4 h-4" />
+                                                                  </button>
+                                                                  <button onClick={() => handleTaskAction(task, 'finish')} className="p-2 rounded-lg bg-green-500/15 text-green-500 hover:bg-green-500/25">
+                                                                      <CheckSquare className="w-4 h-4" />
+                                                                  </button>
+                                                              </>
+                                                          ) : (
+                                                              <>
+                                                                  {task.status !== 'Done' && (
+                                                                      <button onClick={() => handleTaskAction(task, 'start')} className="p-2 rounded-lg bg-blue-500/15 text-blue-500 hover:bg-blue-500/25">
+                                                                          <PlayCircle className="w-4 h-4" />
+                                                                      </button>
+                                                                  )}
+                                                                  <button onClick={() => confirmDelete('task', task.id)} className="p-2 rounded-lg text-red-500 hover:bg-red-500/10">
+                                                                      <Trash2 className="w-4 h-4" />
+                                                                  </button>
+                                                              </>
+                                                          )}
+                                                      </div>
+                                                  </div>
+                                              );
+                                          })}
+                                      </div>
+                                  ) : (
+                                      <EmptyState label="No task created yet." />
+                                  )}
+                              </div>
+                          </section>
+                      </div>
+                  </div>
+
+                  <div className={`px-5 lg:px-6 py-4 border-t ${t.divider} flex flex-wrap items-center justify-between gap-3 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
+                      <button onClick={handleDeleteField} className="px-5 py-3 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold flex items-center gap-2">
+                          <Trash2 className="w-5 h-5" />
+                          Delete Field
+                      </button>
+                      <div className="flex flex-wrap items-center gap-3">
+                          <button onClick={() => showNotification('Field sync queued', 'info')} className={`px-5 py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 font-bold flex items-center gap-2`}>
+                              <Globe className="w-5 h-5 text-blue-500" />
+                              Sync
+                          </button>
+                          <button onClick={handleLoadField} className="px-7 py-3 rounded-lg bg-green-600 text-white font-black hover:bg-green-500 shadow-lg shadow-green-900/20 flex items-center gap-2">
+                              <CheckCircle2 className="w-5 h-5" />
+                              {isLoadedActiveField ? 'Reload Field' : 'Load Field'}
+                          </button>
+                      </div>
+                  </div>
               </div>
           );
       } else {
-          rightContent = <div className="flex-1 flex items-center justify-center text-slate-500">Select a field to view details</div>;
+          rightContent = (
+              <div className={`flex-1 flex items-center justify-center ${t.textDim}`}>
+                  Select a field to view details
+              </div>
+          );
       }
 
       return (
-          <div className="flex h-full w-full">
-              <div className={`w-[32%] min-w-[280px] max-w-[380px] border-r ${t.border} ${t.bgPanel} flex flex-col`}>
-                  <div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl font-bold flex items-center gap-3 ${t.textMain}`}><LayoutGrid className="w-6 h-6 text-blue-500" />Field Manager</h2></div>
-                  <div className="p-4"><button onClick={() => { actions.setViewMode('CREATE_FIELD'); actions.setNewFieldName(''); actions.setCurrentFieldBoundaries([]); }} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold flex justify-center gap-2 hover:bg-blue-500"><Plus className="w-5 h-5" /> New Field</button></div>
-                  <div className="flex-1 overflow-y-auto p-4 space-y-2">{fields.map(f => (<button key={f.id} onClick={() => { actions.setSelectedFieldId(f.id); actions.setViewMode('LIST'); }} className={`w-full text-left p-4 rounded-xl border transition-all ${selectedFieldId === f.id ? t.selectedItem : `${t.bgCard} ${t.border} hover:brightness-95`}`}><div className="flex justify-between items-start"><div className="flex gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center ${selectedFieldId === f.id ? 'bg-blue-500 text-white' : 'bg-slate-300 dark:bg-slate-800 text-slate-500'}`}><MapIcon className="w-6 h-6" /></div><div><h4 className={`font-bold ${t.textMain}`}>{f.name}</h4><span className={`text-xs ${t.textSub}`}>{f.area}</span></div></div>{selectedFieldId === f.id && <CheckCircle2 className="w-5 h-5 text-blue-500" />}</div></button>))}</div>
+          <div className="flex h-full w-full min-w-0">
+              <div className={`w-[32%] min-w-[300px] max-w-[390px] border-r ${t.border} ${t.bgPanel} flex flex-col min-h-0`}>
+                  <div className={`p-5 border-b ${t.divider}`}>
+                      <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                              <h2 className={`text-xl font-black flex items-center gap-3 ${t.textMain}`}>
+                                  <FolderOpen className="w-6 h-6 text-blue-500 shrink-0" />
+                                  <span className="truncate">Field Library</span>
+                              </h2>
+                              <div className={`mt-1 text-xs ${t.textSub}`}>{fields.length} saved fields</div>
+                          </div>
+                          <button onClick={() => setFieldManagerOpen(false)} className={`shrink-0 p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 xl:hidden`}>
+                              <X className="w-5 h-5" />
+                          </button>
+                      </div>
+                      <button
+                          onClick={startFieldCreation}
+                          className="mt-4 w-full py-3 bg-blue-600 text-white rounded-xl font-black flex justify-center items-center gap-2 hover:bg-blue-500"
+                      >
+                          <Plus className="w-5 h-5" />
+                          New Field
+                      </button>
+                  </div>
+
+                  <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
+                      {fields.map(f => {
+                          const selected = selectedFieldId === f.id;
+                          const loaded = loadedField?.id === f.id;
+                          const fieldBoundaries = f.boundaries || [];
+                          const fieldLines = f.lines || [];
+                          const fieldTasks = f.tasks || [];
+                          return (
+                              <button
+                                  key={f.id}
+                                  onClick={() => { actions.setSelectedFieldId(f.id); actions.setViewMode('LIST'); }}
+                                  className={`w-full text-left p-4 rounded-xl border transition-all ${selected ? t.selectedItem : `${t.bgCard} ${t.borderCard} hover:brightness-95`}`}
+                              >
+                                  <div className="flex items-start justify-between gap-3">
+                                      <div className="flex items-start gap-3 min-w-0">
+                                          <div className={`shrink-0 w-11 h-11 rounded-xl flex items-center justify-center ${selected ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textSub}`}`}>
+                                              <MapIcon className="w-5 h-5" />
+                                          </div>
+                                          <div className="min-w-0">
+                                              <div className={`font-black ${t.textMain} truncate`}>{f.name}</div>
+                                              <div className={`text-xs ${t.textSub}`}>{f.area || '--'} / {f.lastUsed || '--'}</div>
+                                          </div>
+                                      </div>
+                                      {loaded ? <CheckCircle2 className="shrink-0 w-5 h-5 text-green-500" /> : selected ? <Check className="shrink-0 w-5 h-5 text-blue-500" /> : null}
+                                  </div>
+                                  <div className="mt-4 grid grid-cols-3 gap-2">
+                                      <div className={`rounded-lg ${mutedPanelBg} border ${t.borderCard} px-2 py-2 text-center`}>
+                                          <div className={`text-sm font-black ${t.textMain}`}>{fieldBoundaries.length}</div>
+                                          <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>Bounds</div>
+                                      </div>
+                                      <div className={`rounded-lg ${mutedPanelBg} border ${t.borderCard} px-2 py-2 text-center`}>
+                                          <div className={`text-sm font-black ${t.textMain}`}>{fieldLines.length}</div>
+                                          <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>Lines</div>
+                                      </div>
+                                      <div className={`rounded-lg ${mutedPanelBg} border ${t.borderCard} px-2 py-2 text-center`}>
+                                          <div className={`text-sm font-black ${t.textMain}`}>{fieldTasks.length}</div>
+                                          <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>Tasks</div>
+                                      </div>
+                                  </div>
+                              </button>
+                          );
+                      })}
+                  </div>
               </div>
-              <div className={`flex-1 min-w-0 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>{rightContent}</div>
+              <div className={`flex-1 min-w-0 flex flex-col ${panelBg}`}>{rightContent}</div>
           </div>
       );
   };
