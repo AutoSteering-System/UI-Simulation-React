@@ -3138,12 +3138,7 @@ const renderLinesPanel = () => {
                 {fieldManagerOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}>{renderFieldManager()}</div>}
 
                 {linesPanelOpen && (
-                    <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}>
-                        <div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col p-6`}>
-                           <h3 className={`text-xl font-bold ${t.textMain} mb-4`}>Guidance Lines</h3>
-                           <p className={`${t.textSub} text-sm mb-6`}>Manage guidance lines for the current field.</p>
-                           <button onClick={() => setLinesPanelOpen(false)} className={`w-full py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}>Close Panel</button>
-                        </div>
+                    <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 overflow-hidden`}>
                         {renderLinesPanel()}
                     </div>
                 )}
