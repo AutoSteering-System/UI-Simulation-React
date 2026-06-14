@@ -4,7 +4,7 @@ const makeIconComponent = (name) => ({ className, ...rest }) => (
   <Icon name={name} className={className} {...rest} />
 );
 
-// --- Dưới đây giữ nguyên danh sách icon cũ ---
+// --- Legacy icon list ---
 const MapIcon = makeIconComponent('map');
 const LayoutGrid = makeIconComponent('layout-grid');
 const Settings = makeIconComponent('settings');

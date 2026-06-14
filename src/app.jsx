@@ -1,4 +1,4 @@
-﻿const { useState, useEffect, useRef } = React;
+const { useState, useEffect, useRef } = React;
 
 const App = () => {
   const { state, actions } = window.MockBackend.useStore();
@@ -37,17 +37,19 @@ const App = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [rtkStatus, setRtkStatus] = useState('FIX');
   const [crossTrackError, setCrossTrackError] = useState(0.0);
-  
+
   // ACTION DOCK STATES
-  const [isCreating, setIsCreating] = useState(false); 
-  const [dockMenuOpen, setDockMenuOpen] = useState(false); 
+  const [isCreating, setIsCreating] = useState(false);
+  const [dockMenuOpen, setDockMenuOpen] = useState(false);
 
   // Driving & Physics
   const [speed, setSpeed] = useState(0);
   const [manualTargetSpeed, setManualTargetSpeed] = useState(0);
-  const [steeringAngle, setSteeringAngle] = useState(0); 
-  const [worldPos, setWorldPos] = useState({ x: 0, y: 0 }); 
+  const [steeringAngle, setSteeringAngle] = useState(0);
+  const [worldPos, setWorldPos] = useState({ x: 0, y: 0 });
   const [heading, setHeading] = useState(0);
+  const [mapVisualHeading, setMapVisualHeading] = useState(0);
+  const [viewTransitioning, setViewTransitioning] = useState(false);
   const [workedArea, setWorkedArea] = useState(0.0);
 
   // Physics Ref
@@ -60,44 +62,82 @@ const App = () => {
       y: 0,
       lastTime: 0
   });
-  
+
   // UI States
-  const [menuOpen, setMenuOpen] = useState(false); 
-  const [settingsOpen, setSettingsOpen] = useState(false); 
-  const [fieldManagerOpen, setFieldManagerOpen] = useState(false); 
-  const [linesPanelOpen, setLinesPanelOpen] = useState(false); 
-  const [lineModeModalOpen, setLineModeModalOpen] = useState(false); 
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [fieldManagerOpen, setFieldManagerOpen] = useState(false);
+  const [linesPanelOpen, setLinesPanelOpen] = useState(false);
+  const [lineModeModalOpen, setLineModeModalOpen] = useState(false);
   const [lineNameModalOpen, setLineNameModalOpen] = useState(false);
   const [manualHeadingModalOpen, setManualHeadingModalOpen] = useState(false);
   const [rtkAdvancedOpen, setRtkAdvancedOpen] = useState(false);
   const [gnssTab, setGnssTab] = useState('GNSS');
-  
+
   // Boundary States
   const [boundaryNameModalOpen, setBoundaryNameModalOpen] = useState(false);
   const [tempBoundaryName, setTempBoundaryName] = useState('');
-  const [boundaryAlertOpen, setBoundaryAlertOpen] = useState(false); 
-  const [boundaryAlertType, setBoundaryAlertType] = useState(null); 
-  const [previewBoundary, setPreviewBoundary] = useState(null); 
+  const [boundaryAlertOpen, setBoundaryAlertOpen] = useState(false);
+  const [boundaryAlertType, setBoundaryAlertType] = useState(null);
+  const [previewBoundary, setPreviewBoundary] = useState(null);
 
   // Delete Confirm Modal
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
-  const [itemToDelete, setItemToDelete] = useState(null); 
+  const [itemToDelete, setItemToDelete] = useState(null);
 
   const [tempLineName, setTempLineName] = useState('');
-  const [tempManualHeading, setTempManualHeading] = useState('0.0'); 
-  const [settingsTab, setSettingsTab] = useState('overview'); 
+  const [tempManualHeading, setTempManualHeading] = useState('0.0');
+  const [settingsTab, setSettingsTab] = useState('overview');
 
   // NEW: Locked Lane Index for Auto Steer
   const activeLaneRef = useRef(null);
 
+  const [featureSettings, setFeatureSettings] = useState({
+      terrainCompensation: true,
+      electricPowerSteering: true,
+      easySwitch: true,
+      manualIntervention: true,
+      isobusUT: true,
+      sectionControl: true,
+      variableRate: false,
+      obd: true,
+      wiredCamera: true,
+      wirelessCamera: false,
+      acreRecording: true,
+      liftSensor: true,
+      autoUTurn: true,
+      headlandTurn: true,
+      canbusSteerReady: true,
+      pwmSteerReady: false,
+      mobaTrac: false,
+      landLeveling: false,
+      dataTransfer: true
+  });
+  const [cameraPanelOpen, setCameraPanelOpen] = useState(false);
+  const [diagnosticsPanelOpen, setDiagnosticsPanelOpen] = useState(false);
+  const [isCombinationPaused, setIsCombinationPaused] = useState(false);
+
   const [satelliteCount, setSatelliteCount] = useState(12);
   const [notification, setNotification] = useState(null);
-  const [zoomLevel, setZoomLevel] = useState(0.6); 
-  const [theme, setTheme] = useState('light'); 
+  const [zoomLevel, setZoomLevel] = useState(0.6);
+  const [sceneViewMode, setSceneViewMode] = useState(() => {
+      const params = new URLSearchParams(window.location.search);
+      const mode = params.get('view') || params.get('vehicle') || params.get('mapView');
+      return mode === '2D' ? '2D' : '3D';
+  });
+  const mapOrientation = 'HEADING_UP';
+  const [theme, setTheme] = useState(() => {
+      const mode = new URLSearchParams(window.location.search).get('theme') || localStorage.getItem('autosteer-theme');
+      return mode === 'dark' ? 'dark' : 'light';
+  });
   const [isDraggingMap, setIsDraggingMap] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const keysPressed = useRef({});
+  const crossTrackErrorRef = useRef(0);
+  const mapVisualHeadingRef = useRef(0);
+  const turnAssistRef = useRef(null);
+  const [turnAssistActive, setTurnAssistActive] = useState(false);
   const [currentTime, setCurrentTime] = useState('');
 
   // Store refs to guidance data for physics loop
@@ -113,15 +153,15 @@ const App = () => {
   useEffect(() => {
     // Find active line object to get its specific properties
     const activeField = fields.find(f => f.id === selectedFieldId);
-    
+
     guidanceRef.current = {
         type: guidanceLine,
-        isMulti: isMultiLineMode, 
+        isMulti: isMultiLineMode,
         width: implementSettings.width * PIXELS_PER_METER,
         manualOffset: manualOffset,
-        points: { 
-            a: pointA, 
-            b: pointB, 
+        points: {
+            a: pointA,
+            b: pointB,
             aplus: { point: aPlusPoint, heading: aPlusHeading },
             curve: curvePoints,
             pivot: { center: pivotCenter, radius: pivotRadius }
@@ -145,16 +185,16 @@ const App = () => {
     divider: 'bg-slate-800',
     activeItem: 'bg-slate-800',
     selectedItem: 'bg-blue-900/30 border-blue-500/50',
-    gridColor1: '#475569', 
+    gridColor1: '#475569',
     deviceFrame: 'bg-slate-950 border-slate-800'
   } : {
-    bgMain: 'bg-gray-100', 
+    bgMain: 'bg-gray-100',
     bgPanel: 'bg-white',
     bgHeader: 'bg-white/90',
     bgBottom: 'bg-white/95',
     bgCard: 'bg-white/95',
     bgInput: 'bg-gray-100',
-    textMain: 'text-slate-900', 
+    textMain: 'text-slate-900',
     textSub: 'text-slate-500',
     textDim: 'text-slate-400',
     border: 'border-gray-300',
@@ -162,7 +202,7 @@ const App = () => {
     divider: 'bg-gray-200',
     activeItem: 'bg-gray-100',
     selectedItem: 'bg-blue-50 border-blue-300',
-    gridColor1: '#94a3b8', 
+    gridColor1: '#94a3b8',
     deviceFrame: 'bg-white border-gray-300'
   };
 
@@ -172,7 +212,7 @@ const App = () => {
       if (isNaN(val)) return '--';
       val = val % 360;
       if (val < 0) val += 360;
-      
+
       if (val >= 337.5 || val < 22.5) return 'North';
       if (val >= 22.5 && val < 67.5) return 'Northeast (NE)';
       if (val >= 67.5 && val < 112.5) return 'East';
@@ -182,6 +222,171 @@ const App = () => {
       if (val >= 247.5 && val < 292.5) return 'West';
       if (val >= 292.5 && val < 337.5) return 'Northwest (NW)';
       return '';
+  };
+
+  const getCardinalShortDirection = (angle) => {
+      let val = parseFloat(angle);
+      if (isNaN(val)) return '--';
+      val = val % 360;
+      if (val < 0) val += 360;
+
+      if (val >= 337.5 || val < 22.5) return 'N';
+      if (val >= 22.5 && val < 67.5) return 'NE';
+      if (val >= 67.5 && val < 112.5) return 'E';
+      if (val >= 112.5 && val < 157.5) return 'SE';
+      if (val >= 157.5 && val < 202.5) return 'S';
+      if (val >= 202.5 && val < 247.5) return 'SW';
+      if (val >= 247.5 && val < 292.5) return 'W';
+      if (val >= 292.5 && val < 337.5) return 'NW';
+      return '--';
+  };
+
+  const getHeadingDelta = (target, current) => {
+      let diff = ((target - current + 540) % 360) - 180;
+      if (diff < -180) diff += 360;
+      return diff;
+  };
+
+  const normalizeHeadingValue = (value) => {
+      const normalized = value % 360;
+      return normalized < 0 ? normalized + 360 : normalized;
+  };
+
+  const getGuidanceMetrics = (guide, p) => {
+      if (!guide || !guide.type || !guide.points || !p) {
+          return { validLine: false, xte: 0, lineHeading: 0 };
+      }
+
+      if (guide.type === 'STRAIGHT_AB' && guide.points.a && guide.points.b) {
+          const ax = guide.points.a.x; const ay = guide.points.a.y;
+          const bx = guide.points.b.x; const by = guide.points.b.y;
+          const dx = bx - ax; const dy = by - ay;
+          const len = Math.hypot(dx, dy);
+          if (len <= 0.001) return { validLine: false, xte: 0, lineHeading: 0 };
+          return {
+              validLine: true,
+              xte: ((bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax)) / len,
+              lineHeading: Math.atan2(dx, -dy) * 180 / Math.PI
+          };
+      }
+
+      if (guide.type === 'A_PLUS' && guide.points.aplus && guide.points.aplus.point && guide.points.aplus.heading != null) {
+          const ax = guide.points.aplus.point.x;
+          const ay = guide.points.aplus.point.y;
+          const h = guide.points.aplus.heading;
+          const rad = h * Math.PI / 180;
+          const ux = Math.sin(rad);
+          const uy = -Math.cos(rad);
+          const vax = p.x - ax; const vay = p.y - ay;
+          return {
+              validLine: true,
+              xte: vax * (-uy) + vay * (ux),
+              lineHeading: h
+          };
+      }
+
+      if (guide.type === 'PIVOT' && guide.points.pivot && guide.points.pivot.center && guide.points.pivot.radius) {
+          const cx = guide.points.pivot.center.x;
+          const cy = guide.points.pivot.center.y;
+          const baseR = guide.points.pivot.radius;
+          const dist = Math.hypot(p.x - cx, p.y - cy);
+          const angleToCenter = Math.atan2(p.y - cy, p.x - cx);
+          const vehicleAngle = (p.heading || 0) * Math.PI / 180;
+          const tan1 = angleToCenter + Math.PI / 2;
+          const tan2 = angleToCenter - Math.PI / 2;
+          const normAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+          const diff1 = Math.abs(normAngle(tan1 - vehicleAngle));
+          const diff2 = Math.abs(normAngle(tan2 - vehicleAngle));
+          return {
+              validLine: true,
+              xte: dist - baseR,
+              lineHeading: (diff1 < diff2 ? tan1 : tan2) * 180 / Math.PI
+          };
+      }
+
+      if ((guide.type === 'CURVE' || guide.type === 'COMBINATION') && guide.points.curve && guide.points.curve.length > 1) {
+          let minDist = Infinity;
+          let bestSeg = null;
+
+          for (let i = 0; i < guide.points.curve.length - 1; i++) {
+              const p1 = guide.points.curve[i];
+              const p2 = guide.points.curve[i + 1];
+              const len = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+              if (len <= 0.001) continue;
+              const info = pointToSegmentDistance(p.x, p.y, p1.x, p1.y, p2.x, p2.y);
+              if (info.distance < minDist) {
+                  minDist = info.distance;
+                  bestSeg = { p1, p2, cross: info.cross, len };
+              }
+          }
+
+          if (!bestSeg) return { validLine: false, xte: 0, lineHeading: 0 };
+          const dx = bestSeg.p2.x - bestSeg.p1.x;
+          const dy = bestSeg.p2.y - bestSeg.p1.y;
+          return {
+              validLine: true,
+              xte: bestSeg.cross / bestSeg.len,
+              lineHeading: Math.atan2(dx, -dy) * 180 / Math.PI
+          };
+      }
+
+      return { validLine: false, xte: 0, lineHeading: 0 };
+  };
+
+  const getTargetRelativeXte = (rawXte, guide) => {
+      const offset = Number(guide.manualOffset) || 0;
+      if (guide.isMulti && guide.width > 0) {
+          const targetLaneIndex = activeLaneRef.current !== null ? activeLaneRef.current : Math.round(rawXte / guide.width);
+          return rawXte - (targetLaneIndex * guide.width) - offset;
+      }
+      return rawXte - offset;
+  };
+
+  const setGuidanceErrorFromPixels = (xtePixels) => {
+      const nextCm = Math.round((xtePixels / PIXELS_PER_METER) * 1000) / 10;
+      if (Math.abs(nextCm - crossTrackErrorRef.current) < 0.2) return;
+      crossTrackErrorRef.current = nextCm;
+      setCrossTrackError(nextCm);
+  };
+
+  const getXteDirection = () => {
+      if (Math.abs(crossTrackError) < 1) return 'CENTER';
+      return crossTrackError < 0 ? 'LEFT' : 'RIGHT';
+  };
+
+  const getXteTone = () => {
+      const abs = Math.abs(crossTrackError);
+      if (abs >= 10) return 'bg-red-500/10 border-red-500 text-red-600';
+      if (abs >= 4) return 'bg-yellow-500/10 border-yellow-500 text-yellow-700';
+      return theme === 'dark' ? 'bg-slate-900/60 border-slate-700 text-white' : 'bg-white/70 border-gray-300 text-slate-900';
+  };
+
+  const getLineLengthMeters = (line) => {
+      if (Number.isFinite(line?.length)) return line.length;
+
+      const points = line?.points || {};
+      if (points.a && points.b) {
+          return Math.hypot(points.b.x - points.a.x, points.b.y - points.a.y) / PIXELS_PER_METER;
+      }
+
+      const curve = points.curve || [];
+      if (curve.length > 1) {
+          let total = 0;
+          for (let i = 0; i < curve.length - 1; i++) {
+              total += Math.hypot(curve[i + 1].x - curve[i].x, curve[i + 1].y - curve[i].y);
+          }
+          return total / PIXELS_PER_METER;
+      }
+
+      if (points.pivot?.radius) return (2 * Math.PI * points.pivot.radius) / PIXELS_PER_METER;
+      return null;
+  };
+
+  const formatLineDate = (line) => {
+      const raw = line?.createdAt || line?.date;
+      if (!raw) return 'Not saved';
+      const parsed = new Date(raw);
+      return Number.isNaN(parsed.getTime()) ? raw : parsed.toLocaleDateString();
   };
 
   // --- 1. CLOCK ---
@@ -195,18 +400,26 @@ const App = () => {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+      localStorage.setItem('autosteer-theme', theme);
+  }, [theme]);
+
   // --- 2. INPUT ---
   useEffect(() => {
     const handleKeyDown = (e) => {
-        if (menuOpen || settingsOpen || (fieldManagerOpen && !isRecordingBoundary) || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || linesPanelOpen || manualHeadingModalOpen || boundaryAlertOpen || deleteModalOpen) return; 
+        if (menuOpen || settingsOpen || cameraPanelOpen || diagnosticsPanelOpen || (fieldManagerOpen && !isRecordingBoundary) || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || linesPanelOpen || manualHeadingModalOpen || boundaryAlertOpen || deleteModalOpen) return;
         if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].indexOf(e.key) > -1) e.preventDefault();
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            turnAssistRef.current = null;
+            setTurnAssistActive(false);
+        }
         keysPressed.current[e.key] = true;
     };
     const handleKeyUp = (e) => { keysPressed.current[e.key] = false; };
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
-  }, [menuOpen, settingsOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen]);
+  }, [menuOpen, settingsOpen, cameraPanelOpen, diagnosticsPanelOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen]);
 
   // --- 3. PHYSICS ---
   useEffect(() => {
@@ -214,13 +427,13 @@ const App = () => {
 
     const loop = (time) => {
         if (!physics.current.lastTime) physics.current.lastTime = time;
-        const dt = Math.min((time - physics.current.lastTime) / 1000, 0.1); 
+        const dt = Math.min((time - physics.current.lastTime) / 1000, 0.1);
         physics.current.lastTime = time;
 
-        const p = physics.current; 
+        const p = physics.current;
 
         // --- SPEED CONTROL (Available in BOTH Manual and Auto) ---
-        if (keysPressed.current['ArrowUp']) p.targetSpeed = Math.min(p.targetSpeed + 10 * dt, 15); 
+        if (keysPressed.current['ArrowUp']) p.targetSpeed = Math.min(p.targetSpeed + 10 * dt, 15);
         else if (keysPressed.current['ArrowDown']) p.targetSpeed = Math.max(p.targetSpeed - 15 * dt, -5);
 
         // --- AUTO STEERING LOGIC ---
@@ -228,133 +441,55 @@ const App = () => {
              // REMOVED FORCED SPEED LOGIC
 
              const guide = guidanceRef.current;
-             let xte = 0;
-             let lineHeading = 0;
-             let validLine = false;
+             const metrics = getGuidanceMetrics(guide, p);
 
-             if (guide.type === 'STRAIGHT_AB' && guide.points.a && guide.points.b) {
-                const ax = guide.points.a.x; const ay = guide.points.a.y;
-                const bx = guide.points.b.x; const by = guide.points.b.y;
-                const dx = bx - ax; const dy = by - ay;
-                const len = Math.hypot(dx, dy);
-                
-                const crossProduct = (bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax);
-                xte = crossProduct / len;
-                lineHeading = Math.atan2(dx, -dy) * 180 / Math.PI;
-                validLine = true;
-             } 
-             else if (guide.type === 'A_PLUS' && guide.points.aplus && guide.points.aplus.point && guide.points.aplus.heading != null) {
-                 const ax = guide.points.aplus.point.x;
-                 const ay = guide.points.aplus.point.y;
-                 const h = guide.points.aplus.heading;
-                 
-                 const rad = h * Math.PI / 180;
-                 const ux = Math.sin(rad);
-                 const uy = -Math.cos(rad); 
-                 
-                 const vax = p.x - ax; const vay = p.y - ay;
-                 xte = vax * (-uy) + vay * (ux);
-                 lineHeading = h;
-                 validLine = true;
-             }
-             else if (guide.type === 'PIVOT' && guide.points.pivot && guide.points.pivot.center && guide.points.pivot.radius) {
-                 const cx = guide.points.pivot.center.x;
-                 const cy = guide.points.pivot.center.y;
-                 const baseR = guide.points.pivot.radius;
-                 const dist = Math.hypot(p.x - cx, p.y - cy);
-                 xte = dist - baseR; // Raw XTE from center
-                 
-                 // Calculate Heading (Tangent)
-                 const angleToCenter = Math.atan2(p.y - cy, p.x - cx);
-                 // Assuming clockwise/counter-clockwise logic based on current heading
-                 const vehicleAngle = p.heading * Math.PI / 180;
-                 // Tangent is +/- 90 degrees from radial vector
-                 let tan1 = angleToCenter + Math.PI/2;
-                 let tan2 = angleToCenter - Math.PI/2;
-                 
-                 // Normalize angles
-                 const normAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-                 const diff1 = Math.abs(normAngle(tan1 - vehicleAngle));
-                 const diff2 = Math.abs(normAngle(tan2 - vehicleAngle));
-                 
-                 // Pick closer tangent
-                 lineHeading = (diff1 < diff2 ? tan1 : tan2) * 180 / Math.PI;
-                 validLine = true;
-             }
-             else if (guide.type === 'CURVE' && guide.points.curve && guide.points.curve.length > 1) {
-                 // Basic curve following: Find closest segment
-                 let minDist = Infinity;
-                 let bestSeg = null;
-                 
-                 for(let i=0; i<guide.points.curve.length-1; i++) {
-                     const p1 = guide.points.curve[i];
-                     const p2 = guide.points.curve[i+1];
-                     const info = pointToSegmentDistance(p.x, p.y, p1.x, p1.y, p2.x, p2.y);
-                     if (info.distance < minDist) {
-                         minDist = info.distance;
-                         bestSeg = { p1, p2, cross: info.cross };
-                     }
-                 }
-                 
-                 if (bestSeg) {
-                     // Determine side (cross product)
-                     const len = Math.hypot(bestSeg.p2.x - bestSeg.p1.x, bestSeg.p2.y - bestSeg.p1.y);
-                     xte = bestSeg.cross / len; // Distance to Base Curve
-                     
-                     const dx = bestSeg.p2.x - bestSeg.p1.x;
-                     const dy = bestSeg.p2.y - bestSeg.p1.y;
-                     lineHeading = Math.atan2(dx, -dy) * 180 / Math.PI;
-                     validLine = true;
-                 }
-             }
-
-             if (validLine) {
-                 // MULTI-LINE OFFSET LOGIC & LANE LOCKING
-                 // Applies to ALL line types now including Curve/Pivot
-                 if (guide.isMulti && guide.width > 0) {
-                     let targetLaneIndex = 0;
-                     
-                     if (activeLaneRef.current !== null) {
-                         // Use LOCKED LANE (The lane we were closest to when engaging auto)
-                         targetLaneIndex = activeLaneRef.current;
-                     } else {
-                         // Fallback dynamic calculation (e.g. initial frame before lock set)
-                         targetLaneIndex = Math.round(xte / guide.width);
-                     }
-                     
-                     // XTE is now relative to the LOCKED lane center
-                     xte = xte - (targetLaneIndex * guide.width);
-                     
-                 } else {
-                     // SINGLE LINE MODE: Subtract manualOffset (Snap to vehicle when toggled)
-                     xte = xte - guide.manualOffset;
-                 }
+             if (metrics.validLine) {
+                 let xte = getTargetRelativeXte(metrics.xte, guide);
+                 const lineHeading = metrics.lineHeading;
+                 setGuidanceErrorFromPixels(xte);
 
                  let headingErr = normalizeAngle(lineHeading - p.heading);
-                 
+
                  if (Math.abs(headingErr) > 90) {
                      const reverseHeading = normalizeAngle(lineHeading + 180);
                      headingErr = normalizeAngle(reverseHeading - p.heading);
-                     xte = -xte; 
+                     xte = -xte;
                  }
-                 
-                 const kP_xte = 0.5; 
-                 const kP_head = 1.0; 
+
+                 const kP_xte = 0.5;
+                 const kP_head = 1.0;
                  let steerCmd = headingErr * kP_head - xte * kP_xte;
-                 
+
                  if (steerCmd > 40) steerCmd = 40;
                  if (steerCmd < -40) steerCmd = -40;
                  p.steeringAngle = steerCmd;
+             } else {
+                 setGuidanceErrorFromPixels(0);
              }
-             
+
         } else {
              // MANUAL STEERING LOGIC
-            const steerSpeed = 25;
-            if (keysPressed.current['ArrowLeft']) p.steeringAngle = Math.max(p.steeringAngle - steerSpeed * dt, -45);
+            const turnInputActive = keysPressed.current['ArrowLeft'] || keysPressed.current['ArrowRight'];
+            const steerSpeed = isMap3D ? (turnInputActive ? 90 : 72) : 38;
+            const activeTurnAssist = turnAssistRef.current;
+            if (activeTurnAssist) {
+                const remaining = Math.abs(getHeadingDelta(activeTurnAssist.targetHeading, p.heading));
+                if (remaining <= 3) {
+                    turnAssistRef.current = null;
+                    setTurnAssistActive(false);
+                    p.steeringAngle = 0;
+                } else {
+                    const assistSteer = remaining < 18 ? 26 : 42;
+                    const assistTargetSpeed = remaining < 18 ? 4.5 : 5.5;
+                    p.steeringAngle = Math.max(-45, Math.min(45, activeTurnAssist.direction * assistSteer));
+                    p.targetSpeed = p.targetSpeed < 0 ? -assistTargetSpeed : assistTargetSpeed;
+                }
+            } else if (keysPressed.current['ArrowLeft']) p.steeringAngle = Math.max(p.steeringAngle - steerSpeed * dt, -45);
             else if (keysPressed.current['ArrowRight']) p.steeringAngle = Math.min(p.steeringAngle + steerSpeed * dt, 45);
             else {
-                if (p.steeringAngle > 0) p.steeringAngle = Math.max(0, p.steeringAngle - 20 * dt);
-                else if (p.steeringAngle < 0) p.steeringAngle = Math.min(0, p.steeringAngle + 20 * dt);
+                const steeringReturnSpeed = isMap3D ? 46 : 28;
+                if (p.steeringAngle > 0) p.steeringAngle = Math.max(0, p.steeringAngle - steeringReturnSpeed * dt);
+                else if (p.steeringAngle < 0) p.steeringAngle = Math.min(0, p.steeringAngle + steeringReturnSpeed * dt);
             }
 
             // NEW: Snap Line to Vehicle in Single Mode (Manual Driving)
@@ -401,9 +536,17 @@ const App = () => {
                      }
                      currentSnapOffset = bestCross;
                 }
-                
+
                 // Update state
                 actions.setManualOffset(currentSnapOffset);
+            }
+
+            const guideForTelemetry = guidanceRef.current;
+            const telemetry = getGuidanceMetrics(guideForTelemetry, p);
+            if (telemetry.validLine) {
+                setGuidanceErrorFromPixels(getTargetRelativeXte(telemetry.xte, guideForTelemetry));
+            } else {
+                setGuidanceErrorFromPixels(0);
             }
         }
 
@@ -415,24 +558,39 @@ const App = () => {
         }
 
         if (Math.abs(p.speed) > 0.1) {
-            const turnRate = p.steeringAngle * 0.15 * (p.speed / 10) * dt; 
-            p.heading += turnRate * 20; 
-            
+            const steerRad = p.steeringAngle * Math.PI / 180;
+            const wheelbase = Math.max(1.2, vehicleSettings?.wheelbase || 2.5);
+            const speedMs = p.speed / 3.6;
+            const turnRateDeg = (speedMs / wheelbase) * Math.tan(steerRad) * 180 / Math.PI;
+            p.heading += turnRateDeg * dt;
             p.heading = (p.heading % 360 + 360) % 360;
 
-            const rad = p.heading * Math.PI / 180;
-            const pxPerSec = Math.abs(p.speed) * 15; 
+            const headingRad = p.heading * Math.PI / 180;
+            const pxPerSec = p.speed * 15;
             const moveDist = pxPerSec * dt;
-            const dir = p.speed > 0 ? 1 : -1;
-            p.x += Math.sin(rad) * moveDist * dir;
-            p.y -= Math.cos(rad) * moveDist * dir;
+            p.x += Math.sin(headingRad) * moveDist;
+            p.y -= Math.cos(headingRad) * moveDist;
         }
 
         setSpeed(p.speed);
         setSteeringAngle(p.steeringAngle);
         setHeading(p.heading);
         setWorldPos({ x: p.x, y: p.y });
-        
+
+        const visualHeading = mapVisualHeadingRef.current;
+        const visualDiff = getHeadingDelta(p.heading, visualHeading);
+        const hasManualTurnInput = steeringMode === 'MANUAL' && (
+            keysPressed.current['ArrowLeft'] ||
+            keysPressed.current['ArrowRight'] ||
+            Math.abs(p.steeringAngle) > 1
+        );
+        const maxVisualStep = (isMap3D ? 220 : (Math.abs(p.speed) > 0.1 ? 38 : 120)) * dt;
+        const nextVisualHeading = normalizeHeadingValue(
+            visualHeading + Math.max(-maxVisualStep, Math.min(maxVisualStep, visualDiff))
+        );
+        mapVisualHeadingRef.current = nextVisualHeading;
+        setMapVisualHeading(nextVisualHeading);
+
         if (setManualTargetSpeed) {
              setManualTargetSpeed(prev => Math.abs(prev - p.targetSpeed) > 0.5 ? Math.round(p.targetSpeed) : prev);
         }
@@ -442,7 +600,7 @@ const App = () => {
 
     animationFrameId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [steeringMode, setManualTargetSpeed]); 
+  }, [steeringMode, setManualTargetSpeed, vehicleSettings?.wheelbase, isMap3D]);
 
   // --- 4. RECORDING ---
   useEffect(() => {
@@ -450,8 +608,8 @@ const App = () => {
       if (isRecording && Math.abs(speed) > 0.1) {
           intervalId = setInterval(() => {
               const speedMs = Math.abs(speed) / 3.6;
-              const width = 3.0; 
-              const dt = 0.05; 
+              const width = 3.0;
+              const dt = 0.05;
               const areaM2 = speedMs * width * dt;
               const areaHa = areaM2 / 10000;
               setWorkedArea(prev => prev + areaHa);
@@ -477,42 +635,24 @@ const App = () => {
 
 
   // --- 5. LOGIC & HANDLERS ---
-  
+
   // NEW: Handler for Toggling Multi-Line Mode to calculate Offset
   const handleToggleMultiLine = () => {
       const nextMode = !isMultiLineMode;
       actions.setIsMultiLineMode(nextMode);
-      
+
       if (!nextMode) {
           // Switching TO Single Mode -> Snap to current vehicle position (calculate offset)
           // Using current state from physics refs or state is tricky, but worldPos is updated
           // We recalculate XTE here.
-          
+
           let calculatedOffset = 0;
           const guide = guidanceRef.current;
-          const p = worldPos; 
-          
-          if (guide && guide.points) {
-              if (guide.type === 'STRAIGHT_AB' && guide.points.a && guide.points.b) {
-                  const ax = guide.points.a.x; const ay = guide.points.a.y;
-                  const bx = guide.points.b.x; const by = guide.points.b.y;
-                  const dx = bx - ax; const dy = by - ay;
-                  const len = Math.hypot(dx, dy);
-                  if (len > 0) {
-                      calculatedOffset = ((bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax)) / len;
-                  }
-              } else if (guide.type === 'A_PLUS' && guide.points.aplus && guide.points.aplus.point && guide.points.aplus.heading != null) {
-                  const ax = guide.points.aplus.point.x;
-                  const ay = guide.points.aplus.point.y;
-                  const h = guide.points.aplus.heading;
-                  const rad = h * Math.PI / 180;
-                  const ux = Math.sin(rad);
-                  const uy = -Math.cos(rad);
-                  const vax = p.x - ax; const vay = p.y - ay;
-                  calculatedOffset = vax * (-uy) + vay * (ux);
-              }
-          }
-          
+          const p = worldPos;
+
+          const snapMetrics = getGuidanceMetrics(guide, { ...p, heading });
+          if (snapMetrics.validLine) calculatedOffset = snapMetrics.xte;
+
           actions.setManualOffset(calculatedOffset);
           showNotification("Single Line: Snapped to Vehicle", "info");
       } else {
@@ -523,131 +663,143 @@ const App = () => {
 
   const toggleSteering = () => {
     if (!guidanceLine && steeringMode === 'MANUAL') return showNotification("Set Line first!", "warning");
-    
+
     // Toggle Mode
     const newMode = steeringMode === 'MANUAL' ? 'AUTO' : 'MANUAL';
-    
+
+    if (newMode === 'AUTO' && rtkStatus !== 'FIX') {
+        return showNotification("RTK FIX required before auto steer", "warning");
+    }
+
     if (newMode === 'AUTO') {
         // --- 1. AUTO ENGAGED Logic ---
-        
+
         // 1a. Lock the Lane (Calculate lane index closest to vehicle NOW)
         const guide = guidanceRef.current;
         if (guide && guide.type && guide.isMulti && guide.width > 0) {
-             const p = worldPos;
-             let rawXte = 0;
-             
-             // Calculate RAW XTE (Distance from main AB line)
-             if (guide.type === 'STRAIGHT_AB' && guide.points.a && guide.points.b) {
-                const ax = guide.points.a.x; const ay = guide.points.a.y;
-                const bx = guide.points.b.x; const by = guide.points.b.y;
-                const dx = bx - ax; const dy = by - ay;
-                const len = Math.hypot(dx, dy);
-                if (len > 0) {
-                    rawXte = ((bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax)) / len;
-                }
-             } else if (guide.type === 'A_PLUS' && guide.points.aplus && guide.points.aplus.point) {
-                 const ax = guide.points.aplus.point.x;
-                 const ay = guide.points.aplus.point.y;
-                 const h = guide.points.aplus.heading;
-                 const rad = h * Math.PI / 180;
-                 const ux = Math.sin(rad);
-                 const uy = -Math.cos(rad); 
-                 const vax = p.x - ax; const vay = p.y - ay;
-                 rawXte = vax * (-uy) + vay * (ux);
-             } else if (guide.type === 'PIVOT' && guide.points.pivot && guide.points.pivot.center) {
-                 const cx = guide.points.pivot.center.x;
-                 const cy = guide.points.pivot.center.y;
-                 const r = guide.points.pivot.radius;
-                 const dist = Math.hypot(p.x - cx, p.y - cy);
-                 rawXte = dist - r;
-             } else if (guide.type === 'CURVE' && guide.points.curve) {
-                 // Simplified locking for Curve: Assume 0 for now as 'closest segment' logic is heavy
-                 // In a real app, you'd run the pointToSegment logic here
-                 // For now, let's assume rawXte is roughly 0 relative to "some" curve, 
-                 // effectively locking to nearest parallel curve if we implemented full XTE check
-                 // Here we will just let the loop find the nearest curve lane
-                 
-                 // Reuse XTE logic from loop? No, loop runs every frame.
-                 // We duplicate logic briefly or trust the loop to set it on first frame
-                 // To force a lock, we really need the distance calculation here.
-                 // COPY-PASTE logic from Loop for simple robustness:
-                 let minDist = Infinity;
-                 let bestCross = 0;
-                 for(let i=0; i<guide.points.curve.length-1; i++) {
-                     const p1 = guide.points.curve[i];
-                     const p2 = guide.points.curve[i+1];
-                     const info = pointToSegmentDistance(p.x, p.y, p1.x, p1.y, p2.x, p2.y);
-                     if (info.distance < minDist) {
-                         minDist = info.distance;
-                         const segLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-                         bestCross = info.cross / segLen;
-                     }
-                 }
-                 rawXte = bestCross;
+             const metrics = getGuidanceMetrics(guide, { ...worldPos, heading });
+             if (metrics.validLine) {
+                 activeLaneRef.current = Math.round(metrics.xte / guide.width);
              }
-             
-             // LOCK LANE
-             const nearestLaneIndex = Math.round(rawXte / guide.width);
-             activeLaneRef.current = nearestLaneIndex; 
-             // showNotification(`Locked to Lane ${nearestLaneIndex}`, "info");
         }
-        
+
         // 1b. Close Action Dock & Stop Creating
         setIsCreating(false);
         setDockMenuOpen(false);
-        
+
         showNotification("Auto Steer ENGAGED", "success");
     } else {
         // --- 2. MANUAL ENGAGED Logic ---
         setDragOffset({ x: 0, y: 0 });
         physics.current.steeringAngle = 0;
-        
+
         // Unlock lane (optional, or keep it until next auto engage)
         activeLaneRef.current = null;
-        
+
         showNotification("Manual Control Returned", "warning");
     }
     setSteeringMode(newMode);
   };
 
   const showNotification = (msg, type) => { setNotification({ msg, type }); setTimeout(() => setNotification(null), 3000); };
-  const handleTrim = (direction) => { setCrossTrackError(prev => direction === 'left' ? prev - 1 : prev + 1); showNotification(`Trim ${direction === 'left' ? 'Left' : 'Right'} 1cm`, "info"); };
+  const updateFeatureSetting = (key, value) => {
+      setFeatureSettings(prev => ({ ...prev, [key]: value }));
+  };
+
+  const toggleFeatureSetting = (key) => {
+      setFeatureSettings(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const handleTrim = (direction) => {
+      const trimPixels = PIXELS_PER_METER * 0.01;
+      actions.setManualOffset(prev => prev + (direction === 'left' ? -trimPixels : trimPixels));
+      showNotification(`Trim ${direction === 'left' ? 'Left' : 'Right'} 1cm`, "info");
+  };
   const handleZoom = (type) => { setZoomLevel(prev => { if (type === 'in') return Math.min(prev + 0.2, 3.0); if (type === 'out') return Math.max(prev - 0.2, 0.2); return prev; }); };
   const handleRecenter = () => { setDragOffset({ x: 0, y: 0 }); setIsDraggingMap(false); };
-
-  const handleMapMouseDown = (e) => { if (e.button !== 0) return; setIsDraggingMap(true); dragStartRef.current = { x: e.clientX, y: e.clientY }; };
-  const handleMapMouseMove = (e) => {
-      if (!isDraggingMap) return;
-      const dx = e.clientX - dragStartRef.current.x;
-      const dy = e.clientY - dragStartRef.current.y;
-      dragStartRef.current = { x: e.clientX, y: e.clientY };
-      setDragOffset(prev => ({ x: prev.x - dx / zoomLevel, y: prev.y - dy / zoomLevel }));
+  const handleSceneViewChange = (mode) => {
+      if (mode === sceneViewMode) return;
+      setViewTransitioning(true);
+      setDragOffset({ x: 0, y: 0 });
+      setIsDraggingMap(false);
+      setSceneViewMode(mode);
+      window.setTimeout(() => setViewTransitioning(false), 280);
   };
-  const handleMapMouseUp = () => { setIsDraggingMap(false); };
 
-  const resetLines = () => { actions.setPointA(null); actions.setPointB(null); actions.setAPlusPoint(null); actions.setAPlusHeading(null); actions.setCurvePoints([]); actions.setIsRecordingCurve(false); actions.setPivotCenter(null); actions.setPivotRadius(null); actions.setGuidanceLine(null); actions.setActiveLineId(null); };
-  
-  const cancelLineCreation = () => { 
-      resetLines(); 
+  const handleMapPointerDown = (e) => {
+      setIsDraggingMap(false);
+  };
+  const handleMapPointerMove = (e) => {
+      return;
+  };
+  const handleMapPointerUp = (e) => {
+      setIsDraggingMap(false);
+  };
+
+  const resetLines = () => { actions.setPointA(null); actions.setPointB(null); actions.setAPlusPoint(null); actions.setAPlusHeading(null); actions.setCurvePoints([]); actions.setIsRecordingCurve(false); actions.setPivotCenter(null); actions.setPivotRadius(null); actions.setGuidanceLine(null); actions.setActiveLineId(null); setIsCombinationPaused(false); };
+
+  const cancelLineCreation = () => {
+      resetLines();
       setIsCreating(false); // EXIT CREATION MODE
       setDockMenuOpen(true); // RETURN TO DOCK MENU
-      showNotification("Creation Cancelled", "info"); 
+      showNotification("Creation Cancelled", "info");
   };
-  
-  const updateManualSpeed = (val) => { physics.current.targetSpeed = val; setManualTargetSpeed(val); };
-  const updateSteering = (val) => { physics.current.steeringAngle = val; setSteeringAngle(val); };
+
+  const updateManualSpeed = (val) => {
+      const next = Math.max(-5, Math.min(15, Number(val) || 0));
+      physics.current.targetSpeed = next;
+      setManualTargetSpeed(next);
+  };
+  const cancelTurnAssist = () => {
+      turnAssistRef.current = null;
+      setTurnAssistActive(false);
+  };
+  const stopVehicle = () => {
+      cancelTurnAssist();
+      updateManualSpeed(0);
+      physics.current.steeringAngle = 0;
+      setSteeringAngle(0);
+  };
+  const updateSteering = (val) => {
+      cancelTurnAssist();
+      physics.current.steeringAngle = val;
+      setSteeringAngle(val);
+  };
+  const handleUTurn = () => {
+      const current = physics.current;
+      const isLeftRequested = keysPressed.current['ArrowLeft'] || current.steeringAngle < -2;
+      const direction = isLeftRequested ? -1 : 1;
+      const targetSpeed = current.targetSpeed < 0 ? -5.5 : 5.5;
+      turnAssistRef.current = {
+          direction,
+          targetHeading: normalizeHeadingValue(current.heading + 180)
+      };
+      setSteeringMode('MANUAL');
+      setTurnAssistActive(true);
+      current.targetSpeed = targetSpeed;
+      current.steeringAngle = direction * 42;
+      setManualTargetSpeed(targetSpeed);
+      setSteeringAngle(current.steeringAngle);
+      showNotification(`U-turn assist: ${direction < 0 ? 'left' : 'right'} 180\u00b0`, 'info');
+  };
+  const setSteerKey = (key, active) => {
+      if (active && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+          cancelTurnAssist();
+      }
+      keysPressed.current[key] = active;
+  };
   const startFieldCreation = () => { actions.setViewMode('CREATE_FIELD'); actions.setNewFieldName(''); actions.setCurrentFieldBoundaries([]); };
-  const handleTaskAction = (task, action) => { 
-        const newStatus = action === 'start' ? 'In Progress' : action === 'pause' ? 'Paused' : 'Done'; 
-        const updatedFields = fields.map(f => { 
-            if (f.id === selectedFieldId) { 
-                const newTasks = f.tasks.map(t => t.id === task.id ? { ...t, status: newStatus } : t); 
-                return { ...f, tasks: newTasks }; 
-            } return f; 
-        }); 
-        actions.setFields(updatedFields); 
-        if (action === 'start') actions.setActiveTaskId(task.id); 
-        else if (action === 'finish') actions.setActiveTaskId(null); 
+  const handleTaskAction = (task, action) => {
+        const newStatus = action === 'start' ? 'In Progress' : action === 'pause' ? 'Paused' : 'Done';
+        const updatedFields = fields.map(f => {
+            if (f.id === selectedFieldId) {
+                const newTasks = f.tasks.map(t => t.id === task.id ? { ...t, status: newStatus } : t);
+                return { ...f, tasks: newTasks };
+            } return f;
+        });
+        actions.setFields(updatedFields);
+        if (action === 'start') actions.setActiveTaskId(task.id);
+        else if (action === 'finish') actions.setActiveTaskId(null);
   }
 
   const handleLoadLine = (line) => {
@@ -692,14 +844,14 @@ const App = () => {
 
   const handleABButtonClick = () => {
       if (!pointA) { resetLines(); actions.setPointA({ ...worldPos }); showNotification("Point A Set. Drive > 10m to set B.", "info"); }
-      else if (!pointB) { 
+      else if (!pointB) {
           const dist = Math.hypot(worldPos.x - pointA.x, worldPos.y - pointA.y);
-          if (dist < 50) { showNotification(`Too short! Drive ${((50 - dist)/5).toFixed(1)}m more.`, "warning"); return; } 
-          actions.setPointB({ ...worldPos }); actions.setGuidanceLine('STRAIGHT_AB'); showNotification("AB Line Created!", "success"); setTimeout(openSaveLineModal, 500); 
+          if (dist < 50) { showNotification(`Too short! Drive ${((50 - dist)/5).toFixed(1)}m more.`, "warning"); return; }
+          actions.setPointB({ ...worldPos }); actions.setGuidanceLine('STRAIGHT_AB'); showNotification("AB Line Created!", "success"); setTimeout(openSaveLineModal, 500);
       }
       else { resetLines(); actions.setPointA({ ...worldPos }); showNotification("Point A Reset", "info"); }
   };
-  
+
   // --- A+ LINE SPECIFIC FUNCTIONS ---
   const handleSetAPlus_PointA = () => {
       actions.setAPlusPoint({ ...worldPos });
@@ -708,7 +860,7 @@ const App = () => {
 
   const handleSetAPlus_HeadingCurrent = () => {
       actions.setAPlusHeading(heading);
-      showNotification(`Heading Set to Current: ${heading.toFixed(1)}Â°`, "info");
+      showNotification(`Heading Set to Current: ${heading.toFixed(1)}\u00b0`, "info");
   };
 
   const handleSetAPlus_HeadingManual = (val) => {
@@ -719,46 +871,73 @@ const App = () => {
       }
       actions.setAPlusHeading(num);
       setManualHeadingModalOpen(false);
-      showNotification(`Heading Set Manually: ${num.toFixed(1)}Â°`, "info");
+      showNotification(`Heading Set Manually: ${num.toFixed(1)}\u00b0`, "info");
   };
 
   const handleConfirmAPlus = () => {
       if (!aPlusPoint) return showNotification("Please Set Point A first", "warning");
       if (aPlusHeading === null || aPlusHeading === undefined) return showNotification("Please Set Heading first", "warning");
-      
+
       actions.setGuidanceLine('A_PLUS');
       showNotification("A+ Line Created!", "success");
       setTimeout(openSaveLineModal, 500);
   };
 
-  const handleRecordCurve = () => { 
-      if (isRecordingCurve) { 
-          actions.setIsRecordingCurve(false); 
-          if (curvePoints.length > 2) { actions.setGuidanceLine('CURVE'); showNotification("Curve Saved!", "success"); setTimeout(openSaveLineModal, 500); } 
-          else { showNotification("Curve too short!", "error"); actions.setCurvePoints([]); } 
-      } else { resetLines(); actions.setIsRecordingCurve(true); actions.setCurvePoints([{...worldPos}]); showNotification("Recording Curve...", "info"); } 
+  const handleRecordCurve = () => {
+      if (isRecordingCurve) {
+          actions.setIsRecordingCurve(false);
+          if (curvePoints.length > 2) { actions.setGuidanceLine('CURVE'); showNotification("Curve Saved!", "success"); setTimeout(openSaveLineModal, 500); }
+          else { showNotification("Curve too short!", "error"); actions.setCurvePoints([]); }
+      } else { resetLines(); actions.setIsRecordingCurve(true); actions.setCurvePoints([{...worldPos}]); showNotification("Recording Curve...", "info"); }
   };
+
+  const handleCombinationRecord = () => {
+      if (curvePoints.length === 0) actions.setCurvePoints([{ ...worldPos }]);
+      actions.setIsRecordingCurve(true);
+      setIsCombinationPaused(false);
+      showNotification("Recording Combination Line", "info");
+  };
+
+  const handleCombinationPause = () => {
+      actions.setIsRecordingCurve(false);
+      setIsCombinationPaused(true);
+      showNotification("Combination Line paused. Drive to straight segment end, then continue.", "info");
+  };
+
+  const handleCombinationFinish = () => {
+      actions.setIsRecordingCurve(false);
+      setIsCombinationPaused(false);
+      if (curvePoints.length > 2) {
+          actions.setGuidanceLine('COMBINATION');
+          showNotification("Combination Line Created!", "success");
+          setTimeout(openSaveLineModal, 500);
+      } else {
+          actions.setCurvePoints([]);
+          showNotification("Combination line too short", "warning");
+      }
+  };
+
   const handleSetCenter = () => { resetLines(); actions.setPivotCenter({ ...worldPos }); showNotification("Pivot Center Set. Drive to Edge.", "info"); };
   const handleSetRadius = () => { if (!pivotCenter) return showNotification("Set Center first", "warning"); const radius = Math.hypot(worldPos.x - pivotCenter.x, worldPos.y - pivotCenter.y); if (radius < 50) return showNotification("Radius too small!", "warning"); actions.setPivotRadius(radius); actions.setGuidanceLine('PIVOT'); showNotification("Pivot Created!", "success"); setTimeout(openSaveLineModal, 500); };
-  
-  const selectLineMode = (type) => { 
-      actions.setLineType(type); 
-      setLineModeModalOpen(false); 
+
+  const selectLineMode = (type) => {
+      actions.setLineType(type);
+      setLineModeModalOpen(false);
       // Reset logic but keep mode
-      resetLines(); 
-      setIsCreating(true); 
+      resetLines();
+      setIsCreating(true);
       setDockMenuOpen(false); // Close menu when creating starts
-      showNotification(`Mode Changed: ${type.replace('_', ' ')}`, "info"); 
+      showNotification(`Mode Changed: ${type.replace('_', ' ')}`, "info");
   };
 
   const startBoundaryCreation = () => {
      setFieldManagerOpen(false);
      setDockMenuOpen(false); // Close menu
-     actions.setIsRecordingBoundary(true); 
-     physics.current.targetSpeed = 5; 
-     showNotification("Drive to record boundary...", "info"); 
+     actions.setIsRecordingBoundary(true);
+     physics.current.targetSpeed = 5;
+     showNotification("Drive to record boundary...", "info");
   };
-  
+
   // UPDATED FINISH BOUNDARY LOGIC
   const finishBoundaryRecording = () => {
       // 1. Check Minimum Distance (100m) - Reduced for testing
@@ -768,17 +947,17 @@ const App = () => {
            showNotification(`Distance too short (< 50m). Run more!`, "warning");
            return;
       }
-      
+
       // Use Case 1: Check for Self-Intersection (CROSSING) with LIVE POS
       // Add current position to check for the most recent crossing
       const currentPath = [...tempBoundary, worldPos];
       const selfIntersect = checkSelfIntersection(currentPath);
-      
+
       if (selfIntersect) {
           // INTERSECTION FOUND -> Auto Trim Tail & Head -> Create Polygon
           const { earlySegmentIdx, lateSegmentIdx, point } = selfIntersect;
-          
-          const loopPoints = [point]; 
+
+          const loopPoints = [point];
           // Take only the loop part (exclude start tail and current overshoot head)
           // From end of early segment to start of late segment
           // The intersection happens on segment 'earlySegmentIdx' and 'lateSegmentIdx'
@@ -789,11 +968,11 @@ const App = () => {
           loopPoints.push(point); // Close it precisely
 
           // Update preview and proceed
-          setPreviewBoundary(loopPoints); 
-          actions.setTempBoundary([]); 
+          setPreviewBoundary(loopPoints);
+          actions.setTempBoundary([]);
           actions.setIsRecordingBoundary(false);
           physics.current.targetSpeed = 0;
-          
+
           const count = viewMode === 'CREATE_FIELD' ? currentFieldBoundaries.length : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
           setTempBoundaryName(`Boundary ${count + 1}`);
           setBoundaryNameModalOpen(true);
@@ -818,7 +997,7 @@ const App = () => {
 
   const handleBoundaryAlertConfirm = (choice) => {
       setBoundaryAlertOpen(false);
-      
+
       if (boundaryAlertType === 'AUTO_CLOSE') {
           if (choice === 'YES') {
               // Auto close logic
@@ -827,7 +1006,7 @@ const App = () => {
               actions.setTempBoundary([]);
               actions.setIsRecordingBoundary(false);
               physics.current.targetSpeed = 0;
-              
+
               const count = viewMode === 'CREATE_FIELD' ? currentFieldBoundaries.length : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
               setTempBoundaryName(`Boundary ${count + 1}`);
               setBoundaryNameModalOpen(true);
@@ -850,13 +1029,13 @@ const App = () => {
           showNotification("Please enter boundary name", "warning");
           return;
       }
-      
+
       // Use preview boundary as final data
-      const finalPoints = previewBoundary || tempBoundary; 
+      const finalPoints = previewBoundary || tempBoundary;
 
       const newBoundaryObj = { name: tempBoundaryName, points: finalPoints };
       let updatedBoundaries = [];
-      
+
       if (viewMode === 'CREATE_FIELD') {
           // Add new boundary to list
           updatedBoundaries = [...currentFieldBoundaries, newBoundaryObj];
@@ -875,20 +1054,20 @@ const App = () => {
               return f;
           });
           actions.setFields(updatedFields);
-          
+
           // Force update loaded field to reflect changes immediately
           const updatedActiveField = updatedFields.find(f => f.id === selectedFieldId);
-          actions.setLoadedField(updatedActiveField); 
-          
+          actions.setLoadedField(updatedActiveField);
+
           actions.setActiveBoundaryIdx(updatedBoundaries.length - 1);
       }
-      
+
       setBoundaryNameModalOpen(false);
-      setPreviewBoundary(null); 
+      setPreviewBoundary(null);
       actions.setTempBoundary([]);
       setTempBoundaryName('');
       actions.setIsRecordingBoundary(false);
-      setDockMenuOpen(true); 
+      setDockMenuOpen(true);
       showNotification("Boundary Saved & Active!", "success");
   }
 
@@ -896,11 +1075,11 @@ const App = () => {
     actions.setIsRecordingBoundary(false);
     physics.current.targetSpeed = 0;
     actions.setTempBoundary([]);
-    setPreviewBoundary(null); 
-    setDockMenuOpen(true); 
+    setPreviewBoundary(null);
+    setDockMenuOpen(true);
     showNotification("Recording Cancelled", "info");
   };
-  
+
   // Custom Delete Modal Handler
   const confirmDelete = (type, id, index) => {
       setItemToDelete({ type, id, index });
@@ -920,7 +1099,7 @@ const App = () => {
                 return f;
             });
             actions.setFields(updatedFields);
-            
+
             if (loadedField && loadedField.id === selectedFieldId) {
                 const newBounds = loadedField.boundaries.filter((_, i) => i !== index);
                 actions.setLoadedField({...loadedField, boundaries: newBounds});
@@ -936,7 +1115,7 @@ const App = () => {
                 return f;
             });
             actions.setFields(updatedFields);
-            
+
             if (loadedField && loadedField.id === selectedFieldId) {
                 const newLines = loadedField.lines.filter(l => l.id !== id);
                 actions.setLoadedField({...loadedField, lines: newLines});
@@ -964,7 +1143,7 @@ const App = () => {
       setDeleteModalOpen(false);
       setItemToDelete(null);
   }
-  
+
   const handleDeleteField = () => {
       if (fields.length <= 1) { showNotification("Cannot delete the last field!", "warning"); return; }
       const updatedFields = fields.filter(f => f.id !== selectedFieldId);
@@ -975,26 +1154,26 @@ const App = () => {
       }
       showNotification("Field Deleted", "error");
   };
-  const saveNewField = () => { 
+  const saveNewField = () => {
       if (!newFieldName) return showNotification("Enter field name", "warning");
       const area = (currentFieldBoundaries.reduce((acc, b) => acc + b.points.length, 0) * 0.05).toFixed(1);
-      const newField = { id: Date.now(), name: newFieldName, area: area + " ha", lastUsed: "Just now", boundaries: currentFieldBoundaries, lines: [], tasks: [] }; 
-      actions.setFields(prev => [...prev, newField]); 
-      actions.setSelectedFieldId(newField.id); 
-      actions.setViewMode('LIST'); 
-      showNotification("Field Saved Successfully", "success"); 
+      const newField = { id: Date.now(), name: newFieldName, area: area + " ha", lastUsed: "Just now", boundaries: currentFieldBoundaries, lines: [], tasks: [] };
+      actions.setFields(prev => [...prev, newField]);
+      actions.setSelectedFieldId(newField.id);
+      actions.setViewMode('LIST');
+      showNotification("Field Saved Successfully", "success");
   };
   const startTaskCreation = () => actions.setViewMode('CREATE_TASK');
   const saveNewTask = (type) => { const activeField = fields.find(f => f.id === selectedFieldId); const newTask = { id: Date.now(), name: `${type} ${new Date().getFullYear()}`, type, date: "Today", status: "Pending" }; const updatedFields = fields.map(f => { if (f.id === selectedFieldId) return { ...f, tasks: [newTask, ...f.tasks] }; return f; }); actions.setFields(updatedFields); actions.setViewMode('LIST'); showNotification(`Task "${newTask.name}" Created`, "success"); };
-  
-  const handleLoadField = () => { 
-      const field = fields.find(f => f.id === selectedFieldId); 
-      actions.setLoadedField(field); 
-      showNotification(`Loaded Field: ${field.name}`, "success"); 
-      setFieldManagerOpen(false); 
-      actions.setCoverageTrail([]); 
-      resetLines(); 
-      setDragOffset({x:0, y:0}); 
+
+  const handleLoadField = () => {
+      const field = fields.find(f => f.id === selectedFieldId);
+      actions.setLoadedField(field);
+      showNotification(`Loaded Field: ${field.name}`, "success");
+      setFieldManagerOpen(false);
+      actions.setCoverageTrail([]);
+      resetLines();
+      setDragOffset({x:0, y:0});
 
       if (field.lines && field.lines.length > 0) {
           const defaultLine = field.lines[0];
@@ -1004,15 +1183,668 @@ const App = () => {
 
   const getDisplayHeading = () => { let h = heading % 360; if (h < 0) h += 360; return h.toFixed(1); };
   const getRtkColor = () => rtkStatus === 'FIX' ? 'bg-green-500 text-white border-green-400' : 'bg-yellow-500 text-black border-yellow-400';
-  const getLineTypeIcon = () => { switch(lineType) { case 'STRAIGHT_AB': return GitCommitHorizontal; case 'A_PLUS': return ArrowUpFromDot; case 'CURVE': return Spline; case 'PIVOT': return CircleDashed; default: return GitCommitHorizontal; } };
+  const getLineTypeIcon = () => { switch(lineType) { case 'STRAIGHT_AB': return GitCommitHorizontal; case 'A_PLUS': return ArrowUpFromDot; case 'CURVE': return Spline; case 'COMBINATION': return AlignJustify; case 'PIVOT': return CircleDashed; default: return GitCommitHorizontal; } };
+  const isHeadingUpMap = mapOrientation === 'HEADING_UP';
+  const isMap3D = sceneViewMode === '3D';
+  const mapRotationDeg = isHeadingUpMap ? -mapVisualHeading : 0;
+  const mapRotationRad = mapRotationDeg * Math.PI / 180;
+  const sceneRotationDeg = isMap3D ? 0 : mapRotationDeg;
+  const vehicleScreenOffsetX = (dragOffset.x * Math.cos(mapRotationRad) - dragOffset.y * Math.sin(mapRotationRad)) * zoomLevel;
+  const vehicleScreenOffsetY = (dragOffset.x * Math.sin(mapRotationRad) + dragOffset.y * Math.cos(mapRotationRad)) * zoomLevel * (isMap3D ? 0.64 : 1);
+  const vehicleScreenHeading = isHeadingUpMap ? 0 : heading;
+  const vehicleScreenScale = Math.max(0.56, Math.min(0.92, zoomLevel * (isMap3D ? 1.02 : 0.98)));
+  const gridMinorSize = 160;
+  const gridMajorSize = gridMinorSize * 4;
+  const gridOffsetX2DMinor = (-worldPos.x + dragOffset.x) % gridMinorSize;
+  const gridOffsetY2DMinor = (-worldPos.y + dragOffset.y) % gridMinorSize;
+  const gridOffsetX2DMajor = (-worldPos.x + dragOffset.x) % gridMajorSize;
+  const gridOffsetY2DMajor = (-worldPos.y + dragOffset.y) % gridMajorSize;
+
+  const renderCompassWidget = () => {
+      const isDark = theme === 'dark';
+      const face = isDark ? '#0f172a' : '#ffffff';
+      const ring = isDark ? '#475569' : '#cbd5e1';
+      const text = isDark ? '#e2e8f0' : '#0f172a';
+      const muted = isDark ? '#94a3b8' : '#64748b';
+
+      return (
+          <div
+              className={`absolute left-4 top-4 z-30 w-[132px] rounded-xl border ${t.borderCard} ${t.bgCard} shadow-lg backdrop-blur p-2 flex flex-col items-center gap-2`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerMove={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+          >
+              <svg width="82" height="82" viewBox="0 0 82 82" aria-label="Compass">
+                  <circle cx="41" cy="41" r="37" fill={face} stroke={ring} strokeWidth="2" />
+                  <circle cx="41" cy="41" r="4" fill="#2563eb" />
+                  {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => {
+                      const rad = (deg - 90) * Math.PI / 180;
+                      const outer = 35;
+                      const inner = deg % 90 === 0 ? 29 : 32;
+                      return (
+                          <line
+                              key={deg}
+                              x1={41 + Math.cos(rad) * inner}
+                              y1={41 + Math.sin(rad) * inner}
+                              x2={41 + Math.cos(rad) * outer}
+                              y2={41 + Math.sin(rad) * outer}
+                              stroke={muted}
+                              strokeWidth={deg % 90 === 0 ? 2 : 1}
+                          />
+                      );
+                  })}
+                  <text x="41" y="15" textAnchor="middle" fontSize="10" fontWeight="800" fill="#ef4444">N</text>
+                  <text x="41" y="73" textAnchor="middle" fontSize="9" fontWeight="700" fill={muted}>S</text>
+                  <text x="72" y="44" textAnchor="middle" fontSize="9" fontWeight="700" fill={muted}>E</text>
+                  <text x="10" y="44" textAnchor="middle" fontSize="9" fontWeight="700" fill={muted}>W</text>
+                  <g transform={`rotate(${heading}, 41, 41)`}>
+                      <path d="M41 12 L48 43 L41 39 L34 43 Z" fill="#ef4444" stroke="#991b1b" strokeWidth="1" />
+                      <path d="M41 70 L36 43 L41 47 L46 43 Z" fill="#94a3b8" stroke="#475569" strokeWidth="1" />
+                  </g>
+              </svg>
+                <div className="w-full text-center">
+                    <div className="w-full">
+                        <div className={`text-sm font-black ${t.textMain}`}>{`${getDisplayHeading()}\u00b0`}</div>
+                        <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>{getCardinalShortDirection(heading)}</div>
+                    </div>
+                </div>
+
+               <div className="w-full grid grid-cols-[34px_1fr] gap-1 items-center">
+                  <span className={`text-[9px] font-black text-center ${t.textSub}`}>VIEW</span>
+                  <div className={`grid grid-cols-2 gap-1 p-1 rounded-lg ${isDark ? 'bg-slate-800' : 'bg-gray-100'}`}>
+                  {['2D', '3D'].map((mode) => (
+                      <button
+                          key={mode}
+                          onClick={(e) => {
+                              e.stopPropagation();
+                              handleSceneViewChange(mode);
+                          }}
+                          className={`py-1 rounded-md text-[11px] font-black transition ${sceneViewMode === mode ? 'bg-blue-600 text-white shadow' : `${t.textSub} hover:brightness-95`}`}
+                      >
+                          {mode}
+                      </button>
+                  ))}
+                  </div>
+              </div>
+          </div>
+      );
+  };
+
+  const renderFeatureStatusStrip = () => {
+      const tiles = [
+          { key: 'terrain', label: 'TERRAIN', value: featureSettings.terrainCompensation ? 'ON' : 'OFF', icon: Activity, active: featureSettings.terrainCompensation },
+          { key: 'isobus', label: 'ISOBUS', value: featureSettings.isobusUT ? 'UT/TC' : 'OFF', icon: Cpu, active: featureSettings.isobusUT },
+          { key: 'camera', label: 'CAMERA', value: featureSettings.wiredCamera || featureSettings.wirelessCamera ? 'LIVE' : 'OFF', icon: Video, active: featureSettings.wiredCamera || featureSettings.wirelessCamera, onClick: () => setCameraPanelOpen(true) },
+          { key: 'obd', label: 'OBD', value: featureSettings.obd ? 'OK' : 'OFF', icon: Gauge, active: featureSettings.obd, onClick: () => setDiagnosticsPanelOpen(true) },
+          { key: 'lift', label: 'LIFT', value: featureSettings.liftSensor ? 'AUTO' : 'MAN', icon: ArrowUpFromDot, active: featureSettings.liftSensor },
+          { key: 'steer', label: 'STEER', value: featureSettings.canbusSteerReady ? 'CAN' : featureSettings.pwmSteerReady ? 'PWM' : 'MOTOR', icon: SteeringWheelIcon, active: true }
+      ];
+
+      return (
+          <div
+              className="absolute left-[150px] right-4 top-4 z-30 flex gap-2 overflow-x-auto pb-1"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+          >
+              {tiles.map((tile) => (
+                  <button
+                      key={tile.key}
+                      onClick={tile.onClick}
+                      className={`shrink-0 min-w-[86px] px-3 py-2 rounded-lg border ${t.borderCard} ${t.bgCard} backdrop-blur shadow-sm flex items-center gap-2 ${tile.onClick ? 'hover:brightness-95' : ''}`}
+                  >
+                      <tile.icon className={`w-4 h-4 ${tile.active ? 'text-green-500' : t.textDim}`} />
+                      <div className="text-left leading-tight">
+                          <div className={`text-[9px] font-black ${t.textSub}`}>{tile.label}</div>
+                          <div className={`text-xs font-black ${tile.active ? 'text-green-500' : t.textMain}`}>{tile.value}</div>
+                      </div>
+                  </button>
+              ))}
+          </div>
+      );
+  };
+
+  const FeatureToggle = ({ label, detail, featureKey, icon: Icon = CheckCircle2 }) => (
+      <button
+          onClick={() => toggleFeatureSetting(featureKey)}
+          className={`w-full p-4 rounded-xl border ${featureSettings[featureKey] ? 'border-green-500/50 bg-green-500/10' : `${t.borderCard} ${t.bgInput}`} flex items-center justify-between text-left`}
+      >
+          <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${featureSettings[featureKey] ? 'bg-green-500 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} ${t.textDim}`}`}>
+                  <Icon className="w-5 h-5" />
+              </div>
+              <div>
+                  <div className={`font-bold ${t.textMain}`}>{label}</div>
+                  <div className={`text-xs ${t.textSub}`}>{detail}</div>
+              </div>
+          </div>
+          <div className={`w-12 h-7 rounded-full p-1 transition-colors ${featureSettings[featureKey] ? 'bg-green-500' : 'bg-slate-400'}`}>
+              <div className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform ${featureSettings[featureKey] ? 'translate-x-5' : ''}`}></div>
+          </div>
+      </button>
+  );
+
+  const renderCameraPanel = () => (
+      <div className="absolute inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className={`${t.bgPanel} border ${t.borderCard} rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden`}>
+              <div className={`p-4 border-b ${t.divider} flex items-center justify-between`}>
+                  <div className="flex items-center gap-3">
+                      <Video className="w-6 h-6 text-blue-500" />
+                      <div>
+                          <div className={`font-black ${t.textMain}`}>Camera Monitor</div>
+                          <div className={`text-xs ${t.textSub}`}>Implement and rear safety feeds</div>
+                      </div>
+                  </div>
+                  <button onClick={() => setCameraPanelOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain}`}><X className="w-5 h-5" /></button>
+              </div>
+              <div className="grid grid-cols-2 gap-4 p-5">
+                  {[
+                      { label: 'Rear Implement', active: featureSettings.wiredCamera },
+                      { label: 'Headland / Blind Spot', active: featureSettings.wirelessCamera }
+                  ].map((feed) => (
+                      <div key={feed.label} className={`aspect-video rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-slate-900'} relative overflow-hidden`}>
+                          <div className="absolute inset-0 opacity-40" style={{ backgroundImage: 'linear-gradient(45deg, rgba(148,163,184,.25) 25%, transparent 25%, transparent 50%, rgba(148,163,184,.25) 50%, rgba(148,163,184,.25) 75%, transparent 75%, transparent)', backgroundSize: '28px 28px' }}></div>
+                          <div className="absolute top-3 left-3 px-3 py-1 rounded bg-black/70 text-white text-xs font-bold">{feed.label}</div>
+                          <div className={`absolute bottom-3 right-3 px-3 py-1 rounded text-xs font-black ${feed.active ? 'bg-green-500 text-white' : 'bg-slate-600 text-slate-200'}`}>{feed.active ? 'LIVE' : 'OFFLINE'}</div>
+                          <div className="absolute inset-0 flex items-center justify-center">
+                              <Video className={`w-14 h-14 ${feed.active ? 'text-green-400' : 'text-slate-500'}`} />
+                          </div>
+                      </div>
+                  ))}
+              </div>
+              <div className={`p-4 border-t ${t.divider} flex gap-3 justify-end`}>
+                  <button onClick={() => toggleFeatureSetting('wiredCamera')} className={`px-4 py-2 rounded-lg border ${t.borderCard} ${t.textMain}`}>Toggle Wired</button>
+                  <button onClick={() => toggleFeatureSetting('wirelessCamera')} className={`px-4 py-2 rounded-lg border ${t.borderCard} ${t.textMain}`}>Toggle Wireless</button>
+              </div>
+          </div>
+      </div>
+  );
+
+  const renderDiagnosticsPanel = () => (
+      <div className="absolute inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className={`${t.bgPanel} border ${t.borderCard} rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden`}>
+              <div className={`p-4 border-b ${t.divider} flex items-center justify-between`}>
+                  <div className="flex items-center gap-3">
+                      <Cpu className="w-6 h-6 text-blue-500" />
+                      <div>
+                          <div className={`font-black ${t.textMain}`}>Diagnostics Center</div>
+                          <div className={`text-xs ${t.textSub}`}>Version, scenario, hardware and parameter health</div>
+                      </div>
+                  </div>
+                  <button onClick={() => setDiagnosticsPanelOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain}`}><X className="w-5 h-5" /></button>
+              </div>
+              <div className="grid grid-cols-4 gap-4 p-5">
+                  {[
+                      ['Terminal', 'v24.102.3', 'OK'],
+                      ['GNSS Receiver', rtkStatus, 'OK'],
+                      ['IMU', featureSettings.terrainCompensation ? 'Compensating' : 'Bypass', featureSettings.terrainCompensation ? 'OK' : 'WARN'],
+                      ['Steering Motor', featureSettings.electricPowerSteering ? 'Assist Ready' : 'Manual', 'OK'],
+                      ['CANBUS', featureSettings.canbusSteerReady ? 'Online' : 'Offline', featureSettings.canbusSteerReady ? 'OK' : 'WARN'],
+                      ['PWM', featureSettings.pwmSteerReady ? 'Enabled' : 'Disabled', featureSettings.pwmSteerReady ? 'OK' : 'OFF'],
+                      ['OBD', featureSettings.obd ? 'Live Data' : 'Disabled', featureSettings.obd ? 'OK' : 'OFF'],
+                      ['Logs', 'Ready to upload', 'OK']
+                  ].map(([label, value, status]) => (
+                      <div key={label} className={`${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-50'} border ${t.borderCard} rounded-xl p-4`}>
+                          <div className={`text-[10px] uppercase font-black ${t.textSub}`}>{label}</div>
+                          <div className={`text-sm font-bold ${t.textMain} mt-1`}>{value}</div>
+                          <div className={`text-[10px] font-black mt-3 ${status === 'OK' ? 'text-green-500' : status === 'WARN' ? 'text-yellow-500' : 'text-slate-500'}`}>{status}</div>
+                      </div>
+                  ))}
+              </div>
+              <div className={`p-4 border-t ${t.divider} flex justify-end gap-3`}>
+                  <button onClick={() => showNotification('Diagnostic log upload queued', 'info')} className={`px-4 py-2 rounded-lg border ${t.borderCard} ${t.textMain}`}>Upload Logs</button>
+                  <button onClick={() => setDiagnosticsPanelOpen(false)} className="px-4 py-2 rounded-lg bg-blue-600 text-white font-bold">Done</button>
+              </div>
+          </div>
+      </div>
+  );
+
+  const get3DViewHeading = () => {
+      if (!isHeadingUpMap) return 0;
+      return mapVisualHeading;
+  };
+
+  const toVehicleLocal3D = (dx, dy) => {
+      const h = get3DViewHeading() * Math.PI / 180;
+      return {
+          lateral: dx * Math.cos(h) + dy * Math.sin(h),
+          forward: dx * Math.sin(h) - dy * Math.cos(h)
+      };
+  };
+
+  const getProjected3DPoint = (pt, options = {}) => {
+      if (!pt) return null;
+      const isLocalPoint = options.local === true;
+      const dx = (pt.x - worldPos.x + dragOffset.x);
+      const dy = (pt.y - worldPos.y + dragOffset.y);
+
+      const { lateral, forward } = (() => {
+          if (isHeadingUpMap) {
+              if (isLocalPoint) {
+                  const dragLocal = toVehicleLocal3D(dragOffset.x, dragOffset.y);
+                  return {
+                      lateral: pt.x + dragLocal.lateral,
+                      forward: pt.y + dragLocal.forward
+                  };
+              }
+              return toVehicleLocal3D(dx, dy);
+          }
+          return {
+              lateral: dx,
+              forward: -dy
+          };
+      })();
+      const horizonY = 66;
+      const vehicleY = 470;
+      const depth = 680;
+      const forwardGain = options.forwardGain ?? 1;
+      const projectedForward = forward * forwardGain;
+      const denom = 1 + projectedForward / depth;
+      if (!Number.isFinite(denom) || denom <= 0.05) return null;
+
+      const perspective = 1 / denom;
+      const usePerspectiveScale = options.usePerspectiveScale !== false;
+      const lateralGain = options.lateralGain ?? 1;
+      const lateralScale = usePerspectiveScale ? perspective * lateralGain : 1;
+      const x = 500 + lateral * lateralScale;
+      const y = horizonY + (vehicleY - horizonY) * perspective;
+      if (Number.isFinite(options.minY) && y < options.minY) return null;
+      if (Number.isFinite(options.maxY) && y > options.maxY) return null;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      return { x, y, perspective, lateralScale };
+  };
+
+  const getProjected3DPath = (points, options = {}) => {
+      let d = '';
+      let drawing = false;
+
+      points.forEach((pt) => {
+          const projected = getProjected3DPoint(pt, options);
+          if (!projected) {
+              drawing = false;
+              return;
+          }
+          d += `${drawing ? 'L' : 'M'}${projected.x.toFixed(1)},${projected.y.toFixed(1)} `;
+          drawing = true;
+      });
+
+      return d.trim();
+  };
+
+  const densifyPoints = (points, maxStep = 42) => {
+      if (!points || points.length < 2) return points || [];
+      const dense = [];
+      for (let i = 0; i < points.length - 1; i++) {
+          const start = points[i];
+          const end = points[i + 1];
+          const dist = Math.hypot(end.x - start.x, end.y - start.y);
+          const steps = Math.max(1, Math.ceil(dist / maxStep));
+          for (let step = 0; step < steps; step++) {
+              const tStep = step / steps;
+              dense.push({
+                  x: start.x + (end.x - start.x) * tStep,
+                  y: start.y + (end.y - start.y) * tStep
+              });
+          }
+      }
+      dense.push(points[points.length - 1]);
+      return dense;
+  };
+
+  const parsePolylinePoints = (pointsText) => {
+      if (!pointsText) return [];
+      return pointsText.trim().split(/\s+/).map((pair) => {
+          const [x, y] = pair.split(',').map(Number);
+          return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+      }).filter(Boolean);
+  };
+
+  const get3DGridBounds = () => {
+      const step = gridMinorSize;
+      const extent = 3600 / Math.max(zoomLevel, 0.35);
+      return {
+          minX: Math.floor((worldPos.x - extent) / step) * step,
+          maxX: Math.ceil((worldPos.x + extent) / step) * step,
+          minY: Math.floor((worldPos.y - extent) / step) * step,
+          maxY: Math.ceil((worldPos.y + extent) / step) * step
+      };
+  };
+
+  const clipLineToBounds = (origin, unit, bounds) => {
+      let tMin = -Infinity;
+      let tMax = Infinity;
+      const axes = [
+          { pos: origin.x, dir: unit.x, min: bounds.minX, max: bounds.maxX },
+          { pos: origin.y, dir: unit.y, min: bounds.minY, max: bounds.maxY }
+      ];
+
+      for (const axis of axes) {
+          if (Math.abs(axis.dir) < 0.000001) {
+              if (axis.pos < axis.min || axis.pos > axis.max) return null;
+              continue;
+          }
+
+          const a = (axis.min - axis.pos) / axis.dir;
+          const b = (axis.max - axis.pos) / axis.dir;
+          tMin = Math.max(tMin, Math.min(a, b));
+          tMax = Math.min(tMax, Math.max(a, b));
+      }
+
+      if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || tMin >= tMax) return null;
+      return { start: tMin, end: tMax };
+  };
+
+  const getGuidanceLineSpan = () => 90000 / Math.max(zoomLevel, 0.35);
+
+  const getGuidanceLineSegmentAroundVehicle = (base, unit, offset = 0) => {
+      const normal = { x: -unit.y, y: unit.x };
+      const origin = {
+          x: base.x + normal.x * offset,
+          y: base.y + normal.y * offset
+      };
+      if (isMap3D) {
+          const clipped = clipLineToBounds(origin, unit, get3DGridBounds());
+          if (clipped) {
+              return {
+                  start: {
+                      x: origin.x + unit.x * clipped.start,
+                      y: origin.y + unit.y * clipped.start
+                  },
+                  end: {
+                      x: origin.x + unit.x * clipped.end,
+                      y: origin.y + unit.y * clipped.end
+                  }
+              };
+          }
+      }
+
+      const closest = (worldPos.x - origin.x) * unit.x + (worldPos.y - origin.y) * unit.y;
+      const span = getGuidanceLineSpan();
+      const start = closest - span;
+      const end = closest + span;
+
+      return {
+          start: {
+              x: origin.x + unit.x * start,
+              y: origin.y + unit.y * start
+          },
+          end: {
+              x: origin.x + unit.x * end,
+              y: origin.y + unit.y * end
+          }
+      };
+  };
+
+  const sampleGuidanceLinePoints = (base, unit, offset = 0, steps = 156) => {
+      const segment = getGuidanceLineSegmentAroundVehicle(base, unit, offset);
+
+      return Array.from({ length: steps + 1 }, (_, idx) => {
+          const tStep = idx / steps;
+          return {
+              x: segment.start.x + (segment.end.x - segment.start.x) * tStep,
+              y: segment.start.y + (segment.end.y - segment.start.y) * tStep
+          };
+      });
+  };
+
+  const sampleCirclePoints = (center, radius, segments = 180) => (
+      Array.from({ length: segments + 1 }, (_, idx) => {
+          const a = (idx / segments) * Math.PI * 2;
+          return {
+              x: center.x + Math.cos(a) * radius,
+              y: center.y + Math.sin(a) * radius
+          };
+      })
+  );
+
+  const renderProjected3DPath = (key, points, stroke, strokeWidth = 2, options = {}) => {
+      const map3DLateralGain = 0.62;
+      const map3DForwardGain = 1.18;
+      const projectionOptions = options.ground
+          ? { lateralGain: map3DLateralGain, forwardGain: map3DForwardGain, usePerspectiveScale: true }
+          : { lateralGain: map3DLateralGain, forwardGain: map3DForwardGain, usePerspectiveScale: true, minY: 96, maxY: 760 };
+      const d = getProjected3DPath(densifyPoints(points, options.maxStep || 42), {
+          ...projectionOptions,
+          ...options.projection
+      });
+      if (!d) return null;
+      return (
+          <path
+              key={key}
+              {...(options.ground ? { 'data-ground-3d-path': key } : { 'data-guidance-3d-path': key })}
+              d={d}
+              fill="none"
+              stroke={stroke}
+              strokeWidth={strokeWidth}
+              strokeLinecap={options.cap || (options.ground ? 'round' : 'butt')}
+              strokeLinejoin="round"
+              strokeOpacity={options.opacity ?? 1}
+              strokeDasharray={options.dash}
+          />
+      );
+  };
+
+  const getGroundLocalWorldPoint = (x, y) => ({ x, y });
+
+  const sampleGroundSegment = (lateralA, forwardA, lateralB, forwardB, steps = 48) => (
+      Array.from({ length: steps + 1 }, (_, idx) => {
+          const tStep = idx / steps;
+          return getGroundLocalWorldPoint(
+              lateralA + (lateralB - lateralA) * tStep,
+              forwardA + (forwardB - forwardA) * tStep
+          );
+      })
+  );
+
+  const renderGroundPlane3D = () => {
+      if (!isMap3D) return null;
+      const elements = [];
+      const step = gridMinorSize;
+      const majorStep = gridMajorSize;
+      const { minX, maxX, minY, maxY } = get3DGridBounds();
+      const majorOpacity = theme === 'dark' ? 0.2 : 0.13;
+      const minorOpacity = theme === 'dark' ? 0.095 : 0.055;
+
+      for (let x = minX; x <= maxX; x += step) {
+          const major = Math.abs(x % majorStep) < 0.001;
+          elements.push(renderProjected3DPath(
+              `ground-world-v-${x}`,
+              [{ x, y: minY }, { x, y: maxY }],
+              t.gridColor1,
+              major ? 1.1 : 0.75,
+              { opacity: major ? majorOpacity : minorOpacity, maxStep: 120, ground: true }
+          ));
+      }
+
+      for (let y = minY; y <= maxY; y += step) {
+          const major = Math.abs(y % majorStep) < 0.001;
+          elements.push(renderProjected3DPath(
+              `ground-world-h-${y}`,
+              [{ x: minX, y }, { x: maxX, y }],
+              t.gridColor1,
+              major ? 1.1 : 0.75,
+              { opacity: major ? majorOpacity : minorOpacity, maxStep: 120, ground: true }
+          ));
+      }
+
+      return (
+          <svg
+              data-ground-plane="3d"
+              className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none z-[3]"
+              viewBox="0 0 1000 700"
+              preserveAspectRatio="none"
+              style={{
+                  opacity: viewTransitioning ? 0.72 : 1,
+                  transform: viewTransitioning ? 'scale(0.985)' : 'scale(1)',
+                  transformOrigin: '50% 60%',
+                  transition: 'opacity 0.28s ease, transform 0.28s ease',
+                  willChange: 'opacity, transform'
+              }}
+          >
+              {elements}
+          </svg>
+      );
+  };
+
+  const renderGuidanceLine3D = () => {
+      if (!isMap3D) return null;
+
+      const elements = [];
+      const guide = guidanceRef.current;
+      const metrics = getGuidanceMetrics(guide, { ...worldPos, heading });
+      const currentLaneIndex = metrics.validLine && guide?.width > 0 ? Math.round(metrics.xte / guide.width) : 0;
+      const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
+      const activeStroke = theme === 'dark' ? '#60a5fa' : '#2563eb';
+      const laneStroke = theme === 'dark' ? '#38bdf8' : '#60a5fa';
+      const previewStroke = theme === 'dark' ? '#fb7185' : '#ef4444';
+      const boundaryStroke = theme === 'dark' ? '#94a3b8' : '#64748b';
+      const alignWithGridProjection = { minY: undefined };
+
+      const boundaries = (loadedField?.boundaries || []).concat(viewMode === 'CREATE_FIELD' ? currentFieldBoundaries : []);
+      boundaries.forEach((bound, bIdx) => {
+          const pts = (bound.points || bound || []).filter(Boolean);
+          if (pts.length > 1) {
+              elements.push(renderProjected3DPath(
+                  `boundary-${bIdx}`,
+                  [...pts, pts[0]],
+                  bIdx === activeBoundaryIdx ? '#eab308' : boundaryStroke,
+                  bIdx === activeBoundaryIdx ? 2.8 : 2,
+                  { dash: '8 8', opacity: bIdx === activeBoundaryIdx ? 0.9 : 0.55, maxStep: 38 }
+              ));
+          }
+      });
+
+      if (previewBoundary?.length > 1) {
+          elements.push(renderProjected3DPath('preview-boundary', [...previewBoundary, previewBoundary[0]], '#22c55e', 3, { dash: '8 7', opacity: 0.9 }));
+      }
+
+      if (!guidanceLine && pointA && lineType === 'STRAIGHT_AB') {
+          elements.push(renderProjected3DPath('straight-preview', [pointA, worldPos], previewStroke, 3, { dash: '12 9' }));
+      }
+
+      if (isRecordingCurve && curvePoints.length > 0) {
+          elements.push(renderProjected3DPath('curve-recording', [...curvePoints, worldPos], previewStroke, 3));
+      }
+
+      if (!guidanceLine && pivotCenter && lineType === 'PIVOT') {
+          elements.push(renderProjected3DPath('pivot-radius-preview', [pivotCenter, worldPos], previewStroke, 3, { dash: '12 9' }));
+      }
+
+      if (!showGuidanceLines) return elements;
+
+      if (guidanceLine === 'STRAIGHT_AB' && pointA && pointB) {
+          const dx = pointB.x - pointA.x;
+          const dy = pointB.y - pointA.y;
+          const length = Math.hypot(dx, dy);
+          if (length <= 0.001) return elements;
+          const unit = { x: dx / length, y: dy / length };
+
+          if (isMultiLineMode) {
+              const width = implementSettings.width * PIXELS_PER_METER;
+              for (let i = highlightedLane - 6; i <= highlightedLane + 6; i++) {
+                  const active = i === highlightedLane;
+                  elements.push(renderProjected3DPath(
+                      `straight-3d-${i}`,
+                      sampleGuidanceLinePoints(pointA, unit, (width * i) + manualOffset),
+                      active ? activeStroke : laneStroke,
+                      active ? 2.8 : 0.9,
+                      { opacity: active ? 0.9 : 0.24, maxStep: 42, projection: alignWithGridProjection }
+                  ));
+              }
+          } else {
+              elements.push(renderProjected3DPath(
+                  'straight-3d-target',
+                  sampleGuidanceLinePoints(pointA, unit, manualOffset),
+                  activeStroke,
+                  2.8,
+                  { maxStep: 42, projection: alignWithGridProjection }
+              ));
+          }
+      }
+
+      if ((guidanceLine === 'A_PLUS' || (lineType === 'A_PLUS' && !guidanceLine)) && aPlusPoint && aPlusHeading !== null && aPlusHeading !== undefined) {
+          const rad = aPlusHeading * Math.PI / 180;
+          const unit = { x: Math.sin(rad), y: -Math.cos(rad) };
+          const isPreview = !guidanceLine;
+
+          if (isPreview) {
+              elements.push(renderProjected3DPath('aplus-preview', sampleGuidanceLinePoints(aPlusPoint, unit, 0), previewStroke, 3, { dash: '12 9', projection: alignWithGridProjection }));
+          } else if (isMultiLineMode) {
+              const width = implementSettings.width * PIXELS_PER_METER;
+              for (let i = highlightedLane - 6; i <= highlightedLane + 6; i++) {
+                  const active = i === highlightedLane;
+                  elements.push(renderProjected3DPath(
+                      `aplus-3d-${i}`,
+                      sampleGuidanceLinePoints(aPlusPoint, unit, (width * i) + manualOffset),
+                      active ? activeStroke : laneStroke,
+                      active ? 2.8 : 0.9,
+                      { opacity: active ? 0.9 : 0.24, maxStep: 42, projection: alignWithGridProjection }
+                  ));
+              }
+          } else {
+              elements.push(renderProjected3DPath('aplus-3d-target', sampleGuidanceLinePoints(aPlusPoint, unit, manualOffset), activeStroke, 2.8, { maxStep: 42, projection: alignWithGridProjection }));
+          }
+      }
+
+      if (guidanceLine === 'PIVOT' && pivotCenter && pivotRadius) {
+          if (isMultiLineMode) {
+              const width = implementSettings.width * PIXELS_PER_METER;
+              for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
+                  const radius = pivotRadius + (i * width) + manualOffset;
+                  if (radius <= 0) continue;
+                  const active = i === highlightedLane;
+                  elements.push(renderProjected3DPath(
+                      `pivot-3d-${i}`,
+                      sampleCirclePoints(pivotCenter, radius),
+                      active ? activeStroke : laneStroke,
+                      active ? 3.4 : 1.8,
+                      { opacity: active ? 1 : 0.62, maxStep: 34 }
+                  ));
+              }
+          } else {
+              const radius = pivotRadius + manualOffset;
+              if (radius > 0) {
+                  elements.push(renderProjected3DPath('pivot-3d-target', sampleCirclePoints(pivotCenter, radius), activeStroke, 3.8, { maxStep: 34 }));
+              }
+          }
+      }
+
+      if ((guidanceLine === 'CURVE' || guidanceLine === 'COMBINATION') && curvePoints.length > 1) {
+          if (isMultiLineMode) {
+              const width = implementSettings.width * PIXELS_PER_METER;
+              for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
+                  const active = i === highlightedLane;
+                  const points = parsePolylinePoints(getOffsetPolyline(curvePoints, (i * width) + manualOffset));
+                  elements.push(renderProjected3DPath(
+                      `curve-3d-${i}`,
+                      points,
+                      active ? activeStroke : laneStroke,
+                      active ? 3.4 : 1.8,
+                      { opacity: active ? 1 : 0.62, maxStep: 34 }
+                  ));
+              }
+          } else {
+              elements.push(renderProjected3DPath(
+                  'curve-3d-target',
+                  parsePolylinePoints(getOffsetPolyline(curvePoints, manualOffset)),
+                  activeStroke,
+                  3.8,
+                  { maxStep: 34 }
+              ));
+          }
+      }
+
+      return elements.filter(Boolean);
+  };
 
   const renderGuidanceLine = () => {
     // Check if lines should be shown
+    if (isMap3D) return null;
     if (!showGuidanceLines) return null;
 
     // 1. Current Active Line from Logic
     let currentLaneIndex = 0;
-    
+
     // Calculate lane index based on physics/position (duplicated logic for render)
     if (guidanceRef.current && guidanceRef.current.type && guidanceRef.current.width > 0) {
          // Re-calculate XTE roughly to find lane
@@ -1026,14 +1858,14 @@ const App = () => {
             const dx = bx - ax; const dy = by - ay;
             const len = Math.hypot(dx, dy);
             xte = ((bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax)) / len;
-         } 
+         }
          else if (guide.type === 'A_PLUS' && guide.points.aplus && guide.points.aplus.point) {
              const ax = guide.points.aplus.point.x;
              const ay = guide.points.aplus.point.y;
              const h = guide.points.aplus.heading;
              const rad = h * Math.PI / 180;
              const ux = Math.sin(rad);
-             const uy = -Math.cos(rad); 
+             const uy = -Math.cos(rad);
              const vax = p.x - ax; const vay = p.y - ay;
              xte = vax * (-uy) + vay * (ux);
          }
@@ -1059,102 +1891,98 @@ const App = () => {
              }
              xte = bestCross;
          }
-         
+
          currentLaneIndex = Math.round(xte / guide.width);
     }
 
 
     if (guidanceLine === 'STRAIGHT_AB' && pointA && pointB) {
       const dx = pointB.x - pointA.x; const dy = pointB.y - pointA.y; const length = Math.sqrt(dx*dx + dy*dy); const ux = dx / length; const uy = dy / length;
-      const x1 = pointA.x - ux * 10000; const y1 = pointA.y - uy * 10000; const x2 = pointA.x + ux * 10000; const y2 = pointA.y + uy * 10000;
-      
+
       const elements = [];
-      
+
       if (isMultiLineMode) {
           const w = implementSettings.width * PIXELS_PER_METER;
-          const nx = -uy; const ny = ux; 
           const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
 
           for (let i = highlightedLane - 6; i <= highlightedLane + 6; i++) {
-              const offset = w * i;
+              const offset = (w * i) + manualOffset;
               const isActive = i === highlightedLane;
               const strokeColor = isActive ? "#2563eb" : "#93c5fd";
               const strokeWidth = isActive ? "4" : "2";
-              
+              const segment = getGuidanceLineSegmentAroundVehicle(pointA, { x: ux, y: uy }, offset);
+
               elements.push(
-                <line 
-                    key={`line-${i}`} 
-                    x1={x1 + nx * offset} y1={y1 + ny * offset} 
-                    x2={x2 + nx * offset} y2={y2 + ny * offset} 
-                    stroke={strokeColor} 
-                    strokeWidth={strokeWidth} 
+                <line
+                    key={`line-${i}`}
+                    x1={segment.start.x} y1={segment.start.y}
+                    x2={segment.end.x} y2={segment.end.y}
+                    stroke={strokeColor}
+                    strokeWidth={strokeWidth}
                 />
               );
           }
       } else {
            // Single Line Mode
-           const nx = -uy; const ny = ux;
            const offset = manualOffset;
-           
+           const segment = getGuidanceLineSegmentAroundVehicle(pointA, { x: ux, y: uy }, offset);
+
            elements.push(
-               <line 
+               <line
                    key="target-line"
-                   x1={x1 + nx * offset} y1={y1 + ny * offset} 
-                   x2={x2 + nx * offset} y2={y2 + ny * offset} 
-                   stroke="#2563eb" 
-                   strokeWidth="4" 
+                   x1={segment.start.x} y1={segment.start.y}
+                   x2={segment.end.x} y2={segment.end.y}
+                   stroke="#2563eb"
+                   strokeWidth="4"
                />
            );
       }
       return elements;
     }
-    
+
     if ((guidanceLine === 'A_PLUS' || (lineType === 'A_PLUS' && !guidanceLine)) && aPlusPoint && aPlusHeading !== null && aPlusHeading !== undefined) {
-        const rad = aPlusHeading * Math.PI / 180; 
-        const ux = Math.sin(rad); 
+        const rad = aPlusHeading * Math.PI / 180;
+        const ux = Math.sin(rad);
         const uy = -Math.cos(rad);
-        const x1 = aPlusPoint.x - ux * 100000; 
-        const y1 = aPlusPoint.y - uy * 100000; 
-        const x2 = aPlusPoint.x + ux * 100000; 
-        const y2 = aPlusPoint.y + uy * 100000;
-        
+
         const isPreview = !guidanceLine;
         const elements = [];
-        
+
         if (isPreview) {
-             elements.push(<line key="preview" x1={x1} y1={y1} x2={x2} y2={y2} stroke="red" strokeWidth="2" strokeDasharray="15, 10" />);
+             const segment = getGuidanceLineSegmentAroundVehicle(aPlusPoint, { x: ux, y: uy }, 0);
+             elements.push(<line key="preview" x1={segment.start.x} y1={segment.start.y} x2={segment.end.x} y2={segment.end.y} stroke="red" strokeWidth="2" strokeDasharray="15, 10" />);
         } else {
              if (isMultiLineMode) {
                 const w = implementSettings.width * PIXELS_PER_METER;
-                const nx = -uy; const ny = ux;
                 const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
 
                 for (let i = highlightedLane - 6; i <= highlightedLane + 6; i++) {
-                    const offset = w * i;
+                    const offset = (w * i) + manualOffset;
                     const isActive = i === highlightedLane;
                     const strokeColor = isActive ? "#2563eb" : "#93c5fd";
                     const strokeWidth = isActive ? "4" : "2";
+                    const segment = getGuidanceLineSegmentAroundVehicle(aPlusPoint, { x: ux, y: uy }, offset);
 
                     elements.push(
-                        <line 
+                        <line
                             key={`line-${i}`}
-                            x1={x1 + nx * offset} y1={y1 + ny * offset} 
-                            x2={x2 + nx * offset} y2={y2 + ny * offset} 
-                            stroke={strokeColor} 
-                            strokeWidth={strokeWidth} 
+                            x1={segment.start.x} y1={segment.start.y}
+                            x2={segment.end.x} y2={segment.end.y}
+                            stroke={strokeColor}
+                            strokeWidth={strokeWidth}
                         />
                     );
                 }
              } else {
-                const nx = -uy; const ny = ux;
                 const offset = manualOffset;
+                const segment = getGuidanceLineSegmentAroundVehicle(aPlusPoint, { x: ux, y: uy }, offset);
                 elements.push(
-                   <line 
+                   <line
                        key="target-line"
-                       x1={x1 + nx * offset} y1={y1 + ny * offset} 
-                       x2={x2 + nx * offset} y2={y2 + ny * offset} 
-                       stroke="#2563eb" 
-                       strokeWidth="4" 
+                       x1={segment.start.x} y1={segment.start.y}
+                       x2={segment.end.x} y2={segment.end.y}
+                       stroke="#2563eb"
+                       strokeWidth="4"
                    />
                );
              }
@@ -1167,16 +1995,16 @@ const App = () => {
         if (isMultiLineMode) {
             const w = implementSettings.width * PIXELS_PER_METER;
             const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
-            
+
             // Draw 5 lines (center + 2 each side)
             for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
-                const r = pivotRadius + (i * w);
+                const r = pivotRadius + (i * w) + manualOffset;
                 if (r > 0) {
                     const isActive = i === highlightedLane;
                     const strokeColor = isActive ? "#2563eb" : "#93c5fd";
                     const strokeWidth = isActive ? "4" : "2";
                     elements.push(
-                        <circle 
+                        <circle
                             key={`pivot-${i}`}
                             cx={pivotCenter.x} cy={pivotCenter.y} r={r}
                             fill="none"
@@ -1191,7 +2019,7 @@ const App = () => {
             const r = pivotRadius + manualOffset;
             if (r > 0) {
                 elements.push(
-                    <circle 
+                    <circle
                         key="target-pivot"
                         cx={pivotCenter.x} cy={pivotCenter.y} r={r}
                         fill="none"
@@ -1204,22 +2032,22 @@ const App = () => {
         return elements;
     }
 
-    if (guidanceLine === 'CURVE' && curvePoints.length > 1) {
+    if ((guidanceLine === 'CURVE' || guidanceLine === 'COMBINATION') && curvePoints.length > 1) {
         const elements = [];
-        
+
         if (isMultiLineMode) {
             const w = implementSettings.width * PIXELS_PER_METER;
             const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
-            
+
             // Draw 5 lines (center + 2 each side)
             for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
-                const offset = i * w;
+                const offset = (i * w) + manualOffset;
                 const isActive = i === highlightedLane;
                 const strokeColor = isActive ? "#2563eb" : "#93c5fd";
                 const strokeWidth = isActive ? "4" : "2";
-                
+
                 elements.push(
-                    <polyline 
+                    <polyline
                         key={`curve-${i}`}
                         points={getOffsetPolyline(curvePoints, offset)}
                         fill="none"
@@ -1231,7 +2059,7 @@ const App = () => {
         } else {
             // Single Mode
             elements.push(
-                <polyline 
+                <polyline
                     key="target-curve"
                     points={getOffsetPolyline(curvePoints, manualOffset)}
                     fill="none"
@@ -1249,19 +2077,19 @@ const App = () => {
   const renderActionDock = () => {
       // 1. Boundary Recording Active? Show controls
       if (isRecordingBoundary) {
-          return ( 
+          return (
             <div className={`p-3 rounded-2xl ${t.bgCard} shadow-lg border ${t.borderCard} flex flex-col gap-2 pointer-events-auto w-[60px]`}>
                <div className={`text-center font-bold text-orange-500 uppercase text-[8px]`}>REC</div>
                <DockButton theme={t} icon={Square} label="Finish" color="green" onClick={finishBoundaryRecording}/>
                <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelBoundaryRecording}/>
-            </div> 
+            </div>
           );
       }
 
       // 4. Default State (Collapsed Symbol)
       // If Auto is engaged, show trim controls - TAKES PRECEDENCE over creation if Auto is active
       if (steeringMode === 'AUTO') {
-           return ( 
+           return (
             <div className={`p-3 rounded-2xl ${t.bgCard} shadow-lg border ${t.borderCard} flex flex-col gap-2 pointer-events-auto w-[60px]`}>
                <span className={`text-[8px] text-center ${t.textSub} font-bold uppercase`}>TRIM</span>
                <DockButton theme={t} icon={CornerUpLeft} label="L 1cm" color="green" onClick={() => handleTrim('left')}/>
@@ -1276,10 +2104,10 @@ const App = () => {
       if (isCreating) {
         let content = null;
         switch (lineType) {
-            case 'STRAIGHT_AB': 
+            case 'STRAIGHT_AB':
                 let abLabel = "Set A"; let abColor = "blue";
                 if (pointA && !pointB) { abLabel = "Set B"; abColor = "red"; } else if (pointA && pointB) { abLabel = "Set A"; abColor = "green"; }
-                
+
                 const handleCancelAB = () => {
                     if (pointA && !pointB) {
                         actions.setPointA(null);
@@ -1291,9 +2119,9 @@ const App = () => {
 
                 content = ( <><DockButton theme={t} icon={Target} label={abLabel} color={abColor} onClick={handleABButtonClick} /><DockButton theme={t} icon={X} label="Cancel" color="red" onClick={handleCancelAB}/></> );
                 break;
-            case 'A_PLUS': 
+            case 'A_PLUS':
                 if (!aPlusPoint) {
-                    content = ( 
+                    content = (
                       <>
                         <DockButton theme={t} icon={Target} label="Set A" color="blue" onClick={handleSetAPlus_PointA}/>
                         <DockButton theme={t} icon={ArrowLeftRight} label="Shift" color="gray"/>
@@ -1301,29 +2129,39 @@ const App = () => {
                         {/* Added Cancel Button */}
                         <div className={`h-px ${t.divider} mx-1`}></div>
                         <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/>
-                      </> 
+                      </>
                     );
                 } else {
-                    content = ( 
+                    content = (
                         <>
                             <DockButton theme={t} icon={RotateCcw} label="Reset A" color="orange" onClick={() => { actions.setAPlusPoint({ ...worldPos }); actions.setAPlusHeading(null); showNotification("Point A Reset to Current Position", "info"); }}/>
-                            <DockButton theme={t} icon={Compass} label={aPlusHeading !== null ? `${aPlusHeading.toFixed(0)}Â°` : "Head"} color={aPlusHeading !== null ? "green" : "blue"} onClick={handleSetAPlus_HeadingCurrent}/>
+                            <DockButton theme={t} icon={Compass} label={aPlusHeading !== null ? `${aPlusHeading.toFixed(0)}\u00b0` : "Head"} color={aPlusHeading !== null ? "green" : "blue"} onClick={handleSetAPlus_HeadingCurrent}/>
                             <DockButton theme={t} icon={Keyboard} label="Input" color="gray" onClick={() => { setManualHeadingModalOpen(true); setTempManualHeading(heading.toFixed(1)); }}/>
                             <div className={`h-px ${t.divider} mx-1`}></div>
-                            
+
                             {aPlusHeading !== null && (
                                 <DockButton theme={t} icon={Check} label="OK" color="green" onClick={handleConfirmAPlus}/>
                             )}
-                            
+
                             <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={() => { actions.setAPlusPoint(null); actions.setAPlusHeading(null); }}/>
-                        </> 
+                        </>
                     );
                 }
                 break;
-            case 'CURVE': 
+            case 'CURVE':
                 content = ( <><DockButton theme={t} icon={isRecordingCurve ? Disc : Spline} label={isRecordingCurve ? "Stop" : "Record"} color={isRecordingCurve ? "red" : "blue"} onClick={handleRecordCurve} className={isRecordingCurve ? "animate-pulse" : ""} /><DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/></> );
                 break;
-            case 'PIVOT': 
+            case 'COMBINATION':
+                content = (
+                    <>
+                        <DockButton theme={t} icon={isRecordingCurve ? Pause : Disc} label={isRecordingCurve ? "Pause" : (curvePoints.length > 0 ? "Cont" : "Record")} color={isRecordingCurve ? "orange" : "blue"} onClick={isRecordingCurve ? handleCombinationPause : handleCombinationRecord} className={isRecordingCurve ? "animate-pulse" : ""} />
+                        {curvePoints.length > 2 && <DockButton theme={t} icon={Check} label="Finish" color="green" onClick={handleCombinationFinish} />}
+                        {isCombinationPaused && <DockButton theme={t} icon={AlignJustify} label="Line" color="gray" onClick={handleCombinationRecord} />}
+                        <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/>
+                    </>
+                );
+                break;
+            case 'PIVOT':
                 content = ( <><DockButton theme={t} icon={Target} label="Center" color={pivotCenter?"green":"blue"} onClick={handleSetCenter}/><DockButton theme={t} icon={CircleDashed} label="Edge" color={pivotRadius?"green":"blue"} onClick={handleSetRadius}/><DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/></> );
                 break;
             default: break;
@@ -1352,7 +2190,7 @@ const App = () => {
       // Default Tool Symbol - PLUS CIRCLE floating button
       return (
          <div className="pointer-events-auto">
-            <button 
+            <button
                 onClick={() => setDockMenuOpen(true)}
                 className={`w-16 h-16 rounded-full bg-blue-600 border-4 border-white/20 shadow-2xl flex items-center justify-center text-white hover:bg-blue-500 hover:scale-105 active:scale-95 transition-all`}
             >
@@ -1370,7 +2208,7 @@ const App = () => {
   const renderSettingsContent = () => {
     switch (settingsTab) {
         case 'display': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Display</h3><div className="grid grid-cols-1 gap-4"><SettingSlider theme={t} label="Brightness" value={85} min={0} max={100} /><div className={`flex items-center justify-between p-4 lg:p-5 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} border ${t.borderCard} rounded-xl`}><div className="flex items-center gap-3">{theme === 'light' ? <Sun className="w-6 h-6 text-orange-500" /> : <Moon className="w-6 h-6 text-blue-400" />}<span className={`font-bold text-base lg:text-lg ${t.textMain}`}>Theme</span></div><div className="flex bg-slate-700/20 p-1 rounded-lg"><button onClick={() => setTheme('light')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${theme === 'light' ? 'bg-white text-slate-900 shadow-md' : 'text-slate-500 hover:text-slate-700'}`}><Sun className="w-4 h-4" /> Light</button><button onClick={() => setTheme('dark')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${theme === 'dark' ? 'bg-slate-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}><Moon className="w-4 h-4" /> Dark</button></div></div><SettingToggle theme={t} label="Auto dark mode" active={false} /></div></div> );
-        case 'vehicle': return ( 
+        case 'vehicle': return (
             <div className="space-y-4">
                 <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Vehicle Configuration</h3>
                 <div className="grid grid-cols-2 gap-4">
@@ -1383,20 +2221,20 @@ const App = () => {
                     <SettingInput theme={t} label="Rear Hitch Length (m)" value={vehicleSettings.rearHitch} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, rearHitch: parseFloat(e.target.value) || 0})} />
                     <SettingInput theme={t} label="Turning Radius (m)" value={vehicleSettings.turnRadius} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, turnRadius: parseFloat(e.target.value) || 0})} />
                 </div>
-            </div> 
+            </div>
         );
-        case 'implement': return ( 
+        case 'implement': return (
             <div className="space-y-4">
                 <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Implement</h3>
                 <div className="grid grid-cols-2 gap-4">
                     <SettingInput theme={t} label="Implement Name" value={implementSettings.name} onChange={(e) => handleImplementChange('name', e.target.value)} />
                     <div className="flex flex-col gap-2">
                         <label className={`text-xs font-bold uppercase ${t.textSub}`}>Working Width (m)</label>
-                        <input 
-                            type="number" 
-                            value={implementSettings.width} 
-                            onChange={(e) => handleImplementChange('width', parseFloat(e.target.value) || 0)} 
-                            className={`${t.bgInput} border ${t.borderCard} rounded-xl px-4 py-3 ${t.textMain}`} 
+                        <input
+                            type="number"
+                            value={implementSettings.width}
+                            onChange={(e) => handleImplementChange('width', parseFloat(e.target.value) || 0)}
+                            className={`${t.bgInput} border ${t.borderCard} rounded-xl px-4 py-3 ${t.textMain}`}
                         />
                     </div>
                     <SettingInput theme={t} label="Overlap (cm)" value={implementSettings.overlap} type="number" onChange={(e) => handleImplementChange('overlap', parseFloat(e.target.value) || 0)} />
@@ -1404,24 +2242,112 @@ const App = () => {
                     <SettingInput theme={t} label="Delay On (s)" value={implementSettings.delayOn} type="number" onChange={(e) => handleImplementChange('delayOn', parseFloat(e.target.value) || 0)} />
                     <SettingInput theme={t} label="Delay Off (s)" value={implementSettings.delayOff} type="number" onChange={(e) => handleImplementChange('delayOff', parseFloat(e.target.value) || 0)} />
                 </div>
-            </div> 
+            </div>
         );
-        case 'guidance': return ( 
+        case 'guidance': return (
             <div className="space-y-4">
                 <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Guidance</h3>
                 <div className="grid grid-cols-1 gap-4">
                     <div onClick={handleToggleMultiLine} className={`flex items-center justify-between p-4 ${t.bgInput} border ${t.borderCard} rounded-xl cursor-pointer`}>
-                        <span className={`font-bold ${t.textMain}`}>Straight Line Multiple</span>
+                        <span className={`font-bold ${t.textMain}`}>Parallel Guidance Lines</span>
                         <div className={`w-12 h-7 rounded-full p-1 transition-colors ${isMultiLineMode ? 'bg-green-500' : 'bg-slate-400'}`}>
                             <div className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform ${isMultiLineMode ? 'translate-x-5' : ''}`}></div>
                         </div>
                     </div>
                     <SettingSlider theme={t} label="Steering Sensitivity" value={75} min={0} max={100} />
                     <SettingSlider theme={t} label="Line Acquisition Aggressiveness" value={60} min={0} max={100} />
-                    <SettingToggle theme={t} label="Enable U-Turn" active={true} />
-                    <SettingToggle theme={t} label="Terrain Compensation" active={true} />
+                    <FeatureToggle label="Terrain Compensation" detail="IMU slope and bump correction for stable line tracking" featureKey="terrainCompensation" icon={Activity} />
                 </div>
-            </div> 
+            </div>
+        );
+        case 'steering': return (
+            <div className="space-y-5">
+                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Steering System</h3>
+                <div className="grid grid-cols-1 gap-4">
+                    <FeatureToggle label="Electric Power Steering" detail="Power assist when manual intervention is detected" featureKey="electricPowerSteering" icon={SteeringWheelIcon} />
+                    <FeatureToggle label="Manual Intervention Ready" detail="Operator can take over without digging through screen controls" featureKey="manualIntervention" icon={MousePointer2} />
+                    <FeatureToggle label="Easy Switch / Foot Pedal" detail="External switch or pedal toggles auto and manual modes" featureKey="easySwitch" icon={Disc} />
+                    <FeatureToggle label="CANBUS Steer Ready" detail="Integrate with steer-ready tractors through CAN control" featureKey="canbusSteerReady" icon={Cpu} />
+                    <FeatureToggle label="PWM Steering Output" detail="Fallback PWM control path for hydraulic retrofits" featureKey="pwmSteerReady" icon={Activity} />
+                </div>
+            </div>
+        );
+        case 'uturn': return (
+            <div className="space-y-5">
+                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Headland / U-Turn</h3>
+                <div className="grid grid-cols-1 gap-4">
+                    <FeatureToggle label="Auto U-Turn" detail="Hands-free turn command at the end of the pass" featureKey="autoUTurn" icon={CornerUpLeft} />
+                    <FeatureToggle label="Headland Path" detail="Use boundary/headland paths to plan safe turn zones" featureKey="headlandTurn" icon={MapPin} />
+                    <div className={`${t.bgInput} border ${t.borderCard} rounded-xl p-4`}>
+                        <div className={`font-bold ${t.textMain} mb-3`}>Turn Pattern</div>
+                        <div className="grid grid-cols-3 gap-3">
+                            {['Basic Omega', 'Fish Tail', 'Smart U-Turn'].map((label, idx) => (
+                                <button key={label} className={`p-4 rounded-lg border ${idx === 2 ? 'border-blue-500 bg-blue-500/10 text-blue-500' : `${t.borderCard} ${t.textMain}`} font-bold text-sm`}>
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+        case 'isobus': return (
+            <div className="space-y-5">
+                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>ISOBUS / Implement Control</h3>
+                <div className="grid grid-cols-1 gap-4">
+                    <FeatureToggle label="ISOBUS UT" detail="Universal Terminal for compatible implement screens" featureKey="isobusUT" icon={Monitor} />
+                    <FeatureToggle label="TC-SC Section Control" detail="Automatic section switching to reduce skips and overlaps" featureKey="sectionControl" icon={CheckSquare} />
+                    <FeatureToggle label="TC-GEO Variable Rate" detail="Georeferenced rate control for prescription maps" featureKey="variableRate" icon={Layers} />
+                    <FeatureToggle label="Auto Acre Recording" detail="Work area starts/stops from implement state" featureKey="acreRecording" icon={Ruler} />
+                    <FeatureToggle label="Lift Sensor" detail="Detect implement raised/lowered for accurate coverage tracking" featureKey="liftSensor" icon={ArrowUpFromDot} />
+                </div>
+            </div>
+        );
+        case 'camera': return (
+            <div className="space-y-5">
+                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Camera</h3>
+                <div className="grid grid-cols-1 gap-4">
+                    <FeatureToggle label="Wired Camera" detail="Stable implement view for rear and row monitoring" featureKey="wiredCamera" icon={Video} />
+                    <FeatureToggle label="Wireless Camera" detail="Flexible safety feed for headland and blind spot coverage" featureKey="wirelessCamera" icon={Video} />
+                    <button onClick={() => setCameraPanelOpen(true)} className="px-5 py-3 rounded-lg bg-blue-600 text-white font-bold w-fit">Open Camera Monitor</button>
+                </div>
+            </div>
+        );
+        case 'diagnostics': return (
+            <div className="space-y-5">
+                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Diagnostics / OBD</h3>
+                <div className="grid grid-cols-1 gap-4">
+                    <FeatureToggle label="On-Board Diagnostics" detail="Live vehicle status: RPM, engine load, temperature and alerts" featureKey="obd" icon={Gauge} />
+                    <button onClick={() => setDiagnosticsPanelOpen(true)} className="px-5 py-3 rounded-lg bg-blue-600 text-white font-bold w-fit">Open Diagnostics Center</button>
+                </div>
+            </div>
+        );
+        case 'data': return (
+            <div className="space-y-5">
+                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Data Transfer</h3>
+                <div className="grid grid-cols-1 gap-4">
+                    <FeatureToggle label="USB Import / Export" detail="Move fields, boundaries, lines and task data between machines" featureKey="dataTransfer" icon={Save} />
+                    <div className="grid grid-cols-3 gap-3">
+                        {['Export Field', 'Import Lines', 'Backup Tasks'].map((label) => (
+                            <button key={label} onClick={() => showNotification(`${label} queued`, 'info')} className={`p-4 rounded-xl border ${t.borderCard} ${t.textMain} font-bold hover:brightness-95`}>{label}</button>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        );
+        case 'landlevel': return (
+            <div className="space-y-5">
+                <h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>GNSS Land Leveling</h3>
+                <div className="grid grid-cols-1 gap-4">
+                    <FeatureToggle label="Land Leveling Mode" detail="GNSS slope guidance for leveling workflows" featureKey="landLeveling" icon={Globe} />
+                    <FeatureToggle label="MOBA TRAC Correction" detail="Satellite correction workflow without a local base station" featureKey="mobaTrac" icon={Radio} />
+                    <div className={`${t.bgInput} border ${t.borderCard} rounded-xl p-4 grid grid-cols-3 gap-4`}>
+                        <SettingInput theme={t} label="Target Slope (%)" value="0.20" type="number" onChange={() => {}} />
+                        <SettingInput theme={t} label="Cross Slope (%)" value="0.00" type="number" onChange={() => {}} />
+                        <SettingInput theme={t} label="Blade Offset (cm)" value="0" type="number" onChange={() => {}} />
+                    </div>
+                </div>
+            </div>
         );
         case 'overview': {
             const quickTiles = [
@@ -1430,6 +2356,10 @@ const App = () => {
               { id: 'vehicle', label: 'Vehicle', desc: 'Type, wheelbase, axle width', icon: Tractor },
               { id: 'implement', label: 'Implement', desc: 'Width, offset, overlap', icon: Ruler },
               { id: 'guidance', label: 'Guidance', desc: 'Lines, auto-steer behavior', icon: Navigation },
+              { id: 'isobus', label: 'ISOBUS', desc: 'UT, section control, variable rate', icon: Cpu },
+              { id: 'steering', label: 'Steering', desc: 'EPS, easy switch, CAN/PWM', icon: SteeringWheelIcon },
+              { id: 'camera', label: 'Camera', desc: 'Wired and wireless monitor', icon: Video },
+              { id: 'diagnostics', label: 'Diagnostics', desc: 'OBD, hardware, logs', icon: AlertTriangle },
               { id: 'display', label: 'Display', desc: 'Theme, UI preferences', icon: Monitor }
             ];
 
@@ -1443,20 +2373,20 @@ const App = () => {
                   <div className={`px-4 py-2 rounded-lg border ${t.borderCard} ${t.textSub} text-xs font-bold uppercase`}>System Overview</div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                   {quickTiles.map((tile) => (
                     <button
                       key={tile.id}
                       onClick={() => setSettingsTab(tile.id)}
-                      className={`text-left ${t.bgPanel} border ${t.borderCard} rounded-2xl p-5 hover:brightness-95 transition`}
+                      className={`text-left ${t.bgPanel} border ${t.borderCard} rounded-xl p-4 min-h-[124px] hover:brightness-95 transition`}
                     >
-                      <div className="flex items-center justify-between mb-4">
-                        <div className={`w-12 h-12 rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
-                          <tile.icon className="w-6 h-6 text-blue-500" />
+                      <div className="flex items-center justify-between mb-3">
+                        <div className={`w-10 h-10 rounded-lg ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
+                          <tile.icon className="w-5 h-5 text-blue-500" />
                         </div>
                         <ChevronRight className={`${t.textDim} w-5 h-5`} />
                       </div>
-                      <div className={`text-lg font-bold ${t.textMain}`}>{tile.label}</div>
+                      <div className={`text-base font-bold ${t.textMain}`}>{tile.label}</div>
                       <div className={`text-xs ${t.textSub} mt-1`}>{tile.desc}</div>
                     </button>
                   ))}
@@ -1473,7 +2403,7 @@ const App = () => {
                   </div>
                   <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-4 rounded-xl border ${t.borderCard}`}>
                     <div className={`text-[10px] uppercase ${t.textSub}`}>Angle Sensor</div>
-                    <div className={`text-lg font-bold ${t.textMain}`}>{steeringAngle.toFixed(1)}°</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{`${steeringAngle.toFixed(1)}\u00b0`}</div>
                   </div>
                 </div>
               </div>
@@ -1509,7 +2439,7 @@ const App = () => {
                   { label: 'Calibrate Sensor', tone: 'primary', onClick: () => showNotification('Angle sensor calibration started', 'success') },
                   { label: 'Zero Offset', tone: 'ghost', onClick: () => showNotification('Angle sensor zeroed', 'info') }
                 ],
-                meta: { label: 'Live', value: `${steeringAngle.toFixed(1)}°` }
+                meta: { label: 'Live', value: `${steeringAngle.toFixed(1)}\u00b0` }
               }
             ];
 
@@ -1585,11 +2515,11 @@ const App = () => {
               { id: 25, az: 250, el: 25 },
               { id: 86, az: 315, el: 15 }
             ];
-            const skySize = 260;
-            const skyRadius = 110;
+            const skySize = 150;
+            const skyRadius = 62;
 
             return (
-              <div className="space-y-6">
+              <div className="space-y-4">
                 <h3 className={`text-xl font-bold mb-2 border-b ${t.borderCard} pb-2 ${t.textMain}`}>RTK / GNSS Status</h3>
 
                 <div className="flex gap-2 border-b border-slate-300/40">
@@ -1604,8 +2534,8 @@ const App = () => {
                   ))}
                 </div>
 
-                <div className={`${t.bgPanel} border ${t.borderCard} rounded-xl p-5`}>
-                  <div className="flex items-center justify-between mb-4">
+                <div className={`${t.bgPanel} border ${t.borderCard} rounded-xl p-4`}>
+                  <div className="flex items-center justify-between mb-3">
                     <div>
                       <div className={`text-xs uppercase tracking-widest ${t.textSub}`}>Link Status</div>
                       <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus}</div>
@@ -1617,7 +2547,7 @@ const App = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-12 gap-6 items-center">
+                <div className="grid grid-cols-12 gap-4 items-center">
                   <div className="col-span-3">
                     <div className={`text-xs uppercase ${t.textSub} mb-3`}>Satellites Used</div>
                     <div className="space-y-3">
@@ -1634,7 +2564,7 @@ const App = () => {
                   </div>
 
                   <div className="col-span-6 flex justify-center">
-                    <div className={`rounded-full border ${t.borderCard} p-4 ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-50'}`}>
+                    <div className={`rounded-full border ${t.borderCard} p-2 ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-50'}`}>
                       <svg width={skySize} height={skySize} viewBox={`0 0 ${skySize} ${skySize}`}>
                         <circle cx={skySize / 2} cy={skySize / 2} r={skyRadius} fill="none" stroke={theme === 'dark' ? '#475569' : '#cbd5f5'} strokeWidth="2" />
                         <circle cx={skySize / 2} cy={skySize / 2} r={skyRadius * 0.66} fill="none" stroke={theme === 'dark' ? '#475569' : '#cbd5f5'} strokeWidth="1" />
@@ -1678,19 +2608,19 @@ const App = () => {
                 <div className="grid grid-cols-4 gap-4">
                   <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-xl border ${t.borderCard}`}>
                     <div className={`text-[10px] uppercase ${t.textSub}`}>Correction Age</div>
-                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '0.7s' : 'â€”'}</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '0.7s' : 'N/A'}</div>
                   </div>
                   <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-xl border ${t.borderCard}`}>
                     <div className={`text-[10px] uppercase ${t.textSub}`}>Latency</div>
-                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '220ms' : 'â€”'}</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '220ms' : 'N/A'}</div>
                   </div>
                   <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-xl border ${t.borderCard}`}>
                     <div className={`text-[10px] uppercase ${t.textSub}`}>Baseline</div>
-                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '12.4 km' : 'â€”'}</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '12.4 km' : 'N/A'}</div>
                   </div>
                   <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-4 rounded-xl border ${t.borderCard}`}>
                     <div className={`text-[10px] uppercase ${t.textSub}`}>Accuracy (H/V)</div>
-                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '2.2 cm / 3.1 cm' : 'â€”'}</div>
+                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus === 'FIX' ? '2.2 cm / 3.1 cm' : 'N/A'}</div>
                   </div>
                 </div>
 
@@ -1734,21 +2664,21 @@ const App = () => {
 const renderLinesPanel = () => {
     const activeField = fields.find(f => f.id === selectedFieldId);
     const lines = activeField?.lines || [];
-    
+
     return (
         <div className={`w-full h-full flex flex-col ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}>
-            {/* Header vá»›i nÃºt X */}
+            {/* Header with close action */}
             <div className={`flex items-center justify-between p-6 border-b ${t.divider}`}>
                 <h2 className={`text-xl font-bold ${t.textMain}`}>Lines Management</h2>
-                <button 
-                    onClick={() => setLinesPanelOpen(false)} 
+                <button
+                    onClick={() => setLinesPanelOpen(false)}
                     className={`p-2 rounded-lg ${t.activeItem} hover:brightness-95 transition-all`}
                 >
                     <X className="w-5 h-5" />
                 </button>
             </div>
-            
-            {/* Ná»™i dung panel */}
+
+            {/* Panel content */}
             <div className="flex-1 overflow-y-auto p-6">
                 {lines.length === 0 ? (
                     <div className={`text-center py-12 ${t.textDim}`}>
@@ -1758,7 +2688,9 @@ const renderLinesPanel = () => {
                     </div>
                 ) : (
                     <div className="space-y-4">
-                        {lines.map((line, index) => (
+                        {lines.map((line, index) => {
+                            const lengthMeters = getLineLengthMeters(line);
+                            return (
                             <div key={line.id} className={`p-4 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-50'} border ${t.borderCard} rounded-xl`}>
                                 <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-3">
@@ -1766,14 +2698,14 @@ const renderLinesPanel = () => {
                                         <span className={`font-medium ${t.textMain}`}>{line.name || `Line ${index + 1}`}</span>
                                     </div>
                                     <div className="flex items-center gap-2">
-                                        <button 
-                                            onClick={() => actions.setActiveLineId(line.id)} 
+                                        <button
+                                            onClick={() => actions.setActiveLineId(line.id)}
                                             className={`px-3 py-1 text-sm rounded-lg ${line.active ? 'bg-green-600 text-white' : `border ${t.borderCard} ${t.textSub} hover:bg-opacity-10 hover:bg-current`}`}
                                         >
                                             {line.active ? 'Active' : 'Activate'}
                                         </button>
-                                        <button 
-                                            onClick={() => deleteLine(line.id)} 
+                                        <button
+                                            onClick={() => deleteLine(line.id)}
                                             className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
                                         >
                                             <Trash2 className="w-4 h-4" />
@@ -1781,21 +2713,21 @@ const renderLinesPanel = () => {
                                     </div>
                                 </div>
                                 <div className={`mt-3 text-sm ${t.textSub}`}>
-                                    <p>Length: {line.length?.toFixed(1) || 'N/A'} m</p>
-                                    <p>Created: {new Date(line.createdAt).toLocaleDateString()}</p>
+                                    <p>Length: {lengthMeters !== null ? lengthMeters.toFixed(1) : '--'} m</p>
+                                    <p>Created: {formatLineDate(line)}</p>
                                 </div>
                             </div>
-                        ))}
+                        );})}
                     </div>
                 )}
-                
-                {/* NÃºt táº¡o line má»›i */}
+
+                {/* Create line action */}
                 <div className="mt-6 flex justify-center">
-                    <button 
+                    <button
                         onClick={() => {
                             setLinesPanelOpen(false);
                             setLineModeModalOpen(true);
-                        }} 
+                        }}
                         className="px-6 py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-500 transition-colors flex items-center gap-2"
                     >
                         <Plus className="w-5 h-5" />
@@ -1809,7 +2741,7 @@ const renderLinesPanel = () => {
 
   const renderFieldManager = () => {
       const activeField = fields.find(f => f.id === selectedFieldId);
-      
+
       let rightContent;
       if (viewMode === 'CREATE_FIELD') {
           rightContent = (
@@ -1847,11 +2779,11 @@ const renderLinesPanel = () => {
                         {/* LINES SECTION */}
                         <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
                             <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Saved Lines</h4></div>
-                            {lines && lines.length > 0 ? ( <div className="space-y-2">{lines.map((l) => (<div key={l.id} className={`flex items-center justify-between p-3 rounded-lg border ${t.borderCard}`}><div className="flex items-center gap-3">{l.type === 'CURVE' ? <Spline className="w-5 h-5 text-purple-500" /> : <GitCommitHorizontal className="w-5 h-5 text-blue-500" />}<span className={t.textMain}>{l.name}</span></div><div className="flex items-center gap-2"><span className={`text-xs ${t.textSub}`}>{l.date}</span><button onClick={() => confirmDelete('line', l.id)} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button><button onClick={() => handleLoadLine(l)} className={`px-3 py-1 rounded text-xs font-bold ${activeLineId === l.id ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500'}`}>{activeLineId === l.id ? 'Active' : 'Load'}</button></div></div>))}</div>) : (<div className={`text-center py-4 ${t.textDim}`}>No lines saved</div>)}
+                            {lines && lines.length > 0 ? ( <div className="space-y-2">{lines.map((l) => (<div key={l.id} className={`flex items-center justify-between p-3 rounded-lg border ${t.borderCard}`}><div className="flex items-center gap-3">{l.type === 'CURVE' ? <Spline className="w-5 h-5 text-purple-500" /> : l.type === 'COMBINATION' ? <AlignJustify className="w-5 h-5 text-purple-500" /> : <GitCommitHorizontal className="w-5 h-5 text-blue-500" />}<span className={t.textMain}>{l.name}</span></div><div className="flex items-center gap-2"><span className={`text-xs ${t.textSub}`}>{l.date}</span><button onClick={() => confirmDelete('line', l.id)} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button><button onClick={() => handleLoadLine(l)} className={`px-3 py-1 rounded text-xs font-bold ${activeLineId === l.id ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500'}`}>{activeLineId === l.id ? 'Active' : 'Load'}</button></div></div>))}</div>) : (<div className={`text-center py-4 ${t.textDim}`}>No lines saved</div>)}
                         </div>
                         {/* TASKS SECTION */}
                         <div className={`p-6 rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
-                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Tasks History</h4><button onClick={startTaskCreation} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> New Task</button></div>{activeField.tasks.length > 0 ? (<div className="space-y-2">{activeField.tasks.map(task => (<div key={task.id} className={`flex items-center justify-between p-4 rounded-lg border transition-all ${activeTaskId === task.id ? 'border-green-500 bg-green-500/10' : t.borderCard}`}><div className="flex items-center gap-4"><div className="p-2 rounded bg-blue-500/20 text-blue-500">{task.type === 'Planting' ? <Sprout className="w-5 h-5"/> : task.type === 'Spraying' ? <Droplets className="w-5 h-5"/> : <Tractor className="w-5 h-5"/>}</div><div><div className={`font-bold ${t.textMain}`}>{task.name}</div><div className={`text-xs ${t.textSub}`}>{task.date} â€¢ {task.status}</div></div></div><div className="flex gap-2">{activeTaskId === task.id ? (<><button onClick={() => handleTaskAction(task, 'pause')} className="p-2 bg-orange-500/20 text-orange-500 rounded-lg hover:bg-orange-500/30"><Pause className="w-4 h-4" /></button><button onClick={() => handleTaskAction(task, 'finish')} className="p-2 bg-green-500/20 text-green-500 rounded-lg hover:bg-green-500/30"><CheckSquare className="w-4 h-4" /></button></>) : (task.status !== 'Done' && (<><button onClick={() => handleTaskAction(task, 'start')} className="p-2 bg-blue-500/20 text-blue-500 rounded-lg hover:bg-blue-500/30"><PlayCircle className="w-4 h-4" /></button><button onClick={() => confirmDelete('task', task.id)} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button></>))}</div></div>))}</div>) : (<div className={`text-center py-8 ${t.textDim}`}>No tasks recorded yet.</div>)}</div>
+                            <div className="flex justify-between items-center mb-4"><h4 className={`font-bold uppercase ${t.textSub}`}>Tasks History</h4><button onClick={startTaskCreation} className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1"><Plus className="w-4 h-4"/> New Task</button></div>{activeField.tasks.length > 0 ? (<div className="space-y-2">{activeField.tasks.map(task => (<div key={task.id} className={`flex items-center justify-between p-4 rounded-lg border transition-all ${activeTaskId === task.id ? 'border-green-500 bg-green-500/10' : t.borderCard}`}><div className="flex items-center gap-4"><div className="p-2 rounded bg-blue-500/20 text-blue-500">{task.type === 'Planting' ? <Sprout className="w-5 h-5"/> : task.type === 'Spraying' ? <Droplets className="w-5 h-5"/> : <Tractor className="w-5 h-5"/>}</div><div><div className={`font-bold ${t.textMain}`}>{task.name}</div><div className={`text-xs ${t.textSub}`}>{task.date} - {task.status}</div></div></div><div className="flex gap-2">{activeTaskId === task.id ? (<><button onClick={() => handleTaskAction(task, 'pause')} className="p-2 bg-orange-500/20 text-orange-500 rounded-lg hover:bg-orange-500/30"><Pause className="w-4 h-4" /></button><button onClick={() => handleTaskAction(task, 'finish')} className="p-2 bg-green-500/20 text-green-500 rounded-lg hover:bg-green-500/30"><CheckSquare className="w-4 h-4" /></button></>) : (task.status !== 'Done' && (<><button onClick={() => handleTaskAction(task, 'start')} className="p-2 bg-blue-500/20 text-blue-500 rounded-lg hover:bg-blue-500/30"><PlayCircle className="w-4 h-4" /></button><button onClick={() => confirmDelete('task', task.id)} className={`p-2 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30`}><Trash2 className="w-4 h-4"/></button></>))}</div></div>))}</div>) : (<div className={`text-center py-8 ${t.textDim}`}>No tasks recorded yet.</div>)}</div>
                   </div>
                   <div className={`p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button onClick={handleDeleteField} className={`px-6 py-3 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 flex items-center gap-2`}><Trash2 className="w-5 h-5" /> Delete</button><button onClick={handleLoadField} className="px-8 py-3 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500 shadow-lg shadow-green-900/20 flex items-center gap-2"><CheckCircle2 className="w-5 h-5" /> Load Field</button></div>
               </div>
@@ -1883,12 +2815,12 @@ const renderLinesPanel = () => {
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
                     <RailButton theme={t} icon={LayoutGrid} label="Field" active={fieldManagerOpen} onClick={() => {setFieldManagerOpen(true); setSettingsOpen(false); setLinesPanelOpen(false);}} />
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
-                    <RailButton 
-                        theme={t} 
-                        icon={Route} 
-                        label="Lines" 
-                        active={linesPanelOpen} 
-                        onClick={() => {setLinesPanelOpen(true); setFieldManagerOpen(false); setSettingsOpen(false);}} 
+                    <RailButton
+                        theme={t}
+                        icon={Route}
+                        label="Lines"
+                        active={linesPanelOpen}
+                        onClick={() => {setLinesPanelOpen(true); setFieldManagerOpen(false); setSettingsOpen(false);}}
                     />
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
                     <RailButton theme={t} icon={Settings} label="System" active={settingsOpen} onClick={() => {setSettingsOpen(true); setFieldManagerOpen(false); setLinesPanelOpen(false);}} />
@@ -1903,57 +2835,113 @@ const renderLinesPanel = () => {
             {/* MAIN AREA */}
             <main className={`flex-1 relative flex flex-col ${t.textMain} font-sans select-none`}>
                 {/* 2B) MAP CANVAS */}
-                <div className={`absolute inset-0 ${t.bgMain} z-0 overflow-hidden transition-colors duration-500`} 
-                     onMouseDown={handleMapMouseDown}
-                     onMouseMove={handleMapMouseMove}
-                     onMouseUp={handleMapMouseUp}
-                     onMouseLeave={handleMapMouseUp}
-                     style={{ cursor: isDraggingMap ? 'grabbing' : 'grab' }}>
-                    
-                    {/* Fixed Map (North Up) - Only scale applies here */}
-                    <div className="absolute w-full h-full" style={{ transformOrigin: '50% 60%', transform: `scale(${zoomLevel})`, transition: 'transform 0.1s linear' }}>
-                        <div className="absolute w-full h-full" style={{ transform: `translate(${-worldPos.x + dragOffset.x}px, ${-worldPos.y + dragOffset.y}px)`, transition: isDraggingMap ? 'none' : 'transform 0.05s linear' }}>
-                            <div className="absolute -top-[10000px] -left-[10000px] w-[20000px] h-[20000px] opacity-20" style={{ backgroundImage: `linear-gradient(${t.gridColor1} 1px, transparent 1px), linear-gradient(90deg, ${t.gridColor1} 1px, transparent 1px)`, backgroundSize: '50px 50px' }}></div>
-                            
+                <div className={`absolute inset-x-0 top-[72px] bottom-[92px] ${t.bgMain} z-0 overflow-hidden transition-colors duration-500`}
+                     onPointerDown={handleMapPointerDown}
+                     onPointerMove={handleMapPointerMove}
+                     onPointerUp={handleMapPointerUp}
+                     onPointerCancel={handleMapPointerUp}
+                     onPointerLeave={handleMapPointerUp}
+                     style={{
+                         cursor: 'default',
+                         touchAction: 'none',
+                          background: isMap3D
+                              ? (theme === 'dark' ? '#15171e' : '#f3f4f6')
+                              : undefined
+                      }}>
+
+                    {/* Heading-up map: zoom, map rotation, then world translation. */}
+                    <div
+                        data-map-layer="scale"
+                        className="absolute w-full h-full z-0"
+                        style={{
+                            transformOrigin: '50% 60%',
+                            transform: `scale(${zoomLevel})`,
+                            transition: 'transform 0.1s linear',
+                            willChange: 'transform'
+                        }}
+                    >
+                        <div
+                            data-map-layer="rotation"
+                            className="absolute w-full h-full z-0"
+                            style={{
+                                transformOrigin: '50% 60%',
+                                transform: `rotate(${sceneRotationDeg}deg)`,
+                                transition: Math.abs(speed) > 0.1 ? 'none' : 'transform 0.16s ease-out',
+                                willChange: 'transform'
+                            }}
+                        >
+                        {!isMap3D && (
+                            <>
+                                <div
+                                    data-map-layer="grid-2d-minor"
+                                    className="absolute -inset-[75%] z-0 pointer-events-none"
+                                    style={{
+                                        opacity: theme === 'dark' ? 0.14 : 0.09,
+                                        backgroundImage: `linear-gradient(${t.gridColor1} 1px, transparent 1px), linear-gradient(90deg, ${t.gridColor1} 1px, transparent 1px)`,
+                                        backgroundSize: `${gridMinorSize}px ${gridMinorSize}px`,
+                                        backgroundPosition: `${gridOffsetX2DMinor}px ${gridOffsetY2DMinor}px`
+                                    }}
+                                />
+                                <div
+                                    data-map-layer="grid-2d-major"
+                                    className="absolute -inset-[75%] z-[1] pointer-events-none"
+                                    style={{
+                                        opacity: theme === 'dark' ? 0.26 : 0.17,
+                                        backgroundImage: `linear-gradient(${t.gridColor1} 1.5px, transparent 1.5px), linear-gradient(90deg, ${t.gridColor1} 1.5px, transparent 1.5px)`,
+                                        backgroundSize: `${gridMajorSize}px ${gridMajorSize}px`,
+                                        backgroundPosition: `${gridOffsetX2DMajor}px ${gridOffsetY2DMajor}px`
+                                    }}
+                                />
+                            </>
+                        )}
+                        <div
+                            data-map-layer="world"
+                            className="absolute w-full h-full z-0"
+                            style={{
+                                transform: `translate3d(${-worldPos.x + dragOffset.x}px, ${-worldPos.y + dragOffset.y}px, 0)`,
+                                transition: isDraggingMap || Math.abs(speed) > 0.1 ? 'none' : 'transform 0.12s ease-out',
+                                willChange: 'transform'
+                            }}
+                        >
                             {/* RENDER TEMP BOUNDARY WHILE RECORDING */}
-                            {isRecordingBoundary && tempBoundary.map((pt, i) => <div key={i} className="absolute w-2 h-2 bg-orange-500 rounded-full" style={{ left: `calc(50% + ${pt.x}px)`, top: `calc(60% + ${pt.y}px)` }} />)}
-                            
+                            {!isMap3D && isRecordingBoundary && tempBoundary.map((pt, i) => <div key={i} className="absolute w-2 h-2 bg-orange-500 rounded-full" style={{ left: `calc(50% + ${pt.x}px)`, top: `calc(60% + ${pt.y}px)` }} />)}
+
                             {/* RENDER SAVED BOUNDARIES (LOADED FIELD & NEW FIELD CREATION) */}
-                            <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none">
+                            {!isMap3D && <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none">
                                 <g style={{ transform: 'translate(50%, 60%)' }}>
                                     {(loadedField?.boundaries || []).concat(viewMode === 'CREATE_FIELD' ? currentFieldBoundaries : []).map((bound, bIdx) => (
-                                        <polygon 
+                                        <polygon
                                             key={bIdx}
                                             points={(bound.points || bound).map(p => `${p.x},${p.y}`).join(' ')}
-                                            fill={bIdx === activeBoundaryIdx ? "rgba(234, 179, 8, 0.2)" : "rgba(100, 116, 139, 0.2)"} 
-                                            stroke={bIdx === activeBoundaryIdx ? "#eab308" : "#64748b"} 
+                                            fill={bIdx === activeBoundaryIdx ? "rgba(234, 179, 8, 0.2)" : "rgba(100, 116, 139, 0.2)"}
+                                            stroke={bIdx === activeBoundaryIdx ? "#eab308" : "#64748b"}
                                             strokeWidth="2"
-                                            strokeDasharray="5,5" 
+                                            strokeDasharray="5,5"
                                         />
                                     ))}
                                     {previewBoundary && (
-                                        <polygon 
+                                        <polygon
                                             points={previewBoundary.map(p => `${p.x},${p.y}`).join(' ')}
-                                            fill="rgba(34, 197, 94, 0.3)" 
-                                            stroke="#22c55e" 
+                                            fill="rgba(34, 197, 94, 0.3)"
+                                            stroke="#22c55e"
                                             strokeWidth="3"
-                                            strokeDasharray="5,5" 
+                                            strokeDasharray="5,5"
                                         />
                                     )}
                                 </g>
-                            </svg>
+                            </svg>}
 
 
-                            {coverageTrail.map((point, i) => <div key={i} className="absolute bg-green-500/30" style={{ left: `calc(50% + ${point.x}px)`, top: `calc(60% + ${point.y}px)`, width: '20px', height: '20px', transform: `translate(-50%, -50%) rotate(${point.h}deg) scale(6, 1)` }}></div>)}
-                            
+                            {!isMap3D && coverageTrail.map((point, i) => <div key={i} className="absolute bg-green-500/30" style={{ left: `calc(50% + ${point.x}px)`, top: `calc(60% + ${point.y}px)`, width: '20px', height: '20px', transform: `translate(-50%, -50%) rotate(${point.h}deg) scale(6, 1)` }}></div>)}
+
                             {/* CLOSING LOOP LINE (Visual Guide) */}
-                            {isRecordingBoundary && tempBoundary.length > 0 && (
+                            {!isMap3D && isRecordingBoundary && tempBoundary.length > 0 && (
                                 <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none">
-                                    <line 
-                                        x1={`calc(50% + ${tempBoundary[0].x}px)`} 
-                                        y1={`calc(60% + ${tempBoundary[0].y}px)`} 
-                                        x2={`calc(50% + ${worldPos.x}px)`} 
-                                        y2={`calc(60% + ${worldPos.y}px)`} 
+                                    <line
+                                        x1={`calc(50% + ${tempBoundary[0].x}px)`}
+                                        y1={`calc(60% + ${tempBoundary[0].y}px)`}
+                                        x2={`calc(50% + ${worldPos.x}px)`}
+                                        y2={`calc(60% + ${worldPos.y}px)`}
                                         stroke="orange" strokeWidth="2" strokeDasharray="10,5" strokeOpacity="0.7"
                                     />
                                 </svg>
@@ -1962,43 +2950,89 @@ const renderLinesPanel = () => {
                             {/* DYNAMIC DRAWING LAYER (RED LINES) & GUIDANCE LINES (BLUE) */}
                             <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none">
                                 <g style={{ transform: 'translate(50%, 60%)' }}>
-                                    {!guidanceLine && pointA && lineType === 'STRAIGHT_AB' && <line x1={pointA.x} y1={pointA.y} x2={worldPos.x} y2={worldPos.y} stroke="red" strokeWidth="3" />}
-                                    {isRecordingCurve && <polyline points={curvePoints.map(p => `${p.x},${p.y}`).join(' ') + ` ${worldPos.x},${worldPos.y}`} fill="none" stroke="red" strokeWidth="3" />}
-                                    {!guidanceLine && pivotCenter && lineType === 'PIVOT' && <line x1={pivotCenter.x} y1={pivotCenter.y} x2={worldPos.x} y2={worldPos.y} stroke="red" strokeWidth="3" />}
+                                    {!isMap3D && !guidanceLine && pointA && lineType === 'STRAIGHT_AB' && <line x1={pointA.x} y1={pointA.y} x2={worldPos.x} y2={worldPos.y} stroke="red" strokeWidth="3" />}
+                                    {!isMap3D && isRecordingCurve && <polyline points={curvePoints.map(p => `${p.x},${p.y}`).join(' ') + ` ${worldPos.x},${worldPos.y}`} fill="none" stroke="red" strokeWidth="3" />}
+                                    {!isMap3D && !guidanceLine && pivotCenter && lineType === 'PIVOT' && <line x1={pivotCenter.x} y1={pivotCenter.y} x2={worldPos.x} y2={worldPos.y} stroke="red" strokeWidth="3" />}
                                     {renderGuidanceLine()}
                                 </g>
                             </svg>
 
                             {/* CURVE & PIVOT DOTS/CIRCLES */}
-                            {(guidanceLine === 'CURVE' || isRecordingCurve) && curvePoints.map((pt, i) => <div key={i} className="absolute w-2 h-2 bg-blue-400 rounded-full" style={{ left: `calc(50% + ${pt.x}px)`, top: `calc(60% + ${pt.y}px)` }}></div>)}
-                            {guidanceLine === 'PIVOT' && pivotCenter && pivotRadius && [0, 1].map(offset => (<div key={offset} className="absolute border-2 border-blue-500/30 rounded-full" style={{left: `calc(50% + ${pivotCenter.x}px)`, top: `calc(60% + ${pivotCenter.y}px)`, width: `${(pivotRadius + offset * 120) * 2}px`, height: `${(pivotRadius + offset * 120) * 2}px`, transform: 'translate(-50%, -50%)'}}></div>))}
+                            {!isMap3D && ((guidanceLine === 'CURVE' || guidanceLine === 'COMBINATION') || isRecordingCurve) && curvePoints.map((pt, i) => <div key={i} className="absolute w-2 h-2 bg-blue-400 rounded-full" style={{ left: `calc(50% + ${pt.x}px)`, top: `calc(60% + ${pt.y}px)` }}></div>)}
+                            {!isMap3D && guidanceLine === 'PIVOT' && pivotCenter && pivotRadius && [0, 1].map(offset => (<div key={offset} className="absolute border-2 border-blue-500/30 rounded-full" style={{left: `calc(50% + ${pivotCenter.x}px)`, top: `calc(60% + ${pivotCenter.y}px)`, width: `${(pivotRadius + offset * 120) * 2}px`, height: `${(pivotRadius + offset * 120) * 2}px`, transform: 'translate(-50%, -50%)'}}></div>))}
 
-                            {pointA && <div className="absolute flex flex-col items-center" style={{ left: `calc(50% + ${pointA.x}px)`, top: `calc(60% + ${pointA.y}px)`, transform: 'translate(-50%, -50%)' }}><div className="w-6 h-6 bg-blue-600 rounded-full border-2 border-white shadow-lg text-white flex items-center justify-center font-bold text-xs">A</div></div>}
+                            {!isMap3D && pointA && <div className="absolute flex flex-col items-center" style={{ left: `calc(50% + ${pointA.x}px)`, top: `calc(60% + ${pointA.y}px)`, transform: 'translate(-50%, -50%)' }}><div className="w-6 h-6 bg-blue-600 rounded-full border-2 border-white shadow-lg text-white flex items-center justify-center font-bold text-xs">A</div></div>}
                             {/* A+ Point Marker */}
-                            {aPlusPoint && <div className="absolute flex flex-col items-center" style={{ left: `calc(50% + ${aPlusPoint.x}px)`, top: `calc(60% + ${aPlusPoint.y}px)`, transform: 'translate(-50%, -50%)' }}><div className="w-6 h-6 bg-purple-600 rounded-full border-2 border-white shadow-lg text-white flex items-center justify-center font-bold text-xs">A+</div></div>}
-                            
-                            {pointB && <div className="absolute flex flex-col items-center" style={{ left: `calc(50% + ${pointB.x}px)`, top: `calc(60% + ${pointB.y}px)`, transform: 'translate(-50%, -50%)' }}><div className="w-6 h-6 bg-blue-600 rounded-full border-2 border-white shadow-lg text-white flex items-center justify-center font-bold text-xs">B</div></div>}
-                        
-                            {/* TRACTOR INSIDE MAP - Rotates based on heading */}
-                             <div 
-                                className="absolute flex flex-col items-center pointer-events-none" 
-                                style={{ 
-                                    left: `calc(50% + ${worldPos.x}px)`, 
-                                    top: `calc(60% + ${worldPos.y}px)`, 
-                                    transform: `translate(-50%, -50%) rotate(${heading}deg)`,
-                                    transformOrigin: 'center center' // Ensure it rotates around its center
+                            {!isMap3D && aPlusPoint && <div className="absolute flex flex-col items-center" style={{ left: `calc(50% + ${aPlusPoint.x}px)`, top: `calc(60% + ${aPlusPoint.y}px)`, transform: 'translate(-50%, -50%)' }}><div className="w-6 h-6 bg-purple-600 rounded-full border-2 border-white shadow-lg text-white flex items-center justify-center font-bold text-xs">A+</div></div>}
+
+                            {!isMap3D && pointB && <div className="absolute flex flex-col items-center" style={{ left: `calc(50% + ${pointB.x}px)`, top: `calc(60% + ${pointB.y}px)`, transform: 'translate(-50%, -50%)' }}><div className="w-6 h-6 bg-blue-600 rounded-full border-2 border-white shadow-lg text-white flex items-center justify-center font-bold text-xs">B</div></div>}
+
+                        </div>
+                        </div>
+                    </div>
+
+                    {renderGroundPlane3D()}
+
+                    {isMap3D && (
+                        <svg
+                            data-guidance-layer="3d"
+                            className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none z-[12]"
+                            viewBox="0 0 1000 700"
+                            preserveAspectRatio="none"
+                            style={{
+                                opacity: viewTransitioning ? 0.72 : 1,
+                                transform: viewTransitioning ? 'scale(0.985)' : 'scale(1)',
+                                transformOrigin: '50% 60%',
+                                transition: 'opacity 0.28s ease, transform 0.28s ease',
+                                willChange: 'opacity, transform'
+                            }}
+                        >
+                            {renderGuidanceLine3D()}
+                        </svg>
+                    )}
+
+                    {isMap3D && (
+                        <div className="absolute inset-0 pointer-events-none z-10">
+                            <div
+                                className="absolute inset-x-0 top-0 h-[42%]"
+                                style={{
+                                    background: theme === 'dark'
+                                        ? 'linear-gradient(180deg, rgba(21,23,30,0.02) 0%, rgba(21,23,30,0.01) 54%, rgba(21,23,30,0) 100%)'
+                                        : 'linear-gradient(180deg, rgba(243,244,246,0.02) 0%, rgba(243,244,246,0.01) 54%, rgba(243,244,246,0) 100%)'
                                 }}
-                             >
-                                <div className="relative group scale-100 lg:scale-110">
-                                    <TractorVehicle mode={steeringMode} steeringAngle={steeringAngle} implementWidth={implementSettings.width} vehicleSettings={vehicleSettings} />
-                                </div>
-                            </div>
+                            />
+                            <div
+                                className="absolute inset-x-0 bottom-0 h-[24%]"
+                                style={{
+                                    background: theme === 'dark'
+                                        ? 'linear-gradient(0deg, rgba(21,23,30,0.05) 0%, rgba(21,23,30,0) 100%)'
+                                        : 'linear-gradient(0deg, rgba(243,244,246,0.04) 0%, rgba(243,244,246,0) 100%)'
+                                }}
+                            />
+                        </div>
+                    )}
+
+                    {/* Vehicle anchor: screen-stable in heading-up, independent from the pitched map plane. */}
+                    <div
+                        data-vehicle-anchor
+                        className="absolute flex flex-col items-center pointer-events-none z-[15]"
+                        style={{
+                            left: `calc(50% + ${vehicleScreenOffsetX}px)`,
+                            top: `calc(60% + ${vehicleScreenOffsetY}px)`,
+                            transform: `translate3d(-50%, -50%, 0) rotate(${vehicleScreenHeading}deg) scale(${vehicleScreenScale * (viewTransitioning ? 0.96 : 1)})`,
+                            transformOrigin: 'center center',
+                            transition: viewTransitioning ? 'transform 0.28s ease' : 'none',
+                            willChange: 'transform'
+                        }}
+                    >
+                        <div className="relative group">
+                            <TractorVehicle mode={steeringMode} steeringAngle={steeringAngle} implementWidth={implementSettings.width} vehicleSettings={vehicleSettings} viewMode={sceneViewMode} />
                         </div>
                     </div>
 
                     {/* RE-CENTER BUTTON */}
                     {(dragOffset.x !== 0 || dragOffset.y !== 0) && (
-                        <button 
+                        <button
                             onClick={handleRecenter}
                             className={`absolute bottom-32 right-[120px] p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain} shadow-lg flex items-center gap-2 z-20`}
                         >
@@ -2016,14 +3050,32 @@ const renderLinesPanel = () => {
                         <button onClick={() => handleZoom('in')} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain}`}><Plus className="w-6 h-6"/></button>
                         <button onClick={() => handleZoom('out')} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain}`}><Minus className="w-6 h-6"/></button>
                     </div>
+                    {renderFeatureStatusStrip()}
+                    {renderCompassWidget()}
                 </div>
 
                 {/* ... rest of the app ... */}
-                <header className={`h-[10%] min-h-[40px] ${t.bgHeader} backdrop-blur-md flex items-center justify-between px-[3%] z-20 border-b ${t.border}`}>
-                    <div className="flex items-center gap-[4%] w-1/3"><div className="flex flex-col"><div className={`flex items-center gap-2 text-[10px] lg:text-xs ${t.textSub} uppercase tracking-wider font-bold`}><Layers className="w-3 h-3" /><span>Field / Task</span></div><div className="flex items-center gap-1 lg:gap-2"><span className={`${t.textMain} font-bold text-xs lg:text-base`}>{loadedField ? loadedField.name : "No Field Loaded"}</span><span className={t.textDim}>/</span><span className={`text-blue-500 font-bold text-xs lg:text-base`}>{activeTaskId ? fields.find(f => f.id === selectedFieldId)?.tasks.find(t => t.id === activeTaskId)?.name : "No Active Task"}</span></div></div></div>
-                    <div className="flex-1 flex justify-center"><div className={`flex items-center gap-4 px-6 py-1.5 rounded-xl border-2 ${Math.abs(crossTrackError)>5?'bg-red-900/20 border-red-500':`${theme==='dark'?'bg-slate-900/60':'bg-white/60'} ${t.borderCard}`}`}><ArrowLeftRight className={`w-5 h-5 ${t.textDim}`}/><div className="flex flex-col items-center w-28"><span className={`text-4xl font-black ${t.textMain}`}>{Math.abs(crossTrackError).toFixed(1)}</span></div><ArrowLeftRight className={`w-5 h-5 ${t.textDim}`}/></div></div>
-                    <div className="flex items-center justify-end gap-6 w-1/3">
-                        <div className="hidden lg:flex flex-col items-end mr-2"><span className={`font-bold ${t.textMain}`}>{getDisplayHeading()}Â°</span><span className={`text-xs ${t.textSub}`}>Heading</span></div>
+                <header className={`h-[72px] min-h-[72px] ${t.bgHeader} backdrop-blur-md grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 px-[3%] z-20 border-b ${t.border}`}>
+                    <div className="min-w-0 flex items-center">
+                        <div className="min-w-0 flex flex-col">
+                            <div className={`flex items-center gap-2 text-[10px] lg:text-xs ${t.textSub} uppercase tracking-wider font-bold`}><Layers className="w-3 h-3 shrink-0" /><span className="truncate">Field / Task</span></div>
+                            <div className="min-w-0 flex items-center gap-1 lg:gap-2">
+                                <span className={`${t.textMain} font-bold text-xs lg:text-base truncate`}>{loadedField ? loadedField.name : "No Field Loaded"}</span>
+                                <span className={`${t.textDim} shrink-0`}>/</span>
+                                <span className="text-blue-500 font-bold text-xs lg:text-base truncate">{activeTaskId ? fields.find(f => f.id === selectedFieldId)?.tasks.find(t => t.id === activeTaskId)?.name : "No Active Task"}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div className={`h-[54px] flex items-center gap-3 px-5 rounded-xl border-2 min-w-[230px] justify-center ${getXteTone()}`}>
+                        <ArrowLeftRight className="w-5 h-5 opacity-70 shrink-0"/>
+                        <div className="flex flex-col items-center w-28">
+                            <span className="text-3xl font-black leading-none">{Math.abs(crossTrackError).toFixed(Math.abs(crossTrackError) >= 10 ? 0 : 1)}</span>
+                            <span className="text-[9px] uppercase font-black tracking-widest opacity-80">cm {getXteDirection()}</span>
+                        </div>
+                        <ArrowLeftRight className="w-5 h-5 opacity-70 shrink-0"/>
+                    </div>
+                    <div className="min-w-0 flex items-center justify-end gap-4">
+                        <div className="hidden lg:flex flex-col items-end mr-2"><span className={`font-bold ${t.textMain}`}>{`${getDisplayHeading()}\u00b0`}</span><span className={`text-xs ${t.textSub}`}>Heading</span></div>
                         <div className="flex flex-col items-end mr-2"><div className={`flex items-center gap-1 ${t.textMain}`}><Globe className="w-3 h-3 lg:w-4 lg:h-4 text-blue-500" /><span className="text-sm lg:text-base font-bold font-mono">{satelliteCount}</span></div><span className={`text-[9px] lg:text-[10px] ${t.textDim}`}>Sats</span></div>
                         <div className={`px-3 py-1 rounded border min-w-[70px] ${getRtkColor()}`}><span className="text-xs font-black">{rtkStatus}</span></div>
                     </div>
@@ -2033,19 +3085,58 @@ const renderLinesPanel = () => {
                 <div className={`absolute bottom-0 left-0 right-0 h-[14%] min-h-[70px] ${t.bgBottom} backdrop-blur-xl border-t ${t.border} flex items-center justify-between px-[3%] z-30`}>
                     {/* Left Buttons */}
                     <div className="flex gap-4 h-full py-2">
-                        <button className={`h-full aspect-square rounded-xl border ${t.borderCard} flex flex-col items-center justify-center ${theme==='dark'?'bg-slate-900':'bg-gray-100'}`}><CornerUpLeft className={`w-8 h-8 ${t.textDim}`}/><span className={`text-xs font-bold ${t.textSub}`}>U-TURN</span></button>
+                        <button onClick={handleUTurn} className={`h-full aspect-square rounded-xl border ${turnAssistActive ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'}`} flex flex-col items-center justify-center active:scale-95`}><CornerUpLeft className={`w-8 h-8 ${turnAssistActive ? 'text-blue-500' : t.textDim}`}/><span className={`text-xs font-bold ${turnAssistActive ? 'text-blue-500' : t.textSub}`}>U-TURN</span></button>
                         <button onClick={() => setIsRecording(!isRecording)} className={`h-full aspect-[4/3] rounded-xl border flex flex-col items-center justify-center ${isRecording?'bg-red-900/20 border-red-500 text-red-500':`${theme==='dark'?'bg-slate-900 border-slate-700':'bg-gray-100 border-gray-300'} ${t.textDim}`}`}><div className={`w-4 h-4 rounded-full ${isRecording?'bg-red-500 animate-pulse':'bg-slate-500'}`}/><span className="text-xs font-black tracking-widest">{isRecording?'REC':'OFF'}</span></button>
                     </div>
                     {/* Center Info */}
-                    <div className="flex flex-col items-center"><div className="flex items-end gap-8 pb-2"><div className="text-center"><div className={`text-4xl font-bold ${t.textMain}`}>{Math.abs(speed).toFixed(1)}</div><div className={`text-xs ${t.textSub} uppercase font-bold`}>km/h</div></div><div className={`w-px h-10 ${t.divider}`}></div><div className="text-center"><div className={`text-2xl font-bold ${theme==='dark'?'text-slate-300':'text-slate-600'}`}>{workedArea.toFixed(2)}</div><div className={`text-xs ${t.textSub} uppercase font-bold`}>Ha Done</div></div></div></div>
+                    <div className="flex flex-col items-center">
+                        <div className="flex items-center gap-3 pb-2">
+                            <button
+                                onPointerDown={(e) => { e.preventDefault(); setSteerKey('ArrowLeft', true); }}
+                                onPointerUp={() => setSteerKey('ArrowLeft', false)}
+                                onPointerLeave={() => setSteerKey('ArrowLeft', false)}
+                                onPointerCancel={() => setSteerKey('ArrowLeft', false)}
+                                onMouseDown={(e) => { e.preventDefault(); setSteerKey('ArrowLeft', true); }}
+                                onMouseUp={() => setSteerKey('ArrowLeft', false)}
+                                onMouseLeave={() => setSteerKey('ArrowLeft', false)}
+                                onClick={() => updateSteering(Math.max(steeringAngle - 5, -45))}
+                                className={`w-11 h-11 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex items-center justify-center active:scale-95 ${steeringAngle < -1 ? 'text-blue-500' : t.textMain}`}
+                                title="Steer left"
+                            >
+                                <RotateCcw className="w-5 h-5" />
+                            </button>
+                            <button onClick={() => updateManualSpeed(manualTargetSpeed - 1)} className={`w-11 h-11 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex items-center justify-center active:scale-95`}><Minus className={`w-5 h-5 ${t.textMain}`} /></button>
+                            <div className="text-center min-w-[86px]"><div className={`text-4xl font-bold leading-none ${t.textMain}`}>{Math.abs(speed).toFixed(1)}</div><div className={`text-xs ${t.textSub} uppercase font-bold`}>km/h</div></div>
+                            <button onClick={() => updateManualSpeed(manualTargetSpeed + 1)} className={`w-11 h-11 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex items-center justify-center active:scale-95`}><Plus className={`w-5 h-5 ${t.textMain}`} /></button>
+                            <button
+                                onPointerDown={(e) => { e.preventDefault(); setSteerKey('ArrowRight', true); }}
+                                onPointerUp={() => setSteerKey('ArrowRight', false)}
+                                onPointerLeave={() => setSteerKey('ArrowRight', false)}
+                                onPointerCancel={() => setSteerKey('ArrowRight', false)}
+                                onMouseDown={(e) => { e.preventDefault(); setSteerKey('ArrowRight', true); }}
+                                onMouseUp={() => setSteerKey('ArrowRight', false)}
+                                onMouseLeave={() => setSteerKey('ArrowRight', false)}
+                                onClick={() => updateSteering(Math.min(steeringAngle + 5, 45))}
+                                className={`w-11 h-11 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex items-center justify-center active:scale-95 ${steeringAngle > 1 ? 'text-blue-500' : t.textMain}`}
+                                title="Steer right"
+                            >
+                                <RotateCw className="w-5 h-5" />
+                            </button>
+                            <button onClick={stopVehicle} className="w-14 h-11 rounded-xl border border-red-500/40 bg-red-500/10 text-red-500 flex items-center justify-center active:scale-95"><Square className="w-4 h-4" /></button>
+                            <div className={`w-px h-10 ${t.divider}`}></div>
+                            <div className="text-center"><div className={`text-2xl font-bold ${theme==='dark'?'text-slate-300':'text-slate-600'}`}>{workedArea.toFixed(2)}</div><div className={`text-xs ${t.textSub} uppercase font-bold`}>Ha Done</div></div>
+                        </div>
+                    </div>
                     {/* Engage Button */}
                     <button onClick={toggleSteering} className={`h-[80%] w-[260px] rounded-2xl flex items-center justify-between px-6 shadow-2xl active:scale-95 border ${steeringMode==='AUTO'?'bg-green-600 border-green-400':`${theme==='dark'?'bg-slate-800 border-slate-600':'bg-gray-800 border-gray-600'}`}`}><div className="flex flex-col items-start"><span className={`text-xs font-bold uppercase ${steeringMode==='AUTO'?'text-green-200':'text-slate-400'}`}>System</span><span className={`text-2xl font-black ${steeringMode==='AUTO'?'text-white':'text-white'}`}>{steeringMode==='AUTO'?'ENGAGED':'READY'}</span></div><div className={`w-14 h-14 rounded-full flex items-center justify-center ${steeringMode==='AUTO'?'bg-white/20 text-white':'bg-black/20 text-slate-400'}`}><SteeringWheelIcon className={`w-9 h-9 ${steeringMode==='AUTO'?'animate-spin-slow':''}`}/></div></button>
                 </div>
 
                 {/* MODALS */}
                 {/* ... existing modals ... */}
+                {cameraPanelOpen && renderCameraPanel()}
+                {diagnosticsPanelOpen && renderDiagnosticsPanel()}
                 {fieldManagerOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}>{renderFieldManager()}</div>}
-                
+
                 {linesPanelOpen && (
                     <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}>
                         <div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col p-6`}>
@@ -2056,20 +3147,20 @@ const renderLinesPanel = () => {
                         {renderLinesPanel()}
                     </div>
                 )}
-                
-                {settingsOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}><div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col`}><div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl lg:text-2xl font-bold flex items-center gap-3 ${t.textMain}`}><Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />Settings</h2></div><nav className="flex-1 overflow-y-auto p-4 space-y-2"><SettingsTab theme={t} label="Overview" icon={LayoutGrid} active={settingsTab === 'overview'} onClick={() => setSettingsTab('overview')} /><SettingsTab theme={t} label="Display" icon={Monitor} active={settingsTab === 'display'} onClick={() => setSettingsTab('display')} /><SettingsTab theme={t} label="Vehicle" icon={Tractor} active={settingsTab === 'vehicle'} onClick={() => setSettingsTab('vehicle')} /><SettingsTab theme={t} label="Implement" icon={Ruler} active={settingsTab === 'implement'} onClick={() => setSettingsTab('implement')} /><SettingsTab theme={t} label="Guidance" icon={Navigation} active={settingsTab === 'guidance'} onClick={() => setSettingsTab('guidance')} /><SettingsTab theme={t} label="Calibration" icon={Gauge} active={settingsTab === 'calibration'} onClick={() => setSettingsTab('calibration')} /><SettingsTab theme={t} label="RTK / GNSS" icon={Radio} active={settingsTab === 'rtk'} onClick={() => setSettingsTab('rtk')} /></nav></div><div className={`flex-1 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}><div className={`flex items-center justify-between p-6 lg:p-8 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><h3 className={`text-lg lg:text-xl font-medium ${t.textSub} uppercase tracking-widest`}>{settingsTab} CONFIGURATION</h3><button onClick={() => setSettingsOpen(false)} className={`p-2 lg:p-3 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}><X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} /></button></div><div className="flex-1 p-6 lg:p-10 overflow-y-auto"><div className="max-w-4xl">{renderSettingsContent()}</div></div><div className={`p-4 lg:p-6 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`} onClick={() => setSettingsOpen(false)}>Cancel</button><button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg" onClick={() => { setSettingsOpen(false); showNotification("Settings Saved Successfully", "success"); }}>Save Changes</button></div></div></div>}
+
+                {settingsOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}><div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col min-h-0`}><div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl lg:text-2xl font-bold flex items-center gap-3 ${t.textMain}`}><Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />Settings</h2></div><nav className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2"><SettingsTab theme={t} label="Overview" icon={LayoutGrid} active={settingsTab === 'overview'} onClick={() => setSettingsTab('overview')} /><SettingsTab theme={t} label="Display" icon={Monitor} active={settingsTab === 'display'} onClick={() => setSettingsTab('display')} /><SettingsTab theme={t} label="Vehicle" icon={Tractor} active={settingsTab === 'vehicle'} onClick={() => setSettingsTab('vehicle')} /><SettingsTab theme={t} label="Implement" icon={Ruler} active={settingsTab === 'implement'} onClick={() => setSettingsTab('implement')} /><SettingsTab theme={t} label="Guidance" icon={Navigation} active={settingsTab === 'guidance'} onClick={() => setSettingsTab('guidance')} /><SettingsTab theme={t} label="Steering" icon={SteeringWheelIcon} active={settingsTab === 'steering'} onClick={() => setSettingsTab('steering')} /><SettingsTab theme={t} label="U-Turn" icon={CornerUpLeft} active={settingsTab === 'uturn'} onClick={() => setSettingsTab('uturn')} /><SettingsTab theme={t} label="ISOBUS" icon={Cpu} active={settingsTab === 'isobus'} onClick={() => setSettingsTab('isobus')} /><SettingsTab theme={t} label="Camera" icon={Video} active={settingsTab === 'camera'} onClick={() => setSettingsTab('camera')} /><SettingsTab theme={t} label="Diagnostics" icon={AlertTriangle} active={settingsTab === 'diagnostics'} onClick={() => setSettingsTab('diagnostics')} /><SettingsTab theme={t} label="Data" icon={Save} active={settingsTab === 'data'} onClick={() => setSettingsTab('data')} /><SettingsTab theme={t} label="Land Level" icon={Globe} active={settingsTab === 'landlevel'} onClick={() => setSettingsTab('landlevel')} /><SettingsTab theme={t} label="Calibration" icon={Gauge} active={settingsTab === 'calibration'} onClick={() => setSettingsTab('calibration')} /><SettingsTab theme={t} label="RTK / GNSS" icon={Radio} active={settingsTab === 'rtk'} onClick={() => setSettingsTab('rtk')} /></nav></div><div className={`flex-1 min-w-0 min-h-0 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}><div className={`flex items-center justify-between p-5 lg:p-6 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><h3 className={`text-lg lg:text-xl font-medium ${t.textSub} uppercase tracking-widest`}>{settingsTab} CONFIGURATION</h3><button onClick={() => setSettingsOpen(false)} className={`p-2 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}><X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} /></button></div><div className="flex-1 min-h-0 p-5 lg:p-7 overflow-y-auto"><div className="max-w-4xl pb-4">{renderSettingsContent()}</div></div><div className={`p-4 lg:p-5 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`} onClick={() => setSettingsOpen(false)}>Cancel</button><button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg" onClick={() => { setSettingsOpen(false); showNotification("Settings Saved Successfully", "success"); }}>Save Changes</button></div></div></div>}
                 {menuOpen && !fieldManagerOpen && !lineModeModalOpen && !linesPanelOpen && !manualHeadingModalOpen && !boundaryAlertOpen && !deleteModalOpen && (
-                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-lg border ${t.borderCard} shadow-2xl flex flex-col max-h-[85vh]`}><div className={`p-4 border-b ${t.divider} flex justify-between items-center`}><div className="flex items-center gap-2"><Menu className="w-5 h-5 text-blue-500" /><h3 className={`font-bold text-lg ${t.textMain}`}>Quick Menu</h3></div><button onClick={() => setMenuOpen(false)} className={`px-3 py-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} rounded-lg text-xs hover:brightness-95 border ${t.borderCard} ${t.textMain}`}>Close</button></div><div className="p-4 grid grid-cols-2 gap-3 overflow-y-auto"><div className={`col-span-2 p-3 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}><div className="flex items-center gap-2 mb-3"><Gauge className="w-5 h-5 text-orange-500" /><span className={`font-bold ${t.textMain} text-sm`}>Manual Drive</span></div><div className="grid grid-cols-2 gap-4"><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Speed</span><div className="flex items-center gap-2"><input type="range" min="-5" max="15" value={manualTargetSpeed} onChange={(e) => updateManualSpeed(Number(e.target.value))} className="w-full accent-orange-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><span className={`font-mono font-bold text-lg w-12 text-center ${t.textMain}`}>{manualTargetSpeed}</span></div></div><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Steering ({steeringAngle}Â°)</span><div className="flex items-center gap-1"><button onClick={() => updateSteering(Math.max(steeringAngle - 5, -35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCcw className={`w-4 h-4 ${t.textMain}`} /></button><input type="range" min="-35" max="35" value={steeringAngle} onChange={(e) => updateSteering(Number(e.target.value))} className="w-full accent-blue-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><button onClick={() => updateSteering(Math.min(steeringAngle + 5, 35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCw className={`w-4 h-4 ${t.textMain}`} /></button></div></div></div><p className={`text-[10px] ${t.textSub} mt-2 text-center`}>*Arrow Keys: â†‘ â†“ â† â†’</p></div><QuickAction theme={t} icon={Video} label="Camera" sub="Monitor" /><QuickAction theme={t} icon={AlertTriangle} label="Diagnostics" sub="Errors" /><QuickAction theme={t} icon={Ruler} label="Implement" sub="Width" /><QuickAction theme={t} icon={LocateFixed} label="Calibrate" sub="IMU" /><QuickAction theme={t} icon={Activity} label="Terrain" sub="Comp." /><QuickAction theme={t} icon={Save} label="Save Line" sub="Track" /><QuickAction theme={t} icon={Navigation} label="NMEA" sub="Out" /></div></div></div>
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-lg border ${t.borderCard} shadow-2xl flex flex-col max-h-[85vh]`}><div className={`p-4 border-b ${t.divider} flex justify-between items-center`}><div className="flex items-center gap-2"><Menu className="w-5 h-5 text-blue-500" /><h3 className={`font-bold text-lg ${t.textMain}`}>Quick Menu</h3></div><button onClick={() => setMenuOpen(false)} className={`px-3 py-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} rounded-lg text-xs hover:brightness-95 border ${t.borderCard} ${t.textMain}`}>Close</button></div><div className="p-4 grid grid-cols-2 gap-3 overflow-y-auto"><div className={`col-span-2 p-3 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}><div className="flex items-center gap-2 mb-3"><Gauge className="w-5 h-5 text-orange-500" /><span className={`font-bold ${t.textMain} text-sm`}>Manual Drive</span></div><div className="grid grid-cols-2 gap-4"><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Speed</span><div className="flex items-center gap-2"><input type="range" min="-5" max="15" value={manualTargetSpeed} onChange={(e) => updateManualSpeed(Number(e.target.value))} className="w-full accent-orange-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><span className={`font-mono font-bold text-lg w-12 text-center ${t.textMain}`}>{manualTargetSpeed}</span></div></div><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Steering ({`${steeringAngle.toFixed(1)}\u00b0`})</span><div className="flex items-center gap-1"><button onClick={() => updateSteering(Math.max(steeringAngle - 5, -35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCcw className={`w-4 h-4 ${t.textMain}`} /></button><input type="range" min="-35" max="35" value={steeringAngle} onChange={(e) => updateSteering(Number(e.target.value))} className="w-full accent-blue-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><button onClick={() => updateSteering(Math.min(steeringAngle + 5, 35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCw className={`w-4 h-4 ${t.textMain}`} /></button></div></div></div><p className={`text-[10px] ${t.textSub} mt-2 text-center`}>Arrow keys: Up / Down / Left / Right</p></div><QuickAction theme={t} icon={Video} label="Camera" sub="Monitor" onClick={() => { setMenuOpen(false); setCameraPanelOpen(true); }} /><QuickAction theme={t} icon={AlertTriangle} label="Diagnostics" sub="OBD / Logs" onClick={() => { setMenuOpen(false); setDiagnosticsPanelOpen(true); }} /><QuickAction theme={t} icon={Cpu} label="ISOBUS" sub="UT / TC" onClick={() => { setMenuOpen(false); setSettingsTab('isobus'); setSettingsOpen(true); }} /><QuickAction theme={t} icon={CornerUpLeft} label="U-Turn" sub="Headland" onClick={() => { setMenuOpen(false); setSettingsTab('uturn'); setSettingsOpen(true); }} /><QuickAction theme={t} icon={Activity} label="Terrain" sub="Comp." onClick={() => toggleFeatureSetting('terrainCompensation')} /><QuickAction theme={t} icon={Globe} label="Leveling" sub="GNSS" onClick={() => { setMenuOpen(false); setSettingsTab('landlevel'); setSettingsOpen(true); }} /><QuickAction theme={t} icon={Save} label="Data" sub="USB / Export" onClick={() => { setMenuOpen(false); setSettingsTab('data'); setSettingsOpen(true); }} /><QuickAction theme={t} icon={Navigation} label="NMEA" sub="Out" onClick={() => showNotification('NMEA output ready', 'info')} /></div></div></div>
                 )}
                 {lineNameModalOpen && (
                   <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6">
                       <div className={`${t.bgPanel} rounded-2xl w-full max-w-md border ${t.borderCard} shadow-2xl p-6`}>
                           <h3 className={`text-xl font-bold ${t.textMain} mb-4`}>Name Guidance Line</h3>
-                          <input 
-                              type="text" 
-                              value={tempLineName} 
-                              onChange={(e) => setTempLineName(e.target.value)} 
-                              className={`w-full p-4 rounded-xl border ${t.borderCard} ${t.bgInput} ${t.textMain} focus:border-blue-500 outline-none mb-6`} 
+                          <input
+                              type="text"
+                              value={tempLineName}
+                              onChange={(e) => setTempLineName(e.target.value)}
+                              className={`w-full p-4 rounded-xl border ${t.borderCard} ${t.bgInput} ${t.textMain} focus:border-blue-500 outline-none mb-6`}
                               autoFocus
                           />
                           <div className="flex justify-end gap-3">
@@ -2079,7 +3170,7 @@ const renderLinesPanel = () => {
                       </div>
                   </div>
                 )}
-                
+
                 {/* NEW: Manual Heading Modal */}
                 {manualHeadingModalOpen && (
                     <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6">
@@ -2087,14 +3178,14 @@ const renderLinesPanel = () => {
                             <h3 className={`text-xl font-bold ${t.textMain} mb-4`}>Input Heading</h3>
                             <div className="flex flex-col gap-4 mb-6">
                                 <div className="flex items-center gap-2">
-                                    <input 
-                                        type="number" 
-                                        value={tempManualHeading} 
-                                        onChange={(e) => setTempManualHeading(e.target.value)} 
-                                        className={`flex-1 p-4 rounded-xl border ${t.borderCard} ${t.bgInput} ${t.textMain} font-mono text-2xl font-bold text-center focus:border-blue-500 outline-none`} 
+                                    <input
+                                        type="number"
+                                        value={tempManualHeading}
+                                        onChange={(e) => setTempManualHeading(e.target.value)}
+                                        className={`flex-1 p-4 rounded-xl border ${t.borderCard} ${t.bgInput} ${t.textMain} font-mono text-2xl font-bold text-center focus:border-blue-500 outline-none`}
                                         autoFocus
                                     />
-                                    <span className={`text-2xl font-bold ${t.textSub}`}>Â°</span>
+                                    <span className={`text-2xl font-bold ${t.textSub}`}>{"\u00b0"}</span>
                                 </div>
                                 <div className={`text-center font-bold ${t.textSub} bg-blue-500/10 py-2 rounded-lg`}>
                                     {getCardinalDirection(tempManualHeading)}
@@ -2107,17 +3198,17 @@ const renderLinesPanel = () => {
                         </div>
                     </div>
                 )}
-                
+
                 {/* NEW: Boundary Name Modal */}
                 {boundaryNameModalOpen && (
                     <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6">
                         <div className={`${t.bgPanel} rounded-2xl w-full max-w-md border ${t.borderCard} shadow-2xl p-6`}>
                             <h3 className={`text-xl font-bold ${t.textMain} mb-4`}>Name Boundary</h3>
-                            <input 
-                                type="text" 
-                                value={tempBoundaryName} 
-                                onChange={(e) => setTempBoundaryName(e.target.value)} 
-                                className={`w-full p-4 rounded-xl border ${t.borderCard} ${t.bgInput} ${t.textMain} focus:border-blue-500 outline-none mb-6`} 
+                            <input
+                                type="text"
+                                value={tempBoundaryName}
+                                onChange={(e) => setTempBoundaryName(e.target.value)}
+                                className={`w-full p-4 rounded-xl border ${t.borderCard} ${t.bgInput} ${t.textMain} focus:border-blue-500 outline-none mb-6`}
                                 autoFocus
                             />
                             <div className="flex justify-end gap-3">
@@ -2141,11 +3232,11 @@ const renderLinesPanel = () => {
                                 {boundaryAlertType === 'AUTO_CLOSE' ? 'Close boundary?' : 'Boundary not closed'}
                             </h3>
                             <p className={`${t.textSub} mb-6`}>
-                                {boundaryAlertType === 'AUTO_CLOSE' 
-                                    ? 'Vehicle is near starting point. Do you want to automatically connect boundary into a closed loop?' 
+                                {boundaryAlertType === 'AUTO_CLOSE'
+                                    ? 'Vehicle is near starting point. Do you want to automatically connect boundary into a closed loop?'
                                     : 'Vehicle has not crossed the old boundary line. Do you want to continue running to complete or cancel?'}
                             </p>
-                            
+
                             <div className="flex justify-center gap-3">
                                 {boundaryAlertType === 'AUTO_CLOSE' ? (
                                     <>
@@ -2162,7 +3253,7 @@ const renderLinesPanel = () => {
                         </div>
                     </div>
                 )}
-                
+
                 {/* NEW: Delete Confirmation Modal */}
                 {deleteModalOpen && (
                     <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6">
@@ -2185,10 +3276,10 @@ const renderLinesPanel = () => {
                 )}
 
                 {lineModeModalOpen && (
-                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-2xl border ${t.borderCard} shadow-2xl p-6`}><div className="flex justify-between items-center mb-6"><h3 className={`text-xl font-bold ${t.textMain}`}>Select Guidance Mode</h3><button onClick={() => setLineModeModalOpen(false)} className={`p-2 rounded-lg hover:bg-slate-800/50 ${t.textDim}`}><X className="w-6 h-6" /></button></div><div className="grid grid-cols-2 gap-4"><button onClick={() => selectLineMode('STRAIGHT_AB')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'STRAIGHT_AB' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><GitCommitHorizontal className={`w-12 h-12 ${lineType === 'STRAIGHT_AB' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Straight AB</span><span className={`text-xs ${t.textSub}`}>Standard straight line A to B</span></button><button onClick={() => selectLineMode('A_PLUS')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'A_PLUS' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><ArrowUpFromDot className={`w-12 h-12 ${lineType === 'A_PLUS' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>A+ Heading</span><span className={`text-xs ${t.textSub}`}>Straight line with defined heading</span></button><button onClick={() => selectLineMode('CURVE')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'CURVE' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><Spline className={`w-12 h-12 ${lineType === 'CURVE' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Curve</span><span className={`text-xs ${t.textSub}`}>Adaptive curved guidance</span></button><button onClick={() => selectLineMode('PIVOT')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'PIVOT' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><CircleDashed className={`w-12 h-12 ${lineType === 'PIVOT' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Pivot</span><span className={`text-xs ${t.textSub}`}>Center pivot circular pattern</span></button>
+                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-2xl border ${t.borderCard} shadow-2xl p-6`}><div className="flex justify-between items-center mb-6"><h3 className={`text-xl font-bold ${t.textMain}`}>Select Guidance Mode</h3><button onClick={() => setLineModeModalOpen(false)} className={`p-2 rounded-lg hover:bg-slate-800/50 ${t.textDim}`}><X className="w-6 h-6" /></button></div><div className="grid grid-cols-2 gap-4"><button onClick={() => selectLineMode('STRAIGHT_AB')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'STRAIGHT_AB' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><GitCommitHorizontal className={`w-12 h-12 ${lineType === 'STRAIGHT_AB' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Straight AB</span><span className={`text-xs ${t.textSub}`}>Standard straight line A to B</span></button><button onClick={() => selectLineMode('A_PLUS')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'A_PLUS' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><ArrowUpFromDot className={`w-12 h-12 ${lineType === 'A_PLUS' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>A+ Heading</span><span className={`text-xs ${t.textSub}`}>Straight line with defined heading</span></button><button onClick={() => selectLineMode('CURVE')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'CURVE' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><Spline className={`w-12 h-12 ${lineType === 'CURVE' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Curve</span><span className={`text-xs ${t.textSub}`}>Adaptive curved guidance</span></button><button onClick={() => selectLineMode('PIVOT')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'PIVOT' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><CircleDashed className={`w-12 h-12 ${lineType === 'PIVOT' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Pivot</span><span className={`text-xs ${t.textSub}`}>Center pivot circular pattern</span></button><button onClick={() => selectLineMode('COMBINATION')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'COMBINATION' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><AlignJustify className={`w-12 h-12 ${lineType === 'COMBINATION' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Combination</span><span className={`text-xs ${t.textSub}`}>Curve plus straight segments</span></button>
                     {/* MULTI-LINE OPTION */}
                     <div className="col-span-2 mt-4 flex items-center justify-between p-4 rounded-xl border border-slate-700/50 bg-slate-800/30">
-                        <span className="text-sm font-bold text-white">Straight Line Multiple</span>
+                        <span className="text-sm font-bold text-white">Parallel Guidance Lines</span>
                         <div onClick={handleToggleMultiLine} className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-colors ${isMultiLineMode ? 'bg-blue-600' : 'bg-slate-600'}`}>
                             <div className={`w-4 h-4 rounded-full bg-white shadow-sm transform transition-transform ${isMultiLineMode ? 'translate-x-6' : ''}`} />
                         </div>
@@ -2206,4 +3297,3 @@ const renderLinesPanel = () => {
     </div>
   );
 };
-
