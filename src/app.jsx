@@ -1184,6 +1184,10 @@ const App = () => {
   const getDisplayHeading = () => { let h = heading % 360; if (h < 0) h += 360; return h.toFixed(1); };
   const getRtkColor = () => rtkStatus === 'FIX' ? 'bg-green-500 text-white border-green-400' : 'bg-yellow-500 text-black border-yellow-400';
   const getLineTypeIcon = () => { switch(lineType) { case 'STRAIGHT_AB': return GitCommitHorizontal; case 'A_PLUS': return ArrowUpFromDot; case 'CURVE': return Spline; case 'COMBINATION': return AlignJustify; case 'PIVOT': return CircleDashed; default: return GitCommitHorizontal; } };
+  const activeFieldRecord = loadedField || fields.find(f => f.id === selectedFieldId);
+  const activeTaskRecord = activeTaskId ? fields.find(f => f.id === selectedFieldId)?.tasks?.find(task => task.id === activeTaskId) : null;
+  const activeLineRecord = activeLineId ? (activeFieldRecord?.lines || fields.find(f => f.id === selectedFieldId)?.lines || []).find(line => line.id === activeLineId) : null;
+  const getGuidanceModeLabel = () => (activeLineRecord?.type || guidanceLine || lineType || 'NO_LINE').replace(/_/g, ' ');
   const isHeadingUpMap = mapOrientation === 'HEADING_UP';
   const isMap3D = sceneViewMode === '3D';
   const mapRotationDeg = isHeadingUpMap ? -mapVisualHeading : 0;
@@ -1273,17 +1277,17 @@ const App = () => {
 
   const renderFeatureStatusStrip = () => {
       const tiles = [
-          { key: 'terrain', label: 'TERRAIN', value: featureSettings.terrainCompensation ? 'ON' : 'OFF', icon: Activity, active: featureSettings.terrainCompensation },
+          { key: 'terrain', label: 'Terrain', value: featureSettings.terrainCompensation ? 'ON' : 'OFF', icon: Activity, active: featureSettings.terrainCompensation },
           { key: 'isobus', label: 'ISOBUS', value: featureSettings.isobusUT ? 'UT/TC' : 'OFF', icon: Cpu, active: featureSettings.isobusUT },
-          { key: 'camera', label: 'CAMERA', value: featureSettings.wiredCamera || featureSettings.wirelessCamera ? 'LIVE' : 'OFF', icon: Video, active: featureSettings.wiredCamera || featureSettings.wirelessCamera, onClick: () => setCameraPanelOpen(true) },
+          { key: 'camera', label: 'Camera', value: featureSettings.wiredCamera || featureSettings.wirelessCamera ? 'LIVE' : 'OFF', icon: Video, active: featureSettings.wiredCamera || featureSettings.wirelessCamera, onClick: () => setCameraPanelOpen(true) },
           { key: 'obd', label: 'OBD', value: featureSettings.obd ? 'OK' : 'OFF', icon: Gauge, active: featureSettings.obd, onClick: () => setDiagnosticsPanelOpen(true) },
-          { key: 'lift', label: 'LIFT', value: featureSettings.liftSensor ? 'AUTO' : 'MAN', icon: ArrowUpFromDot, active: featureSettings.liftSensor },
-          { key: 'steer', label: 'STEER', value: featureSettings.canbusSteerReady ? 'CAN' : featureSettings.pwmSteerReady ? 'PWM' : 'MOTOR', icon: SteeringWheelIcon, active: true }
+          { key: 'lift', label: 'Lift', value: featureSettings.liftSensor ? 'AUTO' : 'MAN', icon: ArrowUpFromDot, active: featureSettings.liftSensor },
+          { key: 'steer', label: 'Steer', value: featureSettings.canbusSteerReady ? 'CAN' : featureSettings.pwmSteerReady ? 'PWM' : 'MOTOR', icon: SteeringWheelIcon, active: true }
       ];
 
       return (
           <div
-              className="absolute left-[150px] right-4 top-4 z-30 flex gap-2 overflow-x-auto pb-1"
+              className="absolute left-[154px] right-[168px] top-4 z-30 flex gap-1.5 overflow-x-auto pb-1"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
           >
@@ -1291,18 +1295,73 @@ const App = () => {
                   <button
                       key={tile.key}
                       onClick={tile.onClick}
-                      className={`shrink-0 min-w-[86px] px-3 py-2 rounded-lg border ${t.borderCard} ${t.bgCard} backdrop-blur shadow-sm flex items-center gap-2 ${tile.onClick ? 'hover:brightness-95' : ''}`}
+                      className={`shrink-0 min-w-[78px] px-2.5 py-1.5 rounded-lg border ${t.borderCard} ${t.bgCard} backdrop-blur shadow-sm flex items-center gap-2 ${tile.onClick ? 'hover:brightness-95 active:scale-95' : ''}`}
                   >
-                      <tile.icon className={`w-4 h-4 ${tile.active ? 'text-green-500' : t.textDim}`} />
+                      <tile.icon className={`w-3.5 h-3.5 ${tile.active ? 'text-green-500' : t.textDim}`} />
                       <div className="text-left leading-tight">
-                          <div className={`text-[9px] font-black ${t.textSub}`}>{tile.label}</div>
-                          <div className={`text-xs font-black ${tile.active ? 'text-green-500' : t.textMain}`}>{tile.value}</div>
+                          <div className={`text-[8px] font-black uppercase ${t.textSub}`}>{tile.label}</div>
+                          <div className={`text-[11px] font-black ${tile.active ? 'text-green-500' : t.textMain}`}>{tile.value}</div>
                       </div>
                   </button>
               ))}
           </div>
       );
   };
+
+  const renderGuidanceLightbar = () => {
+      const abs = Math.abs(crossTrackError);
+      const direction = getXteDirection();
+      const litBars = Math.min(4, Math.ceil(abs / 3));
+      const barTone = abs >= 10 ? 'bg-red-500' : abs >= 4 ? 'bg-yellow-500' : 'bg-blue-500';
+
+      return (
+          <div className={`h-[58px] min-w-[290px] max-w-[390px] w-full rounded-xl border-2 px-4 flex items-center gap-4 justify-center shadow-sm ${getXteTone()}`}>
+              <div className="flex items-end gap-1.5 h-8">
+                  {[-4, -3, -2, -1, 0, 1, 2, 3, 4].map((step) => {
+                      const active = step === 0 || (direction === 'LEFT' && step < 0 && Math.abs(step) <= litBars) || (direction === 'RIGHT' && step > 0 && step <= litBars);
+                      const height = step === 0 ? 'h-8' : Math.abs(step) === 1 ? 'h-6' : Math.abs(step) === 2 ? 'h-5' : 'h-4';
+                      return (
+                          <div
+                              key={step}
+                              className={`w-2 rounded-full ${height} ${step === 0 ? 'bg-slate-900 dark:bg-white' : active ? barTone : 'bg-slate-300/70 dark:bg-slate-700'}`}
+                          />
+                      );
+                  })}
+              </div>
+              <div className="flex flex-col items-center w-24">
+                  <span className="text-3xl font-black leading-none">{abs.toFixed(abs >= 10 ? 0 : 1)}</span>
+                  <span className="text-[9px] uppercase font-black tracking-widest opacity-80">cm {direction}</span>
+              </div>
+          </div>
+      );
+  };
+
+  const renderMissionOverview = () => (
+      <div
+          className={`absolute left-4 bottom-4 z-20 w-[300px] rounded-xl border ${t.borderCard} ${t.bgCard} shadow-lg backdrop-blur p-3`}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+      >
+          <div className="grid grid-cols-2 gap-2">
+              <div className={`rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white/70'} px-3 py-2 min-w-0`}>
+                  <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Field</div>
+                  <div className={`text-sm font-black truncate ${t.textMain}`}>{activeFieldRecord?.name || 'No Field'}</div>
+              </div>
+              <div className={`rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white/70'} px-3 py-2 min-w-0`}>
+                  <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Line</div>
+                  <div className={`text-sm font-black truncate ${t.textMain}`}>{activeLineRecord?.name || getGuidanceModeLabel()}</div>
+              </div>
+              <div className={`rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white/70'} px-3 py-2 min-w-0`}>
+                  <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Task</div>
+                  <div className={`text-sm font-black truncate ${activeTaskRecord ? 'text-blue-500' : t.textMain}`}>{activeTaskRecord?.name || 'No Active Task'}</div>
+              </div>
+              <div className={`rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white/70'} px-3 py-2 min-w-0`}>
+                  <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Implement</div>
+                  <div className={`text-sm font-black truncate ${t.textMain}`}>{implementSettings.width.toFixed(1)} m / {workedArea.toFixed(2)} ha</div>
+              </div>
+          </div>
+      </div>
+  );
 
   const FeatureToggle = ({ label, detail, featureKey, icon: Icon = CheckCircle2 }) => (
       <button
@@ -3592,46 +3651,66 @@ const renderLinesPanel = () => {
                         <button onClick={() => handleZoom('out')} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain}`}><Minus className="w-6 h-6"/></button>
                     </div>
                     {renderFeatureStatusStrip()}
+                    {renderMissionOverview()}
                     {renderCompassWidget()}
                 </div>
 
                 {/* ... rest of the app ... */}
-                <header className={`h-[72px] min-h-[72px] ${t.bgHeader} backdrop-blur-md grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 px-[3%] z-20 border-b ${t.border}`}>
-                    <div className="min-w-0 flex items-center">
-                        <div className="min-w-0 flex flex-col">
-                            <div className={`flex items-center gap-2 text-[10px] lg:text-xs ${t.textSub} uppercase tracking-wider font-bold`}><Layers className="w-3 h-3 shrink-0" /><span className="truncate">Field / Task</span></div>
-                            <div className="min-w-0 flex items-center gap-1 lg:gap-2">
-                                <span className={`${t.textMain} font-bold text-xs lg:text-base truncate`}>{loadedField ? loadedField.name : "No Field Loaded"}</span>
+                <header className={`h-[72px] min-h-[72px] ${t.bgHeader} backdrop-blur-md grid grid-cols-[minmax(240px,1fr)_minmax(290px,390px)_minmax(270px,1fr)] items-center gap-4 px-[3%] z-20 border-b ${t.border}`}>
+                    <div className="min-w-0 flex items-center gap-3">
+                        <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-100'} flex items-center justify-center`}>
+                            <MapIcon className="w-5 h-5 text-blue-500" />
+                        </div>
+                        <div className="min-w-0">
+                            <div className={`flex items-center gap-2 text-[10px] lg:text-xs ${t.textSub} uppercase tracking-wider font-black`}>
+                                <Layers className="w-3 h-3 shrink-0" />
+                                <span className="truncate">Run / Field / Guidance</span>
+                            </div>
+                            <div className="min-w-0 flex items-center gap-1.5 lg:gap-2">
+                                <span className={`${t.textMain} font-black text-xs lg:text-base truncate`}>{activeFieldRecord?.name || 'No Field Loaded'}</span>
                                 <span className={`${t.textDim} shrink-0`}>/</span>
-                                <span className="text-blue-500 font-bold text-xs lg:text-base truncate">{activeTaskId ? fields.find(f => f.id === selectedFieldId)?.tasks?.find(t => t.id === activeTaskId)?.name : "No Active Task"}</span>
+                                <span className="text-blue-500 font-black text-xs lg:text-base truncate">{activeLineRecord?.name || getGuidanceModeLabel()}</span>
                             </div>
                         </div>
                     </div>
-                    <div className={`h-[54px] flex items-center gap-3 px-5 rounded-xl border-2 min-w-[230px] justify-center ${getXteTone()}`}>
-                        <ArrowLeftRight className="w-5 h-5 opacity-70 shrink-0"/>
-                        <div className="flex flex-col items-center w-28">
-                            <span className="text-3xl font-black leading-none">{Math.abs(crossTrackError).toFixed(Math.abs(crossTrackError) >= 10 ? 0 : 1)}</span>
-                            <span className="text-[9px] uppercase font-black tracking-widest opacity-80">cm {getXteDirection()}</span>
-                        </div>
-                        <ArrowLeftRight className="w-5 h-5 opacity-70 shrink-0"/>
+                    <div className="flex justify-center">
+                        {renderGuidanceLightbar()}
                     </div>
-                    <div className="min-w-0 flex items-center justify-end gap-4">
-                        <div className="hidden lg:flex flex-col items-end mr-2"><span className={`font-bold ${t.textMain}`}>{`${getDisplayHeading()}\u00b0`}</span><span className={`text-xs ${t.textSub}`}>Heading</span></div>
-                        <div className="flex flex-col items-end mr-2"><div className={`flex items-center gap-1 ${t.textMain}`}><Globe className="w-3 h-3 lg:w-4 lg:h-4 text-blue-500" /><span className="text-sm lg:text-base font-bold font-mono">{satelliteCount}</span></div><span className={`text-[9px] lg:text-[10px] ${t.textDim}`}>Sats</span></div>
-                        <div className={`px-3 py-1 rounded border min-w-[70px] ${getRtkColor()}`}><span className="text-xs font-black">{rtkStatus}</span></div>
+                    <div className="min-w-0 flex items-center justify-end gap-2">
+                        <div className={`hidden lg:flex h-11 px-3 rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50'} flex-col items-end justify-center`}>
+                            <span className={`font-black leading-none ${t.textMain}`}>{`${getDisplayHeading()}\u00b0`}</span>
+                            <span className={`text-[10px] ${t.textSub}`}>Heading</span>
+                        </div>
+                        <div className={`h-11 px-3 rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50'} flex flex-col items-end justify-center`}>
+                            <div className={`flex items-center gap-1 ${t.textMain}`}><Globe className="w-3 h-3 lg:w-4 lg:h-4 text-blue-500" /><span className="text-sm lg:text-base font-black font-mono">{satelliteCount}</span></div>
+                            <span className={`text-[9px] lg:text-[10px] ${t.textDim}`}>Sats</span>
+                        </div>
+                        <div className={`h-11 px-4 rounded-lg border min-w-[74px] flex items-center justify-center ${getRtkColor()}`}>
+                            <span className="text-xs font-black">{rtkStatus}</span>
+                        </div>
                     </div>
                 </header>
 
                 {/* BOTTOM BAR */}
-                <div className={`absolute bottom-0 left-0 right-0 h-[14%] min-h-[70px] ${t.bgBottom} backdrop-blur-xl border-t ${t.border} flex items-center justify-between px-[3%] z-30`}>
-                    {/* Left Buttons */}
-                    <div className="flex gap-4 h-full py-2">
-                        <button onClick={handleUTurn} className={`h-full aspect-square rounded-xl border ${turnAssistActive ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'}`} flex flex-col items-center justify-center active:scale-95`}><CornerUpLeft className={`w-8 h-8 ${turnAssistActive ? 'text-blue-500' : t.textDim}`}/><span className={`text-xs font-bold ${turnAssistActive ? 'text-blue-500' : t.textSub}`}>U-TURN</span></button>
-                        <button onClick={() => setIsRecording(!isRecording)} className={`h-full aspect-[4/3] rounded-xl border flex flex-col items-center justify-center ${isRecording?'bg-red-900/20 border-red-500 text-red-500':`${theme==='dark'?'bg-slate-900 border-slate-700':'bg-gray-100 border-gray-300'} ${t.textDim}`}`}><div className={`w-4 h-4 rounded-full ${isRecording?'bg-red-500 animate-pulse':'bg-slate-500'}`}/><span className="text-xs font-black tracking-widest">{isRecording?'REC':'OFF'}</span></button>
+                <div className={`absolute bottom-0 left-0 right-0 h-[108px] min-h-[96px] ${t.bgBottom} backdrop-blur-xl border-t ${t.border} grid grid-cols-[minmax(178px,0.82fr)_minmax(360px,auto)_minmax(190px,0.82fr)] items-center gap-3 px-[3%] z-30`}>
+                    <div className="min-w-0 flex items-center gap-2.5 h-full py-3">
+                        <button onClick={handleUTurn} className={`h-full min-w-[84px] px-2.5 rounded-xl border ${turnAssistActive ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'}`} flex flex-col items-center justify-center active:scale-95`}>
+                            <CornerUpLeft className={`w-7 h-7 ${turnAssistActive ? 'text-blue-500' : t.textDim}`}/>
+                            <span className={`text-[11px] font-black ${turnAssistActive ? 'text-blue-500' : t.textSub}`}>U-TURN</span>
+                        </button>
+                        <button onClick={() => setIsRecording(!isRecording)} className={`h-full min-w-[88px] px-2.5 rounded-xl border flex flex-col items-center justify-center ${isRecording?'bg-red-900/20 border-red-500 text-red-500':`${theme==='dark'?'bg-slate-900 border-slate-700':'bg-gray-100 border-gray-300'} ${t.textDim}`}`}>
+                            <div className={`w-4 h-4 rounded-full ${isRecording?'bg-red-500 animate-pulse':'bg-slate-500'}`}/>
+                            <span className="text-[11px] font-black tracking-widest">{isRecording?'REC':'COVERAGE'}</span>
+                        </button>
+                        <div className={`hidden xl:flex min-w-0 h-full px-4 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900/70':'bg-gray-100'} flex-col justify-center`}>
+                            <span className={`text-[10px] uppercase font-black ${t.textSub}`}>Task area</span>
+                            <span className={`text-2xl font-black leading-none ${theme==='dark'?'text-slate-200':'text-slate-700'}`}>{workedArea.toFixed(2)}</span>
+                            <span className={`text-[10px] uppercase font-bold ${t.textSub}`}>ha done</span>
+                        </div>
                     </div>
-                    {/* Center Info */}
-                    <div className="flex flex-col items-center">
-                        <div className="flex items-center gap-3 pb-2">
+
+                    <div className={`rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900/80':'bg-gray-100/90'} px-3 py-3 shadow-sm`}>
+                        <div className="flex items-center justify-center gap-2.5">
                             <button
                                 onPointerDown={(e) => { e.preventDefault(); setSteerKey('ArrowLeft', true); }}
                                 onPointerUp={() => setSteerKey('ArrowLeft', false)}
@@ -3641,14 +3720,17 @@ const renderLinesPanel = () => {
                                 onMouseUp={() => setSteerKey('ArrowLeft', false)}
                                 onMouseLeave={() => setSteerKey('ArrowLeft', false)}
                                 onClick={() => updateSteering(Math.max(steeringAngle - 5, -45))}
-                                className={`w-11 h-11 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex items-center justify-center active:scale-95 ${steeringAngle < -1 ? 'text-blue-500' : t.textMain}`}
+                                className={`w-10 h-10 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex items-center justify-center active:scale-95 ${steeringAngle < -1 ? 'text-blue-500' : t.textMain}`}
                                 title="Steer left"
                             >
                                 <RotateCcw className="w-5 h-5" />
                             </button>
-                            <button onClick={() => updateManualSpeed(manualTargetSpeed - 1)} className={`w-11 h-11 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex items-center justify-center active:scale-95`}><Minus className={`w-5 h-5 ${t.textMain}`} /></button>
-                            <div className="text-center min-w-[86px]"><div className={`text-4xl font-bold leading-none ${t.textMain}`}>{Math.abs(speed).toFixed(1)}</div><div className={`text-xs ${t.textSub} uppercase font-bold`}>km/h</div></div>
-                            <button onClick={() => updateManualSpeed(manualTargetSpeed + 1)} className={`w-11 h-11 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex items-center justify-center active:scale-95`}><Plus className={`w-5 h-5 ${t.textMain}`} /></button>
+                            <button onClick={() => updateManualSpeed(manualTargetSpeed - 1)} className={`w-10 h-10 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex items-center justify-center active:scale-95`}><Minus className={`w-5 h-5 ${t.textMain}`} /></button>
+                            <div className="text-center min-w-[86px]">
+                                <div className={`text-4xl font-black leading-none ${t.textMain}`}>{Math.abs(speed).toFixed(1)}</div>
+                                <div className={`text-[11px] ${t.textSub} uppercase font-black`}>km/h</div>
+                            </div>
+                            <button onClick={() => updateManualSpeed(manualTargetSpeed + 1)} className={`w-10 h-10 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex items-center justify-center active:scale-95`}><Plus className={`w-5 h-5 ${t.textMain}`} /></button>
                             <button
                                 onPointerDown={(e) => { e.preventDefault(); setSteerKey('ArrowRight', true); }}
                                 onPointerUp={() => setSteerKey('ArrowRight', false)}
@@ -3658,18 +3740,27 @@ const renderLinesPanel = () => {
                                 onMouseUp={() => setSteerKey('ArrowRight', false)}
                                 onMouseLeave={() => setSteerKey('ArrowRight', false)}
                                 onClick={() => updateSteering(Math.min(steeringAngle + 5, 45))}
-                                className={`w-11 h-11 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex items-center justify-center active:scale-95 ${steeringAngle > 1 ? 'text-blue-500' : t.textMain}`}
+                                className={`w-10 h-10 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex items-center justify-center active:scale-95 ${steeringAngle > 1 ? 'text-blue-500' : t.textMain}`}
                                 title="Steer right"
                             >
                                 <RotateCw className="w-5 h-5" />
                             </button>
-                            <button onClick={stopVehicle} className="w-14 h-11 rounded-xl border border-red-500/40 bg-red-500/10 text-red-500 flex items-center justify-center active:scale-95"><Square className="w-4 h-4" /></button>
-                            <div className={`w-px h-10 ${t.divider}`}></div>
-                            <div className="text-center"><div className={`text-2xl font-bold ${theme==='dark'?'text-slate-300':'text-slate-600'}`}>{workedArea.toFixed(2)}</div><div className={`text-xs ${t.textSub} uppercase font-bold`}>Ha Done</div></div>
+                            <button onClick={stopVehicle} className="w-12 h-10 rounded-xl border border-red-500/40 bg-red-500/10 text-red-500 flex items-center justify-center active:scale-95"><Square className="w-4 h-4" /></button>
                         </div>
                     </div>
-                    {/* Engage Button */}
-                    <button onClick={toggleSteering} className={`h-[80%] w-[260px] rounded-2xl flex items-center justify-between px-6 shadow-2xl active:scale-95 border ${steeringMode==='AUTO'?'bg-green-600 border-green-400':`${theme==='dark'?'bg-slate-800 border-slate-600':'bg-gray-800 border-gray-600'}`}`}><div className="flex flex-col items-start"><span className={`text-xs font-bold uppercase ${steeringMode==='AUTO'?'text-green-200':'text-slate-400'}`}>System</span><span className={`text-2xl font-black ${steeringMode==='AUTO'?'text-white':'text-white'}`}>{steeringMode==='AUTO'?'ENGAGED':'READY'}</span></div><div className={`w-14 h-14 rounded-full flex items-center justify-center ${steeringMode==='AUTO'?'bg-white/20 text-white':'bg-black/20 text-slate-400'}`}><SteeringWheelIcon className={`w-9 h-9 ${steeringMode==='AUTO'?'animate-spin-slow':''}`}/></div></button>
+
+                    <div className="min-w-0 flex items-center justify-end">
+                        <button onClick={toggleSteering} className={`h-[78px] w-full max-w-[250px] rounded-2xl flex items-center justify-between px-5 shadow-2xl active:scale-95 border ${steeringMode==='AUTO'?'bg-green-600 border-green-400':`${theme==='dark'?'bg-slate-800 border-slate-600':'bg-gray-800 border-gray-600'}`}`}>
+                            <div className="flex flex-col items-start min-w-0">
+                                <span className={`text-xs font-black uppercase ${steeringMode==='AUTO'?'text-green-200':'text-slate-400'}`}>Autosteer</span>
+                                <span className="text-2xl font-black text-white truncate">{steeringMode==='AUTO'?'ENGAGED':'READY'}</span>
+                                <span className={`text-[10px] font-bold ${steeringMode==='AUTO'?'text-green-100':'text-slate-400'}`}>{rtkStatus === 'FIX' ? 'RTK fixed' : 'Waiting RTK'}</span>
+                            </div>
+                            <div className={`shrink-0 w-12 h-12 rounded-full flex items-center justify-center ${steeringMode==='AUTO'?'bg-white/20 text-white':'bg-black/20 text-slate-400'}`}>
+                                <SteeringWheelIcon className={`w-8 h-8 ${steeringMode==='AUTO'?'animate-spin-slow':''}`}/>
+                            </div>
+                        </button>
+                    </div>
                 </div>
 
                 {/* MODALS */}
