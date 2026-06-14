@@ -1287,23 +1287,25 @@ const App = () => {
 
       return (
           <div
-              className="absolute left-[154px] right-[168px] top-4 z-30 flex gap-1.5 overflow-x-auto pb-1"
+              className={`absolute left-[154px] top-4 z-30 max-w-[calc(100%-340px)] overflow-x-auto rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950/86 shadow-black/30' : 'bg-white/82 shadow-slate-200/70'} backdrop-blur p-1.5 shadow-lg`}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
           >
-              {tiles.map((tile) => (
-                  <button
-                      key={tile.key}
-                      onClick={tile.onClick}
-                      className={`shrink-0 min-w-[78px] px-2.5 py-1.5 rounded-lg border ${t.borderCard} ${t.bgCard} backdrop-blur shadow-sm flex items-center gap-2 ${tile.onClick ? 'hover:brightness-95 active:scale-95' : ''}`}
-                  >
-                      <tile.icon className={`w-3.5 h-3.5 ${tile.active ? 'text-green-500' : t.textDim}`} />
-                      <div className="text-left leading-tight">
-                          <div className={`text-[8px] font-black uppercase ${t.textSub}`}>{tile.label}</div>
-                          <div className={`text-[11px] font-black ${tile.active ? 'text-green-500' : t.textMain}`}>{tile.value}</div>
-                      </div>
-                  </button>
-              ))}
+              <div className="flex gap-1.5 min-w-max">
+                  {tiles.map((tile) => (
+                      <button
+                          key={tile.key}
+                          onClick={tile.onClick}
+                          className={`shrink-0 min-w-[74px] px-2.5 py-1.5 rounded-lg border ${theme === 'dark' ? 'border-slate-700 bg-slate-900/88' : 'border-gray-200 bg-white/90'} flex items-center gap-2 ${tile.onClick ? 'hover:brightness-95 active:scale-95' : ''}`}
+                      >
+                          <tile.icon className={`w-3.5 h-3.5 ${tile.active ? 'text-green-500' : t.textDim}`} />
+                          <div className="text-left leading-tight">
+                              <div className={`text-[8px] font-black uppercase ${t.textSub}`}>{tile.label}</div>
+                              <div className={`text-[11px] font-black ${tile.active ? 'text-green-500' : t.textMain}`}>{tile.value}</div>
+                          </div>
+                      </button>
+                  ))}
+              </div>
           </div>
       );
   };
@@ -2137,8 +2139,8 @@ const App = () => {
       // 1. Boundary Recording Active? Show controls
       if (isRecordingBoundary) {
           return (
-            <div className={`p-3 rounded-2xl ${t.bgCard} shadow-lg border ${t.borderCard} flex flex-col gap-2 pointer-events-auto w-[60px]`}>
-               <div className={`text-center font-bold text-orange-500 uppercase text-[8px]`}>REC</div>
+            <div className={`p-2.5 rounded-2xl ${t.bgCard} shadow-xl border ${t.borderCard} flex flex-col gap-2 pointer-events-auto w-[86px]`}>
+               <div className={`text-center font-black text-orange-500 uppercase text-[9px] tracking-wider`}>Boundary</div>
                <DockButton theme={t} icon={Square} label="Finish" color="green" onClick={finishBoundaryRecording}/>
                <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelBoundaryRecording}/>
             </div>
@@ -2149,8 +2151,8 @@ const App = () => {
       // If Auto is engaged, show trim controls - TAKES PRECEDENCE over creation if Auto is active
       if (steeringMode === 'AUTO') {
            return (
-            <div className={`p-3 rounded-2xl ${t.bgCard} shadow-lg border ${t.borderCard} flex flex-col gap-2 pointer-events-auto w-[60px]`}>
-               <span className={`text-[8px] text-center ${t.textSub} font-bold uppercase`}>TRIM</span>
+            <div className={`p-2.5 rounded-2xl ${t.bgCard} shadow-xl border ${t.borderCard} flex flex-col gap-2 pointer-events-auto w-[86px]`}>
+               <span className={`text-[9px] text-center ${t.textSub} font-black uppercase tracking-wider`}>Trim</span>
                <DockButton theme={t} icon={CornerUpLeft} label="L 1cm" color="green" onClick={() => handleTrim('left')}/>
                <DockButton theme={t} icon={CornerUpRight} label="R 1cm" color="green" onClick={() => handleTrim('right')}/>
                <div className={`h-px ${t.divider}`}></div>
@@ -2226,8 +2228,8 @@ const App = () => {
             default: break;
         }
         return (
-            <div className={`p-3 rounded-2xl ${t.bgCard} shadow-lg border ${t.borderCard} flex flex-col gap-2 pointer-events-auto w-[60px]`}>
-                 <div className={`text-[8px] font-bold ${t.textSub} uppercase text-center mb-1`}>{lineType.replace('_',' ')}</div>
+            <div className={`p-2.5 rounded-2xl ${t.bgCard} shadow-xl border ${t.borderCard} flex flex-col gap-2 pointer-events-auto w-[86px]`}>
+                 <div className={`text-[9px] font-black ${t.textSub} uppercase text-center mb-1 leading-tight`}>{lineType.replace(/_/g,' ')}</div>
                  {content}
             </div>
         );
@@ -2236,11 +2238,17 @@ const App = () => {
       // 3. Dock Menu Open? Show the 3 choices
       if (dockMenuOpen) {
           return (
-            <div className={`p-3 rounded-2xl ${t.bgCard} shadow-lg border ${t.borderCard} flex flex-col gap-3 pointer-events-auto w-[60px] animate-in slide-in-from-right-5 fade-in duration-200`}>
-               <DockButton theme={t} icon={Route} label="Line" color="blue" onClick={() => setLineModeModalOpen(true)}/>
+            <div className={`p-2 rounded-2xl ${t.bgCard} shadow-xl border ${t.borderCard} flex flex-col gap-1.5 pointer-events-auto w-[92px] animate-in slide-in-from-right-5 fade-in duration-200`}>
+               <div className={`text-[9px] text-center ${t.textSub} font-black uppercase tracking-wider`}>Create</div>
+               <DockButton theme={t} icon={Route} label="Line" color="blue" onClick={() => { setDockMenuOpen(false); setLineModeModalOpen(true); }}/>
                <DockButton theme={t} icon={MapPin} label="Bound" color="orange" onClick={startBoundaryCreation}/>
                <div className={`h-px ${t.divider}`}></div>
-               <DockButton theme={t} icon={MoreHorizontal} label="Menu" color="gray" onClick={() => setMenuOpen(true)}/>
+               <div className={`text-[9px] text-center ${t.textSub} font-black uppercase tracking-wider`}>View</div>
+               <DockButton theme={t} icon={showGuidanceLines ? Eye : EyeOff} label="Lines" color={showGuidanceLines ? "blue" : "gray"} onClick={() => actions.setShowGuidanceLines(!showGuidanceLines)}/>
+               <DockButton theme={t} icon={Plus} label="Zoom +" color="gray" onClick={() => handleZoom('in')}/>
+               <DockButton theme={t} icon={Minus} label="Zoom -" color="gray" onClick={() => handleZoom('out')}/>
+               <div className={`h-px ${t.divider}`}></div>
+               <DockButton theme={t} icon={MoreHorizontal} label="Menu" color="gray" onClick={() => { setDockMenuOpen(false); setMenuOpen(true); }}/>
                <DockButton theme={t} icon={X} label="Close" color="gray" onClick={() => setDockMenuOpen(false)}/>
             </div>
           );
@@ -2248,13 +2256,16 @@ const App = () => {
 
       // Default Tool Symbol - PLUS CIRCLE floating button
       return (
-         <div className="pointer-events-auto">
+         <div className={`p-2 rounded-2xl ${t.bgCard} shadow-xl border ${t.borderCard} pointer-events-auto w-[76px] flex flex-col gap-1.5`}>
             <button
                 onClick={() => setDockMenuOpen(true)}
-                className={`w-16 h-16 rounded-full bg-blue-600 border-4 border-white/20 shadow-2xl flex items-center justify-center text-white hover:bg-blue-500 hover:scale-105 active:scale-95 transition-all`}
+                className="w-full h-[58px] rounded-2xl bg-blue-600 border border-blue-400/40 shadow-xl flex items-center justify-center text-white hover:bg-blue-500 active:scale-95 transition-all"
             >
-                <Plus className="w-8 h-8" strokeWidth={3} />
+                <Plus className="w-8 h-8" />
             </button>
+            <DockButton theme={t} icon={showGuidanceLines ? Eye : EyeOff} label="Lines" color={showGuidanceLines ? "blue" : "gray"} onClick={() => actions.setShowGuidanceLines(!showGuidanceLines)}/>
+            <DockButton theme={t} icon={Plus} label="Zoom +" color="gray" onClick={() => handleZoom('in')}/>
+            <DockButton theme={t} icon={Minus} label="Zoom -" color="gray" onClick={() => handleZoom('out')}/>
          </div>
       );
   };
@@ -2723,76 +2734,217 @@ const App = () => {
 const renderLinesPanel = () => {
     const activeField = fields.find(f => f.id === selectedFieldId);
     const lines = activeField?.lines || [];
+    const selectedLine = lines.find(line => line.id === activeLineId) || lines[0];
+    const activeLineLength = selectedLine ? getLineLengthMeters(selectedLine) : null;
+    const panelBg = theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50';
+    const surfaceBg = theme === 'dark' ? 'bg-slate-900/80' : 'bg-white';
+    const mutedBg = theme === 'dark' ? 'bg-slate-900/55' : 'bg-slate-50';
+
+    const getLineIconFor = (line) => {
+        if (line?.type === 'CURVE') return Spline;
+        if (line?.type === 'COMBINATION') return AlignJustify;
+        if (line?.type === 'PIVOT') return CircleDashed;
+        if (line?.type === 'A_PLUS') return ArrowUpFromDot;
+        return GitCommitHorizontal;
+    };
+
+    const getLinePointList = (line) => {
+        const pts = [];
+        if (line?.points?.a) pts.push(line.points.a);
+        if (line?.points?.b) pts.push(line.points.b);
+        if (line?.points?.aplus?.point) pts.push(line.points.aplus.point);
+        if (Array.isArray(line?.points?.curve)) pts.push(...line.points.curve);
+        if (line?.points?.pivot?.center) pts.push(line.points.pivot.center);
+        return pts.filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+    };
+
+    const renderLinePreview = (line) => {
+        const points = getLinePointList(line);
+        const source = points.length > 1 ? points : [{ x: -140, y: -80 }, { x: 140, y: 80 }];
+        const xs = source.map(p => p.x);
+        const ys = source.map(p => p.y);
+        const minX = Math.min(...xs);
+        const maxX = Math.max(...xs);
+        const minY = Math.min(...ys);
+        const maxY = Math.max(...ys);
+        const width = 380;
+        const height = 210;
+        const pad = 34;
+        const scale = Math.min((width - pad * 2) / Math.max(maxX - minX, 1), (height - pad * 2) / Math.max(maxY - minY, 1));
+        const midX = (minX + maxX) / 2;
+        const midY = (minY + maxY) / 2;
+        const mapPoint = (pt) => ({
+            x: width / 2 + (pt.x - midX) * scale,
+            y: height / 2 + (pt.y - midY) * scale
+        });
+        const preview = source.map(mapPoint);
+        const gridStroke = theme === 'dark' ? '#334155' : '#cbd5e1';
+
+        return (
+            <div className={`rounded-xl border ${t.borderCard} ${mutedBg} overflow-hidden`}>
+                <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-[210px] block" aria-label="Guidance line preview">
+                    <defs>
+                        <pattern id={`line-grid-${line?.id || 'empty'}`} width="24" height="24" patternUnits="userSpaceOnUse">
+                            <path d="M 24 0 L 0 0 0 24" fill="none" stroke={gridStroke} strokeWidth="0.7" opacity={theme === 'dark' ? '0.28' : '0.42'} />
+                        </pattern>
+                    </defs>
+                    <rect width={width} height={height} fill={`url(#line-grid-${line?.id || 'empty'})`} />
+                    <rect width={width} height={height} fill={theme === 'dark' ? 'rgba(2,6,23,0.24)' : 'rgba(248,250,252,0.36)'} />
+                    <polyline
+                        points={preview.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
+                        fill="none"
+                        stroke="#2563eb"
+                        strokeWidth="5"
+                        strokeLinecap="round"
+                    />
+                    {preview[0] && <circle cx={preview[0].x} cy={preview[0].y} r="8" fill="#2563eb" stroke="white" strokeWidth="2" />}
+                    {preview[preview.length - 1] && <circle cx={preview[preview.length - 1].x} cy={preview[preview.length - 1].y} r="8" fill="#f97316" stroke="white" strokeWidth="2" />}
+                </svg>
+            </div>
+        );
+    };
 
     return (
-        <div className={`w-full h-full flex flex-col ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}>
-            {/* Header with close action */}
-            <div className={`flex items-center justify-between p-6 border-b ${t.divider}`}>
-                <h2 className={`text-xl font-bold ${t.textMain}`}>Lines Management</h2>
+        <div className={`w-full h-full flex flex-col ${panelBg}`}>
+            <div className={`flex items-center justify-between gap-4 px-6 py-5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+                <div className="min-w-0 flex items-center gap-3">
+                    <div className={`shrink-0 w-11 h-11 rounded-xl border ${t.borderCard} ${surfaceBg} flex items-center justify-center`}>
+                        <Route className="w-6 h-6 text-blue-500" />
+                    </div>
+                    <div className="min-w-0">
+                        <h2 className={`text-xl font-black ${t.textMain}`}>Guidance Lines</h2>
+                        <div className={`text-xs ${t.textSub} truncate`}>{activeField?.name || 'No field selected'} / {lines.length} saved lines</div>
+                    </div>
+                </div>
                 <button
                     onClick={() => setLinesPanelOpen(false)}
-                    className={`p-2 rounded-lg ${t.activeItem} hover:brightness-95 transition-all`}
+                    className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 transition-all`}
                 >
                     <X className="w-5 h-5" />
                 </button>
             </div>
 
-            {/* Panel content */}
-            <div className="flex-1 overflow-y-auto p-6">
-                {lines.length === 0 ? (
-                    <div className={`text-center py-12 ${t.textDim}`}>
-                        <Navigation className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                        <p className="text-lg">No lines created yet</p>
-                        <p className="text-sm mt-2">Create your first guidance line to get started</p>
-                    </div>
-                ) : (
-                    <div className="space-y-4">
-                        {lines.map((line, index) => {
-                            const lengthMeters = getLineLengthMeters(line);
-                            const active = activeLineId === line.id;
-                            return (
-                            <div key={line.id} className={`p-4 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-50'} border ${t.borderCard} rounded-xl`}>
-                                <div className="flex items-center justify-between gap-3">
-                                    <div className="flex items-center gap-3 min-w-0">
-                                        <div className={`shrink-0 w-3 h-3 rounded-full ${active ? 'bg-green-500' : 'bg-gray-400'}`}></div>
-                                        <span className={`font-medium ${t.textMain} truncate`}>{line.name || `Line ${index + 1}`}</span>
-                                    </div>
-                                    <div className="shrink-0 flex items-center gap-2">
-                                        <button
-                                            onClick={() => handleLoadLine(line)}
-                                            className={`px-3 py-1 text-sm rounded-lg ${active ? 'bg-green-600 text-white' : `border ${t.borderCard} ${t.textSub} hover:bg-opacity-10 hover:bg-current`}`}
-                                        >
-                                            {active ? 'Active' : 'Load'}
-                                        </button>
-                                        <button
-                                            onClick={() => confirmDelete('line', line.id)}
-                                            className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
-                                        >
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
-                                    </div>
+            <div className="flex-1 min-h-0 p-5 lg:p-6 overflow-hidden">
+                <div className="h-full grid grid-cols-[minmax(330px,0.95fr)_minmax(0,1.25fr)] gap-5">
+                    <section className={`${surfaceBg} border ${t.borderCard} rounded-xl flex flex-col min-h-0 overflow-hidden`}>
+                        <div className={`p-4 border-b ${t.divider}`}>
+                            <div className="grid grid-cols-3 gap-2 mb-4">
+                                <div className={`${mutedBg} border ${t.borderCard} rounded-lg p-3`}>
+                                    <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Total</div>
+                                    <div className={`text-2xl font-black ${t.textMain}`}>{lines.length}</div>
                                 </div>
-                                <div className={`mt-3 text-sm ${t.textSub}`}>
-                                    <p>Length: {lengthMeters !== null ? lengthMeters.toFixed(1) : '--'} m</p>
-                                    <p>Created: {formatLineDate(line)}</p>
+                                <div className={`${mutedBg} border ${t.borderCard} rounded-lg p-3`}>
+                                    <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Active</div>
+                                    <div className={`text-2xl font-black ${activeLineId ? 'text-green-500' : t.textMain}`}>{activeLineId ? 1 : 0}</div>
+                                </div>
+                                <div className={`${mutedBg} border ${t.borderCard} rounded-lg p-3`}>
+                                    <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Multi</div>
+                                    <div className={`text-2xl font-black ${t.textMain}`}>{lines.filter(line => line.isMulti).length}</div>
                                 </div>
                             </div>
-                        );})}
-                    </div>
-                )}
+                            <button
+                                onClick={() => {
+                                    setLinesPanelOpen(false);
+                                    setLineModeModalOpen(true);
+                                }}
+                                className="w-full px-5 py-3 bg-blue-600 text-white font-black rounded-lg hover:bg-blue-500 transition-colors flex items-center justify-center gap-2"
+                            >
+                                <Plus className="w-5 h-5" />
+                                New Guidance Line
+                            </button>
+                        </div>
 
-                {/* Create line action */}
-                <div className="mt-6 flex justify-center">
-                    <button
-                        onClick={() => {
-                            setLinesPanelOpen(false);
-                            setLineModeModalOpen(true);
-                        }}
-                        className="px-6 py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-500 transition-colors flex items-center gap-2"
-                    >
-                        <Plus className="w-5 h-5" />
-                        Create New Line
-                    </button>
+                        <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
+                            {lines.length === 0 ? (
+                                <div className={`h-full min-h-[280px] flex flex-col items-center justify-center text-center ${t.textDim}`}>
+                                    <Navigation className="w-14 h-14 mb-4 opacity-50" />
+                                    <p className={`text-lg font-black ${t.textMain}`}>No guidance line</p>
+                                    <p className="text-sm mt-2 max-w-[260px]">Create AB, A+, curve, pivot or combination line for this field.</p>
+                                </div>
+                            ) : (
+                                lines.map((line, index) => {
+                                    const Icon = getLineIconFor(line);
+                                    const lengthMeters = getLineLengthMeters(line);
+                                    const active = activeLineId === line.id;
+                                    return (
+                                        <div key={line.id} className={`p-3 rounded-xl border transition-all ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${mutedBg}`}`}>
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="flex items-start gap-3 min-w-0">
+                                                    <div className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-blue-500 border ${t.borderCard}`}`}>
+                                                        <Icon className="w-5 h-5" />
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                        <div className={`font-black ${t.textMain} truncate`}>{line.name || `Line ${index + 1}`}</div>
+                                                        <div className={`text-xs ${t.textSub}`}>{(line.type || 'LINE').replace(/_/g, ' ')} / {lengthMeters !== null ? `${lengthMeters.toFixed(1)} m` : '--'}</div>
+                                                    </div>
+                                                </div>
+                                                {active && <span className="shrink-0 px-2 py-1 rounded-md bg-green-500/15 text-green-500 text-[10px] font-black uppercase">Active</span>}
+                                            </div>
+                                            <div className="mt-3 flex items-center justify-between gap-2">
+                                                <span className={`text-xs ${t.textSub}`}>{formatLineDate(line)}</span>
+                                                <div className="flex items-center gap-2">
+                                                    <button onClick={() => confirmDelete('line', line.id)} className="p-2 rounded-lg text-red-500 hover:bg-red-500/10">
+                                                        <Trash2 className="w-4 h-4" />
+                                                    </button>
+                                                    <button onClick={() => handleLoadLine(line)} className={`px-3 py-2 rounded-lg text-xs font-black ${active ? 'bg-blue-600 text-white' : `border ${t.borderCard} ${t.textMain} hover:brightness-95`}`}>
+                                                        {active ? 'Loaded' : 'Load'}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+                    </section>
+
+                    <section className={`${surfaceBg} border ${t.borderCard} rounded-xl p-5 min-w-0 overflow-y-auto`}>
+                        {selectedLine ? (
+                            <div className="space-y-5">
+                                <div className="flex items-start justify-between gap-4">
+                                    <div className="min-w-0">
+                                        <div className={`text-[10px] uppercase tracking-wider font-black ${t.textSub}`}>Selected line</div>
+                                        <h3 className={`text-2xl font-black ${t.textMain} truncate`}>{selectedLine.name}</h3>
+                                        <div className={`mt-1 text-sm ${t.textSub}`}>{(selectedLine.type || 'LINE').replace(/_/g, ' ')} / {selectedLine.isMulti ? 'Parallel lines enabled' : 'Single path'}</div>
+                                    </div>
+                                    {activeLineId === selectedLine.id && <span className="shrink-0 px-3 py-1.5 rounded-lg bg-green-500/15 text-green-500 text-xs font-black uppercase">Active</span>}
+                                </div>
+
+                                {renderLinePreview(selectedLine)}
+
+                                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                                    {[
+                                        ['Type', (selectedLine.type || 'LINE').replace(/_/g, ' ')],
+                                        ['Length', activeLineLength !== null ? `${activeLineLength.toFixed(1)} m` : '--'],
+                                        ['Created', formatLineDate(selectedLine)],
+                                        ['Pattern', selectedLine.isMulti ? 'Multi' : 'Single']
+                                    ].map(([label, value]) => (
+                                        <div key={label} className={`${mutedBg} border ${t.borderCard} rounded-lg p-3 min-w-0`}>
+                                            <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
+                                            <div className={`mt-1 text-sm font-black ${t.textMain} truncate`}>{value}</div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <div className={`pt-4 border-t ${t.borderCard} flex flex-wrap justify-end gap-3`}>
+                                    <button onClick={() => confirmDelete('line', selectedLine.id)} className="px-5 py-3 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold flex items-center gap-2">
+                                        <Trash2 className="w-5 h-5" />
+                                        Delete
+                                    </button>
+                                    <button onClick={() => handleLoadLine(selectedLine)} className="px-7 py-3 rounded-lg bg-blue-600 text-white font-black hover:bg-blue-500 shadow-lg shadow-blue-900/20 flex items-center gap-2">
+                                        <CheckCircle2 className="w-5 h-5" />
+                                        {activeLineId === selectedLine.id ? 'Reload Line' : 'Load Line'}
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className={`h-full min-h-[360px] flex flex-col items-center justify-center text-center ${t.textDim}`}>
+                                <Route className="w-16 h-16 mb-4 opacity-50" />
+                                <h3 className={`text-xl font-black ${t.textMain}`}>No line selected</h3>
+                                <p className="text-sm mt-2 max-w-[320px]">Create a guidance line first, then load it here for the run screen.</p>
+                            </div>
+                        )}
+                    </section>
                 </div>
             </div>
         </div>
@@ -3641,15 +3793,6 @@ const renderLinesPanel = () => {
                         </button>
                     )}
 
-                    {/* ZOOM & SHOW LINES CONTROLS */}
-                    <div className="absolute right-24 bottom-32 z-20 flex flex-col gap-2">
-                        <button onClick={() => actions.setShowGuidanceLines(!showGuidanceLines)} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain} transition-all hover:bg-blue-50 dark:hover:bg-blue-900/30`}>
-                            {showGuidanceLines ? <Eye className="w-6 h-6 text-blue-500"/> : <EyeOff className="w-6 h-6 text-slate-400"/>}
-                        </button>
-                        <div className={`h-px ${t.divider}`}></div>
-                        <button onClick={() => handleZoom('in')} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain}`}><Plus className="w-6 h-6"/></button>
-                        <button onClick={() => handleZoom('out')} className={`p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain}`}><Minus className="w-6 h-6"/></button>
-                    </div>
                     {renderFeatureStatusStrip()}
                     {renderMissionOverview()}
                     {renderCompassWidget()}
@@ -3914,7 +4057,7 @@ const renderLinesPanel = () => {
                     </div></div></div>
                 )}
                 {/* ACTION DOCK */}
-                <div className="absolute right-[2%] top-[15%] bottom-[18%] w-[7%] min-w-[60px] z-20 flex flex-col justify-center pointer-events-none">
+                <div className="absolute right-4 top-[150px] bottom-[128px] w-[96px] z-20 flex flex-col justify-center pointer-events-none">
                     <div className="pointer-events-auto w-full flex flex-col items-end gap-2">
                         {renderActionDock()}
                     </div>
