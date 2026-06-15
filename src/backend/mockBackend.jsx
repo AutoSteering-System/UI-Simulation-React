@@ -21,10 +21,20 @@ const MockBackend = (() => {
       delayOff: 0.2
     },
     rtkSettings: {
+      correctionSource: 'NTRIP',
+      receiverPort: 'COM3',
+      baudRate: '115200',
+      protocol: 'RTCM3',
       ntripHost: 'rtk.sveaverken.com',
       port: '2101',
       mountpoint: 'VRS_RTCM32',
-      user: 'user123'
+      user: 'user123',
+      password: '',
+      autoReconnect: true,
+      sendGga: true,
+      ggaInterval: '5',
+      nmeaOutput: false,
+      nmeaRate: '10'
     },
     lineType: 'STRAIGHT_AB',
     isMultiLineMode: true,
