@@ -1235,14 +1235,13 @@ const App = () => {
 
       return (
           <div
-              className={`absolute left-4 top-4 z-30 w-[120px] rounded-xl border ${t.borderCard} ${t.bgCard} shadow-lg backdrop-blur p-2 flex flex-col gap-2`}
+              className={`absolute left-4 top-4 z-30 w-[108px] rounded-xl border ${t.borderCard} ${t.bgCard} shadow-lg backdrop-blur p-2 flex flex-col items-center gap-2`}
               onPointerDown={(e) => e.stopPropagation()}
               onPointerMove={(e) => e.stopPropagation()}
               onPointerUp={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
           >
-              <div className="flex items-center gap-2">
-              <svg width="58" height="58" viewBox="0 0 82 82" aria-label="Compass" className="shrink-0">
+              <svg width="62" height="62" viewBox="0 0 82 82" aria-label="Compass" className="shrink-0">
                   <circle cx="41" cy="41" r="37" fill={face} stroke={ring} strokeWidth="2.2" />
                   <circle cx="41" cy="41" r="28" fill="none" stroke={ring} strokeWidth="1" opacity="0.55" />
                   {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => {
@@ -1271,12 +1270,6 @@ const App = () => {
                   </g>
                   <circle cx="41" cy="41" r="3.5" fill="#2563eb" stroke="white" strokeWidth="1.5" />
               </svg>
-                  <div className="min-w-0">
-                      <div className={`text-[9px] uppercase font-black ${t.textSub}`}>HDG</div>
-                      <div className={`text-lg font-black leading-none ${t.textMain}`}>{`${getDisplayHeading()}\u00b0`}</div>
-                      <div className={`text-[10px] uppercase font-black text-blue-500`}>{getCardinalShortDirection(heading)}</div>
-                  </div>
-              </div>
 
                <div className="w-full">
                   <div className={`grid grid-cols-2 gap-1 p-1 rounded-lg ${isDark ? 'bg-slate-800' : 'bg-gray-100'}`}>
@@ -2730,34 +2723,46 @@ const App = () => {
         case 'calibration': {
             const calibCards = [
               {
-                title: 'Vehicle Calibration',
+                title: 'Vehicle Geometry',
+                icon: Tractor,
                 status: 'OK',
-                detail: 'Steering angle, wheelbase, axle width',
+                detail: 'Wheelbase and hitch reference.',
                 actions: [
-                  { label: 'Run Calibration', tone: 'primary', onClick: () => showNotification('Vehicle calibration started', 'success') },
+                  { label: 'Run', tone: 'primary', onClick: () => showNotification('Vehicle calibration started', 'success') },
                   { label: 'Reset', tone: 'ghost', onClick: () => showNotification('Vehicle calibration reset', 'info') }
                 ],
-                meta: { label: 'Last', value: 'Today 08:45' }
+                meta: [
+                    { label: 'Last Run', value: 'Today 08:45' },
+                    { label: 'Wheelbase', value: `${vehicleSettings.wheelbase} m` }
+                ]
               },
               {
-                title: 'Implement Calibration',
+                title: 'Implement Setup',
+                icon: Ruler,
                 status: 'Needs Check',
-                detail: 'Width, overlap, offset, delay on/off',
+                detail: 'Width, overlap and delay.',
                 actions: [
-                  { label: 'Run Calibration', tone: 'primary', onClick: () => showNotification('Implement calibration started', 'success') },
+                  { label: 'Run', tone: 'primary', onClick: () => showNotification('Implement calibration started', 'success') },
                   { label: 'Reset', tone: 'ghost', onClick: () => showNotification('Implement calibration reset', 'info') }
                 ],
-                meta: { label: 'Last', value: 'Yesterday 17:20' }
+                meta: [
+                    { label: 'Last Run', value: 'Yesterday 17:20' },
+                    { label: 'Width', value: `${implementSettings.width} m` }
+                ]
               },
               {
-                title: 'Angle Sensor Calibration',
+                title: 'Angle Sensor',
+                icon: Gauge,
                 status: 'OK',
-                detail: 'Zero, range, live angle check',
+                detail: 'Zero point and range.',
                 actions: [
-                  { label: 'Calibrate Sensor', tone: 'primary', onClick: () => showNotification('Angle sensor calibration started', 'success') },
-                  { label: 'Zero Offset', tone: 'ghost', onClick: () => showNotification('Angle sensor zeroed', 'info') }
+                  { label: 'Calibrate', tone: 'primary', onClick: () => showNotification('Angle sensor calibration started', 'success') },
+                  { label: 'Zero', tone: 'ghost', onClick: () => showNotification('Angle sensor zeroed', 'info') }
                 ],
-                meta: { label: 'Live', value: `${steeringAngle.toFixed(1)}\u00b0` }
+                meta: [
+                    { label: 'Live Angle', value: `${steeringAngle.toFixed(1)}\u00b0` },
+                    { label: 'Range', value: '\u00b145\u00b0' }
+                ]
               }
             ];
 
@@ -2766,41 +2771,67 @@ const App = () => {
               if (status === 'Needs Check') return 'bg-yellow-500/10 text-yellow-500 border-yellow-500/40';
               return 'bg-slate-500/10 text-slate-500 border-slate-500/40';
             };
+            const doneCount = calibCards.filter(card => card.status === 'OK').length;
 
             return (
-              <div className="space-y-6">
-                <h3 className={`text-xl font-bold mb-2 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Calibration</h3>
-                <p className={`${t.textSub} text-sm`}>All calibration tasks are centralized here for quick access.</p>
+              <div className="space-y-5">
+                <SettingsSection
+                    title="Calibration Center"
+                    detail="Run the required calibration before engaging auto steer."
+                    icon={Gauge}
+                    actions={<SettingsActionButton variant="primary" onClick={() => showNotification('Calibration check started', 'info')}>Run Check</SettingsActionButton>}
+                >
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <SettingsMetric label="Ready Modules" value={`${doneCount}/${calibCards.length}`} tone={doneCount === calibCards.length ? 'text-green-500' : 'text-yellow-500'} />
+                        <SettingsMetric label="Steering Angle" value={`${steeringAngle.toFixed(1)} deg`} />
+                        <SettingsMetric label="Implement Width" value={`${implementSettings.width} m`} />
+                    </div>
+                    <div className={`h-2 rounded-full overflow-hidden ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-200'}`}>
+                        <div className="h-full bg-green-500" style={{ width: `${(doneCount / calibCards.length) * 100}%` }}></div>
+                    </div>
+                </SettingsSection>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
                   {calibCards.map((card) => (
-                    <div key={card.title} className={`${t.bgPanel} border ${t.borderCard} rounded-2xl p-5 flex flex-col gap-4`}>
+                    <article key={card.title} className={`${t.bgPanel} border ${t.borderCard} rounded-xl p-4 flex flex-col gap-3 min-h-[218px]`}>
                       <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className={`text-base font-bold ${t.textMain}`}>{card.title}</div>
-                          <div className={`text-xs ${t.textSub}`}>{card.detail}</div>
+                        <div className="flex items-start gap-3 min-w-0">
+                          <div className={`shrink-0 w-10 h-10 rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
+                              <card.icon className="w-5 h-5 text-blue-500" />
+                          </div>
+                          <div className="min-w-0">
+                              <div className={`text-base font-black ${t.textMain}`}>{card.title}</div>
+                              <div className={`text-[11px] ${t.textSub}`}>{card.detail}</div>
+                          </div>
                         </div>
-                        <span className={`shrink-0 text-xs font-bold px-3 py-1 rounded-full border ${statusClass(card.status)}`}>{card.status}</span>
+                        <span className={`shrink-0 text-[11px] font-bold px-2.5 py-1 rounded-full border ${statusClass(card.status)}`}>{card.status}</span>
                       </div>
 
-                      <div className={`text-sm ${t.textSub}`}>{card.meta.label}: <span className={`${t.textMain} font-semibold`}>{card.meta.value}</span></div>
+                      <div className="grid grid-cols-2 gap-3">
+                        {card.meta.map((item) => (
+                            <div key={item.label} className={`${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50'} border ${t.borderCard} rounded-lg p-2.5`}>
+                                <div className={`text-[10px] uppercase font-black ${t.textSub}`}>{item.label}</div>
+                                <div className={`text-sm font-black ${t.textMain}`}>{item.value}</div>
+                            </div>
+                        ))}
+                      </div>
 
-                      <div className="flex flex-wrap gap-3">
+                      <div className="mt-auto flex gap-2">
                         {card.actions.map((action) => (
                           <button
                             key={action.label}
                             onClick={action.onClick}
                             className={
                               action.tone === 'primary'
-                                ? 'px-4 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500'
-                                : `px-4 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold hover:brightness-95`
+                                ? 'px-3.5 py-2 rounded-lg bg-blue-600 text-white font-black hover:bg-blue-500 text-xs whitespace-nowrap flex-1'
+                                : `px-3.5 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-black hover:brightness-95 text-xs whitespace-nowrap`
                             }
                           >
                             {action.label}
                           </button>
                         ))}
                       </div>
-                    </div>
+                    </article>
                   ))}
                 </div>
               </div>
@@ -2822,6 +2853,16 @@ const App = () => {
               ggaInterval: '5',
               nmeaOutput: false,
               nmeaRate: '10',
+              baseMode: 'Survey In',
+              baseId: 'BASE-01',
+              baseLatitude: '10.7769',
+              baseLongitude: '106.7009',
+              baseHeight: '12.5',
+              surveyDuration: '180',
+              surveyAccuracy: '2.5',
+              radioChannel: '07',
+              radioPower: '1W',
+              radioFrequency: '464.500',
               ...rtkSettings
             };
             const rtkQuality = rtkStatus === 'FIX' ? 95 : rtkStatus === 'FLOAT' ? 75 : rtkStatus === 'DIFF' ? 55 : 20;
@@ -2975,7 +3016,7 @@ const App = () => {
                 <div className="order-1">
                 <SettingsSection title="Correction Input" detail="Receiver input and correction source configuration." icon={LocateFixed}>
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                        <SettingSelect label="Correction Source" value={rtkConfig.correctionSource} onChange={(value) => handleRtkSettingChange('correctionSource', value)} options={['NTRIP', 'Radio Base', 'SBAS', 'External Receiver']} />
+                        <SettingSelect label="Correction Source" value={rtkConfig.correctionSource} onChange={(value) => handleRtkSettingChange('correctionSource', value)} options={['NTRIP', 'Base Station', 'Radio Base', 'External Receiver', 'SBAS']} />
                         <SettingSelect label="Protocol" value={rtkConfig.protocol} onChange={(value) => handleRtkSettingChange('protocol', value)} options={['RTCM3', 'RTCM2', 'CMR+', 'NMEA']} />
                         <SettingSelect label="Receiver Port" value={rtkConfig.receiverPort} onChange={(value) => handleRtkSettingChange('receiverPort', value)} options={['COM1', 'COM2', 'COM3', 'USB', 'TCP']} />
                         <SettingSelect label="Baud Rate" value={rtkConfig.baudRate} onChange={(value) => handleRtkSettingChange('baudRate', value)} options={['9600', '38400', '57600', '115200', '230400']} />
@@ -2987,7 +3028,7 @@ const App = () => {
                 </SettingsSection>
                 </div>
 
-                <div className="order-2">
+                <div className="order-3">
                 <SettingsSection
                     title="NTRIP Caster"
                     detail="Caster endpoint, mountpoint and account."
@@ -3012,7 +3053,33 @@ const App = () => {
                 </SettingsSection>
                 </div>
 
-                <div className="order-3">
+                <div className="order-2">
+                <SettingsSection
+                    title="Base / Radio Setup"
+                    detail="Local base station and radio correction setup for offline RTK."
+                    icon={LocateFixed}
+                    actions={<><SettingsActionButton onClick={() => showNotification('Base survey-in started', 'info')}>Start Survey</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => showNotification('Base station profile saved', 'success')}>Save Base</SettingsActionButton></>}
+                >
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <SettingSelect label="Base Mode" value={rtkConfig.baseMode} onChange={(value) => handleRtkSettingChange('baseMode', value)} options={['Survey In', 'Known Position', 'Moving Base']} />
+                        <SettingInput theme={t} label="Base ID" value={rtkConfig.baseId} onChange={(e) => handleRtkSettingChange('baseId', e.target.value)} />
+                        <SettingInput theme={t} label="Survey Duration (s)" value={rtkConfig.surveyDuration} type="number" onChange={(e) => handleRtkSettingChange('surveyDuration', e.target.value)} />
+                        <SettingInput theme={t} label="Target Accuracy (cm)" value={rtkConfig.surveyAccuracy} type="number" onChange={(e) => handleRtkSettingChange('surveyAccuracy', e.target.value)} />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <SettingInput theme={t} label="Base Latitude" value={rtkConfig.baseLatitude} onChange={(e) => handleRtkSettingChange('baseLatitude', e.target.value)} />
+                        <SettingInput theme={t} label="Base Longitude" value={rtkConfig.baseLongitude} onChange={(e) => handleRtkSettingChange('baseLongitude', e.target.value)} />
+                        <SettingInput theme={t} label="Base Height (m)" value={rtkConfig.baseHeight} type="number" onChange={(e) => handleRtkSettingChange('baseHeight', e.target.value)} />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <SettingInput theme={t} label="Radio Channel" value={rtkConfig.radioChannel} onChange={(e) => handleRtkSettingChange('radioChannel', e.target.value)} />
+                        <SettingInput theme={t} label="Radio Frequency (MHz)" value={rtkConfig.radioFrequency} onChange={(e) => handleRtkSettingChange('radioFrequency', e.target.value)} />
+                        <SettingSelect label="Radio Power" value={rtkConfig.radioPower} onChange={(value) => handleRtkSettingChange('radioPower', value)} options={['0.5W', '1W', '2W', '5W']} />
+                    </div>
+                </SettingsSection>
+                </div>
+
+                <div className="order-5">
                 <SettingsSection title="GNSS Output" detail="NMEA forwarding for external displays or controllers." icon={Activity}>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <ToggleFlag label="NMEA Output" detail="Forward GNSS position to another controller." flagKey="nmeaOutput" icon={Navigation} />
@@ -3029,75 +3096,86 @@ const App = () => {
     }
   };
 
-  const renderSettingsPanel = () => (
-      <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/96' : 'bg-gray-100/96'} z-40 flex overflow-hidden`}>
-          <div className={`w-[28%] min-w-[280px] max-w-[340px] border-r ${t.border} ${t.bgPanel} flex flex-col min-h-0`}>
-              <div className={`p-5 border-b ${t.borderCard}`}>
-                  <h2 className={`text-xl lg:text-2xl font-black flex items-center gap-3 ${t.textMain}`}>
-                      <Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />
-                      System
-                  </h2>
-                  <div className={`mt-1 text-xs ${t.textSub}`}>Grouped setup for run, machine and service modules</div>
-              </div>
+  const renderSettingsPanel = () => {
+      const currentItem = settingsNavSections.flatMap(section => section.items).find(item => item.id === settingsTab) || settingsNavSections[0].items[0];
+      const CurrentIcon = currentItem.icon || Settings;
 
-              <div className={`m-4 p-3 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50'}`}>
-                  <div className="grid grid-cols-3 gap-2 text-center">
-                      <div>
-                          <div className={`text-[9px] uppercase font-black ${t.textSub}`}>RTK</div>
-                          <div className={`text-sm font-black ${rtkStatus === 'FIX' ? 'text-green-500' : 'text-yellow-500'}`}>{rtkStatus}</div>
+      return (
+          <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/96' : 'bg-gray-100/96'} z-40 flex flex-col overflow-hidden`}>
+              <div className={`shrink-0 px-5 lg:px-7 py-4 border-b ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} flex items-center justify-between gap-4 shadow-sm`}>
+                  <div className="min-w-0 flex items-center gap-4">
+                      <div className="shrink-0 w-12 h-12 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-lg shadow-blue-900/20">
+                          <Settings className="w-7 h-7" />
                       </div>
-                      <div>
-                          <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Sats</div>
-                          <div className={`text-sm font-black ${t.textMain}`}>{satelliteCount}</div>
-                      </div>
-                      <div>
-                          <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Steer</div>
-                          <div className={`text-sm font-black ${steeringMode === 'AUTO' ? 'text-green-500' : t.textMain}`}>{steeringMode}</div>
-                      </div>
-                  </div>
-              </div>
-
-              <nav className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-5">
-                  {settingsNavSections.map((section) => (
-                      <div key={section.title}>
-                          <div className={`px-2 mb-2 text-[10px] uppercase tracking-wider font-black ${t.textSub}`}>{section.title}</div>
-                          <div className="space-y-1.5">
-                              {section.items.map((item) => (
-                                  <SettingsTab
-                                      key={item.id}
-                                      theme={t}
-                                      label={item.label}
-                                      icon={item.icon}
-                                      active={settingsTab === item.id}
-                                      onClick={() => setSettingsTab(item.id)}
-                                  />
-                              ))}
+                      <div className="min-w-0">
+                          <div className={`text-[10px] uppercase tracking-widest font-black ${t.textSub}`}>System Setup</div>
+                          <div className="flex items-center gap-2 min-w-0">
+                              <h2 className={`text-xl lg:text-2xl font-black truncate ${t.textMain}`}>System</h2>
+                              <span className={t.textDim}>/</span>
+                              <div className="flex items-center gap-2 min-w-0">
+                                  <CurrentIcon className="w-5 h-5 text-blue-500 shrink-0" />
+                                  <span className={`text-lg lg:text-xl font-black truncate ${t.textMain}`}>{currentItem.label}</span>
+                              </div>
                           </div>
+                          <div className={`text-xs ${t.textSub}`}>Run, machine, correction and service modules in one setup workspace.</div>
                       </div>
-                  ))}
-              </nav>
-          </div>
-
-          <div className={`flex-1 min-w-0 min-h-0 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
-              <div className={`flex items-center justify-between p-5 lg:p-6 border-b ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
-                  <div>
-                      <h3 className={`text-lg lg:text-xl font-black ${t.textMain}`}>{settingsNavSections.flatMap(section => section.items).find(item => item.id === settingsTab)?.label || 'Settings'}</h3>
-                      <div className={`text-xs ${t.textSub}`}>Only the selected module is shown to keep setup focused.</div>
                   </div>
-                  <button onClick={() => setSettingsOpen(false)} className={`p-2 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}>
-                      <X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} />
-                  </button>
+
+                  <div className="shrink-0 flex items-center gap-2">
+                      <div className={`hidden md:flex rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/75' : 'bg-gray-50'} overflow-hidden`}>
+                          {[
+                              { label: 'RTK', value: rtkStatus, tone: rtkStatus === 'FIX' ? 'text-green-500' : 'text-yellow-500' },
+                              { label: 'Sats', value: satelliteCount, tone: t.textMain },
+                              { label: 'Steer', value: steeringMode, tone: steeringMode === 'AUTO' ? 'text-green-500' : t.textMain }
+                          ].map((item, idx) => (
+                              <div key={item.label} className={`px-4 py-2 text-center ${idx > 0 ? `border-l ${t.borderCard}` : ''}`}>
+                                  <div className={`text-[9px] uppercase font-black ${t.textSub}`}>{item.label}</div>
+                                  <div className={`text-sm font-black ${item.tone}`}>{item.value}</div>
+                              </div>
+                          ))}
+                      </div>
+                      <button onClick={() => setSettingsOpen(false)} className={`p-3 ${t.activeItem} hover:brightness-95 rounded-xl border ${t.borderCard}`}>
+                          <X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} />
+                      </button>
+                  </div>
               </div>
-              <div className="flex-1 min-h-0 p-5 lg:p-7 overflow-y-auto">
-                  <div className="max-w-4xl pb-8">{renderSettingsContent()}</div>
-              </div>
-              <div className={`p-4 lg:p-5 border-t ${t.borderCard} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
-                  <button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`} onClick={() => setSettingsOpen(false)}>Cancel</button>
-                  <button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg" onClick={() => { setSettingsOpen(false); showNotification("Settings Saved Successfully", "success"); }}>Save Changes</button>
+
+              <div className="flex-1 min-h-0 flex overflow-hidden">
+                  <div className={`w-[28%] min-w-[280px] max-w-[340px] border-r ${t.border} ${t.bgPanel} flex flex-col min-h-0`}>
+                      <nav className="flex-1 min-h-0 overflow-y-auto px-4 py-5 space-y-5">
+                          {settingsNavSections.map((section) => (
+                              <div key={section.title}>
+                                  <div className={`px-2 mb-2 text-[10px] uppercase tracking-wider font-black ${t.textSub}`}>{section.title}</div>
+                                  <div className="space-y-1.5">
+                                      {section.items.map((item) => (
+                                          <SettingsTab
+                                              key={item.id}
+                                              theme={t}
+                                              label={item.label}
+                                              icon={item.icon}
+                                              active={settingsTab === item.id}
+                                              onClick={() => setSettingsTab(item.id)}
+                                          />
+                                      ))}
+                                  </div>
+                              </div>
+                          ))}
+                      </nav>
+                  </div>
+
+                  <div className={`flex-1 min-w-0 min-h-0 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
+                      <div className="flex-1 min-h-0 p-5 lg:p-7 overflow-y-auto">
+                          <div className="max-w-5xl pb-8">{renderSettingsContent()}</div>
+                      </div>
+                      <div className={`p-4 lg:p-5 border-t ${t.borderCard} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
+                          <button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`} onClick={() => setSettingsOpen(false)}>Cancel</button>
+                          <button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg" onClick={() => { setSettingsOpen(false); showNotification("Settings Saved Successfully", "success"); }}>Save Changes</button>
+                      </div>
+                  </div>
               </div>
           </div>
-      </div>
-  );
+      );
+  };
 
 const renderLinesPanel = () => {
     const activeField = fields.find(f => f.id === selectedFieldId);
@@ -4187,17 +4265,23 @@ const renderLinesPanel = () => {
                     <div className="flex justify-center">
                         {renderGuidanceLightbar()}
                     </div>
-                    <div className="min-w-0 flex items-center justify-end gap-2">
-                        <div className={`hidden lg:flex h-11 px-3 rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50'} flex-col items-end justify-center`}>
-                            <span className={`font-black leading-none ${t.textMain}`}>{`${getDisplayHeading()}\u00b0`}</span>
-                            <span className={`text-[10px] ${t.textSub}`}>Heading</span>
-                        </div>
-                        <div className={`h-11 px-3 rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50'} flex flex-col items-end justify-center`}>
-                            <div className={`flex items-center gap-1 ${t.textMain}`}><Globe className="w-3 h-3 lg:w-4 lg:h-4 text-blue-500" /><span className="text-sm lg:text-base font-black font-mono">{satelliteCount}</span></div>
-                            <span className={`text-[9px] lg:text-[10px] ${t.textDim}`}>Sats</span>
-                        </div>
-                        <div className={`h-11 px-4 rounded-lg border min-w-[74px] flex items-center justify-center ${getRtkColor()}`}>
-                            <span className="text-xs font-black">{rtkStatus}</span>
+                    <div className="min-w-0 flex items-center justify-end">
+                        <div className={`h-12 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/75' : 'bg-gray-50'} overflow-hidden flex shadow-sm`}>
+                            <div className={`hidden lg:flex min-w-[92px] px-3 flex-col justify-center border-r ${t.borderCard}`}>
+                                <span className={`text-[10px] uppercase font-black ${t.textSub}`}>Heading</span>
+                                <span className={`font-mono text-sm font-black leading-none ${t.textMain}`}>{`${getDisplayHeading()}\u00b0`}</span>
+                            </div>
+                            <div className={`min-w-[70px] px-3 flex flex-col justify-center border-r ${t.borderCard}`}>
+                                <span className={`text-[10px] uppercase font-black ${t.textSub}`}>Sats</span>
+                                <div className={`flex items-center gap-1 ${t.textMain}`}>
+                                    <Globe className="w-3.5 h-3.5 text-blue-500" />
+                                    <span className="text-sm font-black font-mono">{satelliteCount}</span>
+                                </div>
+                            </div>
+                            <div className={`min-w-[78px] px-4 flex flex-col justify-center ${rtkStatus === 'FIX' ? 'bg-green-500 text-white' : 'bg-yellow-500 text-black'}`}>
+                                <span className="text-[10px] uppercase font-black opacity-80">RTK</span>
+                                <span className="text-sm font-black leading-none">{rtkStatus}</span>
+                            </div>
                         </div>
                     </div>
                 </header>

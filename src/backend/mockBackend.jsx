@@ -34,7 +34,17 @@ const MockBackend = (() => {
       sendGga: true,
       ggaInterval: '5',
       nmeaOutput: false,
-      nmeaRate: '10'
+      nmeaRate: '10',
+      baseMode: 'Survey In',
+      baseId: 'BASE-01',
+      baseLatitude: '10.7769',
+      baseLongitude: '106.7009',
+      baseHeight: '12.5',
+      surveyDuration: '180',
+      surveyAccuracy: '2.5',
+      radioChannel: '07',
+      radioPower: '1W',
+      radioFrequency: '464.500'
     },
     lineType: 'STRAIGHT_AB',
     isMultiLineMode: true,
