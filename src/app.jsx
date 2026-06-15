@@ -91,6 +91,7 @@ const App = () => {
 
   // NEW: Locked Lane Index for Auto Steer
   const activeLaneRef = useRef(null);
+  const bootstrappedLineRef = useRef(false);
 
   const [featureSettings, setFeatureSettings] = useState({
       terrainCompensation: true,
@@ -403,6 +404,28 @@ const App = () => {
   useEffect(() => {
       localStorage.setItem('autosteer-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+      if (bootstrappedLineRef.current || loadedField || activeLineId || guidanceLine) return;
+
+      const field = fields.find(f => f.id === selectedFieldId);
+      const defaultLine = field?.lines?.[0];
+      if (!field || !defaultLine) return;
+
+      bootstrappedLineRef.current = true;
+      actions.setLoadedField(field);
+      actions.setActiveLineId(defaultLine.id);
+      actions.setLineType(defaultLine.type);
+      actions.setPointA(defaultLine.points?.a || null);
+      actions.setPointB(defaultLine.points?.b || null);
+      actions.setAPlusPoint(defaultLine.points?.aplus?.point || null);
+      actions.setAPlusHeading(defaultLine.points?.aplus?.heading ?? null);
+      actions.setCurvePoints(defaultLine.points?.curve || []);
+      actions.setPivotCenter(defaultLine.points?.pivot?.center || null);
+      actions.setPivotRadius(defaultLine.points?.pivot?.radius || null);
+      actions.setGuidanceLine(defaultLine.type);
+      if (defaultLine.isMulti !== undefined) actions.setIsMultiLineMode(defaultLine.isMulti);
+  }, [fields, selectedFieldId, loadedField, activeLineId, guidanceLine]);
 
   // --- 2. INPUT ---
   useEffect(() => {
@@ -1206,26 +1229,26 @@ const App = () => {
 
   const renderCompassWidget = () => {
       const isDark = theme === 'dark';
-      const face = isDark ? '#0f172a' : '#ffffff';
-      const ring = isDark ? '#475569' : '#cbd5e1';
-      const text = isDark ? '#e2e8f0' : '#0f172a';
+      const face = isDark ? '#020617' : '#f8fafc';
+      const ring = isDark ? '#334155' : '#cbd5e1';
       const muted = isDark ? '#94a3b8' : '#64748b';
 
       return (
           <div
-              className={`absolute left-4 top-4 z-30 w-[132px] rounded-xl border ${t.borderCard} ${t.bgCard} shadow-lg backdrop-blur p-2 flex flex-col items-center gap-2`}
+              className={`absolute left-4 top-4 z-30 w-[120px] rounded-xl border ${t.borderCard} ${t.bgCard} shadow-lg backdrop-blur p-2 flex flex-col gap-2`}
               onPointerDown={(e) => e.stopPropagation()}
               onPointerMove={(e) => e.stopPropagation()}
               onPointerUp={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
           >
-              <svg width="82" height="82" viewBox="0 0 82 82" aria-label="Compass">
-                  <circle cx="41" cy="41" r="37" fill={face} stroke={ring} strokeWidth="2" />
-                  <circle cx="41" cy="41" r="4" fill="#2563eb" />
+              <div className="flex items-center gap-2">
+              <svg width="58" height="58" viewBox="0 0 82 82" aria-label="Compass" className="shrink-0">
+                  <circle cx="41" cy="41" r="37" fill={face} stroke={ring} strokeWidth="2.2" />
+                  <circle cx="41" cy="41" r="28" fill="none" stroke={ring} strokeWidth="1" opacity="0.55" />
                   {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => {
                       const rad = (deg - 90) * Math.PI / 180;
                       const outer = 35;
-                      const inner = deg % 90 === 0 ? 29 : 32;
+                      const inner = deg % 90 === 0 ? 27 : 31;
                       return (
                           <line
                               key={deg}
@@ -1238,24 +1261,24 @@ const App = () => {
                           />
                       );
                   })}
-                  <text x="41" y="15" textAnchor="middle" fontSize="10" fontWeight="800" fill="#ef4444">N</text>
-                  <text x="41" y="73" textAnchor="middle" fontSize="9" fontWeight="700" fill={muted}>S</text>
-                  <text x="72" y="44" textAnchor="middle" fontSize="9" fontWeight="700" fill={muted}>E</text>
-                  <text x="10" y="44" textAnchor="middle" fontSize="9" fontWeight="700" fill={muted}>W</text>
+                  <text x="41" y="15" textAnchor="middle" fontSize="10" fontWeight="900" fill="#ef4444">N</text>
+                  <text x="41" y="73" textAnchor="middle" fontSize="8" fontWeight="800" fill={muted}>S</text>
+                  <text x="72" y="44" textAnchor="middle" fontSize="8" fontWeight="800" fill={muted}>E</text>
+                  <text x="10" y="44" textAnchor="middle" fontSize="8" fontWeight="800" fill={muted}>W</text>
                   <g transform={`rotate(${heading}, 41, 41)`}>
-                      <path d="M41 12 L48 43 L41 39 L34 43 Z" fill="#ef4444" stroke="#991b1b" strokeWidth="1" />
-                      <path d="M41 70 L36 43 L41 47 L46 43 Z" fill="#94a3b8" stroke="#475569" strokeWidth="1" />
+                      <path d="M41 11 L47 41 L41 36 L35 41 Z" fill="#ef4444" stroke="#991b1b" strokeWidth="1" />
+                      <path d="M41 71 L36 43 L41 48 L46 43 Z" fill="#64748b" stroke="#334155" strokeWidth="1" />
                   </g>
+                  <circle cx="41" cy="41" r="3.5" fill="#2563eb" stroke="white" strokeWidth="1.5" />
               </svg>
-                <div className="w-full text-center">
-                    <div className="w-full">
-                        <div className={`text-sm font-black ${t.textMain}`}>{`${getDisplayHeading()}\u00b0`}</div>
-                        <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>{getCardinalShortDirection(heading)}</div>
-                    </div>
-                </div>
+                  <div className="min-w-0">
+                      <div className={`text-[9px] uppercase font-black ${t.textSub}`}>HDG</div>
+                      <div className={`text-lg font-black leading-none ${t.textMain}`}>{`${getDisplayHeading()}\u00b0`}</div>
+                      <div className={`text-[10px] uppercase font-black text-blue-500`}>{getCardinalShortDirection(heading)}</div>
+                  </div>
+              </div>
 
-               <div className="w-full grid grid-cols-[34px_1fr] gap-1 items-center">
-                  <span className={`text-[9px] font-black text-center ${t.textSub}`}>VIEW</span>
+               <div className="w-full">
                   <div className={`grid grid-cols-2 gap-1 p-1 rounded-lg ${isDark ? 'bg-slate-800' : 'bg-gray-100'}`}>
                   {['2D', '3D'].map((mode) => (
                       <button
@@ -1664,6 +1687,26 @@ const App = () => {
       const projectionOptions = options.ground
           ? { lateralGain: map3DLateralGain, forwardGain: map3DForwardGain, usePerspectiveScale: true }
           : { lateralGain: map3DLateralGain, forwardGain: map3DForwardGain, usePerspectiveScale: true, minY: 96, maxY: 760 };
+      const projectedPoints = densifyPoints(points, options.maxStep || 42)
+          .map((pt) => getProjected3DPoint(pt, { ...projectionOptions, ...options.projection }))
+          .filter(Boolean);
+      if (options.solid && projectedPoints.length > 1) {
+          return (
+              <polyline
+                  key={key}
+                  {...(options.ground ? { 'data-ground-3d-path': key } : { 'data-guidance-3d-path': key })}
+                  points={projectedPoints.map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ')}
+                  fill="none"
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  strokeLinecap={options.cap || 'round'}
+                  strokeLinejoin="round"
+                  strokeOpacity={options.opacity ?? 1}
+                  vectorEffect="non-scaling-stroke"
+              />
+          );
+      }
+
       const d = getProjected3DPath(densifyPoints(points, options.maxStep || 42), {
           ...projectionOptions,
           ...options.projection
@@ -1808,8 +1851,8 @@ const App = () => {
                       `straight-3d-${i}`,
                       sampleGuidanceLinePoints(pointA, unit, (width * i) + manualOffset),
                       active ? activeStroke : laneStroke,
-                      active ? 2.8 : 0.9,
-                      { opacity: active ? 0.9 : 0.24, maxStep: 42, projection: alignWithGridProjection }
+                      active ? 3.2 : 1.35,
+                      { opacity: active ? 1 : 0.36, maxStep: 42, projection: alignWithGridProjection, solid: true }
                   ));
               }
           } else {
@@ -1817,8 +1860,8 @@ const App = () => {
                   'straight-3d-target',
                   sampleGuidanceLinePoints(pointA, unit, manualOffset),
                   activeStroke,
-                  2.8,
-                  { maxStep: 42, projection: alignWithGridProjection }
+                  3.2,
+                  { maxStep: 42, projection: alignWithGridProjection, solid: true }
               ));
           }
       }
@@ -1838,12 +1881,12 @@ const App = () => {
                       `aplus-3d-${i}`,
                       sampleGuidanceLinePoints(aPlusPoint, unit, (width * i) + manualOffset),
                       active ? activeStroke : laneStroke,
-                      active ? 2.8 : 0.9,
-                      { opacity: active ? 0.9 : 0.24, maxStep: 42, projection: alignWithGridProjection }
+                      active ? 3.2 : 1.35,
+                      { opacity: active ? 1 : 0.36, maxStep: 42, projection: alignWithGridProjection, solid: true }
                   ));
               }
           } else {
-              elements.push(renderProjected3DPath('aplus-3d-target', sampleGuidanceLinePoints(aPlusPoint, unit, manualOffset), activeStroke, 2.8, { maxStep: 42, projection: alignWithGridProjection }));
+              elements.push(renderProjected3DPath('aplus-3d-target', sampleGuidanceLinePoints(aPlusPoint, unit, manualOffset), activeStroke, 3.2, { maxStep: 42, projection: alignWithGridProjection, solid: true }));
           }
       }
 
@@ -2275,6 +2318,43 @@ const App = () => {
       actions.setImplementSettings(prev => ({ ...prev, [key]: value }));
   };
 
+  const settingsNavSections = [
+      {
+          title: 'Run Setup',
+          items: [
+              { id: 'overview', label: 'Overview', icon: LayoutGrid },
+              { id: 'guidance', label: 'Guidance', icon: Navigation },
+              { id: 'rtk', label: 'RTK / GNSS', icon: Radio },
+              { id: 'display', label: 'Display', icon: Monitor }
+          ]
+      },
+      {
+          title: 'Machine',
+          items: [
+              { id: 'vehicle', label: 'Vehicle', icon: Tractor },
+              { id: 'implement', label: 'Implement', icon: Ruler },
+              { id: 'steering', label: 'Steering', icon: SteeringWheelIcon },
+              { id: 'uturn', label: 'U-Turn', icon: CornerUpLeft }
+          ]
+      },
+      {
+          title: 'Work Tools',
+          items: [
+              { id: 'isobus', label: 'ISOBUS', icon: Cpu },
+              { id: 'camera', label: 'Camera', icon: Video },
+              { id: 'landlevel', label: 'Land Level', icon: Globe },
+              { id: 'data', label: 'Data', icon: Save }
+          ]
+      },
+      {
+          title: 'Service',
+          items: [
+              { id: 'diagnostics', label: 'Diagnostics', icon: AlertTriangle },
+              { id: 'calibration', label: 'Calibration', icon: Gauge }
+          ]
+      }
+  ];
+
   const renderSettingsContent = () => {
     switch (settingsTab) {
         case 'display': return ( <div className="space-y-4"><h3 className={`text-xl font-bold mb-4 border-b ${t.borderCard} pb-2 ${t.textMain}`}>Display</h3><div className="grid grid-cols-1 gap-4"><SettingSlider theme={t} label="Brightness" value={85} min={0} max={100} /><div className={`flex items-center justify-between p-4 lg:p-5 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} border ${t.borderCard} rounded-xl`}><div className="flex items-center gap-3">{theme === 'light' ? <Sun className="w-6 h-6 text-orange-500" /> : <Moon className="w-6 h-6 text-blue-400" />}<span className={`font-bold text-base lg:text-lg ${t.textMain}`}>Theme</span></div><div className="flex bg-slate-700/20 p-1 rounded-lg"><button onClick={() => setTheme('light')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${theme === 'light' ? 'bg-white text-slate-900 shadow-md' : 'text-slate-500 hover:text-slate-700'}`}><Sun className="w-4 h-4" /> Light</button><button onClick={() => setTheme('dark')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${theme === 'dark' ? 'bg-slate-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}><Moon className="w-4 h-4" /> Dark</button></div></div><SettingToggle theme={t} label="Auto dark mode" active={false} /></div></div> );
@@ -2422,25 +2502,21 @@ const App = () => {
         case 'overview': {
             const quickTiles = [
               { id: 'calibration', label: 'Calibration', desc: 'Vehicle, implement, angle sensor', icon: Gauge },
+              { id: 'guidance', label: 'Guidance', desc: 'Lines, auto-steer behavior', icon: Navigation },
               { id: 'rtk', label: 'RTK / GNSS', desc: 'Status + NTRIP settings', icon: Radio },
               { id: 'vehicle', label: 'Vehicle', desc: 'Type, wheelbase, axle width', icon: Tractor },
               { id: 'implement', label: 'Implement', desc: 'Width, offset, overlap', icon: Ruler },
-              { id: 'guidance', label: 'Guidance', desc: 'Lines, auto-steer behavior', icon: Navigation },
-              { id: 'isobus', label: 'ISOBUS', desc: 'UT, section control, variable rate', icon: Cpu },
-              { id: 'steering', label: 'Steering', desc: 'EPS, easy switch, CAN/PWM', icon: SteeringWheelIcon },
-              { id: 'camera', label: 'Camera', desc: 'Wired and wireless monitor', icon: Video },
-              { id: 'diagnostics', label: 'Diagnostics', desc: 'OBD, hardware, logs', icon: AlertTriangle },
-              { id: 'display', label: 'Display', desc: 'Theme, UI preferences', icon: Monitor }
+              { id: 'steering', label: 'Steering', desc: 'EPS, easy switch, CAN/PWM', icon: SteeringWheelIcon }
             ];
 
             return (
               <div className="space-y-6">
                 <div className="flex items-start justify-between gap-6">
                   <div>
-                    <h3 className={`text-2xl font-bold ${t.textMain}`}>Quick Settings</h3>
-                    <p className={`${t.textSub} text-sm`}>Tap a tile to jump to the most used configuration screens.</p>
+                    <h3 className={`text-2xl font-bold ${t.textMain}`}>Critical Setup</h3>
+                    <p className={`${t.textSub} text-sm`}>Primary run, machine and steering modules.</p>
                   </div>
-                  <div className={`px-4 py-2 rounded-lg border ${t.borderCard} ${t.textSub} text-xs font-bold uppercase`}>System Overview</div>
+                  <div className={`px-4 py-2 rounded-lg border ${t.borderCard} ${t.textSub} text-xs font-bold uppercase`}>Ready Check</div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -2448,7 +2524,7 @@ const App = () => {
                     <button
                       key={tile.id}
                       onClick={() => setSettingsTab(tile.id)}
-                      className={`text-left ${t.bgPanel} border ${t.borderCard} rounded-xl p-4 min-h-[124px] hover:brightness-95 transition`}
+                      className={`text-left ${t.bgPanel} border ${t.borderCard} rounded-xl p-4 min-h-[112px] hover:brightness-95 transition`}
                     >
                       <div className="flex items-center justify-between mb-3">
                         <div className={`w-10 h-10 rounded-lg ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
@@ -2462,16 +2538,16 @@ const App = () => {
                   ))}
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-4 rounded-xl border ${t.borderCard}`}>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-3 rounded-xl border ${t.borderCard}`}>
                     <div className={`text-[10px] uppercase ${t.textSub}`}>RTK Status</div>
                     <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus}</div>
                   </div>
-                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-4 rounded-xl border ${t.borderCard}`}>
+                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-3 rounded-xl border ${t.borderCard}`}>
                     <div className={`text-[10px] uppercase ${t.textSub}`}>Satellites</div>
                     <div className={`text-lg font-bold ${t.textMain}`}>{satelliteCount}</div>
                   </div>
-                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-4 rounded-xl border ${t.borderCard}`}>
+                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-3 rounded-xl border ${t.borderCard}`}>
                     <div className={`text-[10px] uppercase ${t.textSub}`}>Angle Sensor</div>
                     <div className={`text-lg font-bold ${t.textMain}`}>{`${steeringAngle.toFixed(1)}\u00b0`}</div>
                   </div>
@@ -2730,6 +2806,76 @@ const App = () => {
         default: return <div className={t.textDim}>Select a menu item</div>;
     }
   };
+
+  const renderSettingsPanel = () => (
+      <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/96' : 'bg-gray-100/96'} z-40 flex overflow-hidden`}>
+          <div className={`w-[28%] min-w-[280px] max-w-[340px] border-r ${t.border} ${t.bgPanel} flex flex-col min-h-0`}>
+              <div className={`p-5 border-b ${t.borderCard}`}>
+                  <h2 className={`text-xl lg:text-2xl font-black flex items-center gap-3 ${t.textMain}`}>
+                      <Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />
+                      System
+                  </h2>
+                  <div className={`mt-1 text-xs ${t.textSub}`}>Grouped setup for run, machine and service modules</div>
+              </div>
+
+              <div className={`m-4 p-3 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50'}`}>
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                      <div>
+                          <div className={`text-[9px] uppercase font-black ${t.textSub}`}>RTK</div>
+                          <div className={`text-sm font-black ${rtkStatus === 'FIX' ? 'text-green-500' : 'text-yellow-500'}`}>{rtkStatus}</div>
+                      </div>
+                      <div>
+                          <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Sats</div>
+                          <div className={`text-sm font-black ${t.textMain}`}>{satelliteCount}</div>
+                      </div>
+                      <div>
+                          <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Steer</div>
+                          <div className={`text-sm font-black ${steeringMode === 'AUTO' ? 'text-green-500' : t.textMain}`}>{steeringMode}</div>
+                      </div>
+                  </div>
+              </div>
+
+              <nav className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-5">
+                  {settingsNavSections.map((section) => (
+                      <div key={section.title}>
+                          <div className={`px-2 mb-2 text-[10px] uppercase tracking-wider font-black ${t.textSub}`}>{section.title}</div>
+                          <div className="space-y-1.5">
+                              {section.items.map((item) => (
+                                  <SettingsTab
+                                      key={item.id}
+                                      theme={t}
+                                      label={item.label}
+                                      icon={item.icon}
+                                      active={settingsTab === item.id}
+                                      onClick={() => setSettingsTab(item.id)}
+                                  />
+                              ))}
+                          </div>
+                      </div>
+                  ))}
+              </nav>
+          </div>
+
+          <div className={`flex-1 min-w-0 min-h-0 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
+              <div className={`flex items-center justify-between p-5 lg:p-6 border-b ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
+                  <div>
+                      <h3 className={`text-lg lg:text-xl font-black ${t.textMain}`}>{settingsNavSections.flatMap(section => section.items).find(item => item.id === settingsTab)?.label || 'Settings'}</h3>
+                      <div className={`text-xs ${t.textSub}`}>Only the selected module is shown to keep setup focused.</div>
+                  </div>
+                  <button onClick={() => setSettingsOpen(false)} className={`p-2 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}>
+                      <X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} />
+                  </button>
+              </div>
+              <div className="flex-1 min-h-0 p-5 lg:p-7 overflow-y-auto">
+                  <div className="max-w-4xl pb-8">{renderSettingsContent()}</div>
+              </div>
+              <div className={`p-4 lg:p-5 border-t ${t.borderCard} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
+                  <button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`} onClick={() => setSettingsOpen(false)}>Cancel</button>
+                  <button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg" onClick={() => { setSettingsOpen(false); showNotification("Settings Saved Successfully", "success"); }}>Save Changes</button>
+              </div>
+          </div>
+      </div>
+  );
 
 const renderLinesPanel = () => {
     const activeField = fields.find(f => f.id === selectedFieldId);
@@ -3918,7 +4064,7 @@ const renderLinesPanel = () => {
                     </div>
                 )}
 
-                {settingsOpen && <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/95' : 'bg-gray-100/95'} z-40 flex overflow-hidden`}><div className={`w-[25%] border-r ${t.border} ${t.bgPanel} flex flex-col min-h-0`}><div className={`p-6 border-b ${t.divider}`}><h2 className={`text-xl lg:text-2xl font-bold flex items-center gap-3 ${t.textMain}`}><Settings className="w-6 h-6 lg:w-7 lg:h-7 text-blue-500" />Settings</h2></div><nav className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2"><SettingsTab theme={t} label="Overview" icon={LayoutGrid} active={settingsTab === 'overview'} onClick={() => setSettingsTab('overview')} /><SettingsTab theme={t} label="Display" icon={Monitor} active={settingsTab === 'display'} onClick={() => setSettingsTab('display')} /><SettingsTab theme={t} label="Vehicle" icon={Tractor} active={settingsTab === 'vehicle'} onClick={() => setSettingsTab('vehicle')} /><SettingsTab theme={t} label="Implement" icon={Ruler} active={settingsTab === 'implement'} onClick={() => setSettingsTab('implement')} /><SettingsTab theme={t} label="Guidance" icon={Navigation} active={settingsTab === 'guidance'} onClick={() => setSettingsTab('guidance')} /><SettingsTab theme={t} label="Steering" icon={SteeringWheelIcon} active={settingsTab === 'steering'} onClick={() => setSettingsTab('steering')} /><SettingsTab theme={t} label="U-Turn" icon={CornerUpLeft} active={settingsTab === 'uturn'} onClick={() => setSettingsTab('uturn')} /><SettingsTab theme={t} label="ISOBUS" icon={Cpu} active={settingsTab === 'isobus'} onClick={() => setSettingsTab('isobus')} /><SettingsTab theme={t} label="Camera" icon={Video} active={settingsTab === 'camera'} onClick={() => setSettingsTab('camera')} /><SettingsTab theme={t} label="Diagnostics" icon={AlertTriangle} active={settingsTab === 'diagnostics'} onClick={() => setSettingsTab('diagnostics')} /><SettingsTab theme={t} label="Data" icon={Save} active={settingsTab === 'data'} onClick={() => setSettingsTab('data')} /><SettingsTab theme={t} label="Land Level" icon={Globe} active={settingsTab === 'landlevel'} onClick={() => setSettingsTab('landlevel')} /><SettingsTab theme={t} label="Calibration" icon={Gauge} active={settingsTab === 'calibration'} onClick={() => setSettingsTab('calibration')} /><SettingsTab theme={t} label="RTK / GNSS" icon={Radio} active={settingsTab === 'rtk'} onClick={() => setSettingsTab('rtk')} /></nav></div><div className={`flex-1 min-w-0 min-h-0 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}><div className={`flex items-center justify-between p-5 lg:p-6 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><h3 className={`text-lg lg:text-xl font-medium ${t.textSub} uppercase tracking-widest`}>{settingsTab} CONFIGURATION</h3><button onClick={() => setSettingsOpen(false)} className={`p-2 ${t.activeItem} hover:brightness-95 rounded-lg border ${t.borderCard}`}><X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} /></button></div><div className="flex-1 min-h-0 p-5 lg:p-7 overflow-y-auto"><div className="max-w-4xl pb-4">{renderSettingsContent()}</div></div><div className={`p-4 lg:p-5 border-t ${t.divider} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/50'}`}><button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`} onClick={() => setSettingsOpen(false)}>Cancel</button><button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg" onClick={() => { setSettingsOpen(false); showNotification("Settings Saved Successfully", "success"); }}>Save Changes</button></div></div></div>}
+                {settingsOpen && renderSettingsPanel()}
                 {menuOpen && !fieldManagerOpen && !lineModeModalOpen && !linesPanelOpen && !manualHeadingModalOpen && !boundaryAlertOpen && !deleteModalOpen && (
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-lg border ${t.borderCard} shadow-2xl flex flex-col max-h-[85vh]`}><div className={`p-4 border-b ${t.divider} flex justify-between items-center`}><div className="flex items-center gap-2"><Menu className="w-5 h-5 text-blue-500" /><h3 className={`font-bold text-lg ${t.textMain}`}>Quick Menu</h3></div><button onClick={() => setMenuOpen(false)} className={`px-3 py-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} rounded-lg text-xs hover:brightness-95 border ${t.borderCard} ${t.textMain}`}>Close</button></div><div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 overflow-y-auto"><div className={`sm:col-span-2 p-3 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}><div className="flex items-center gap-2 mb-3"><Gauge className="w-5 h-5 text-orange-500" /><span className={`font-bold ${t.textMain} text-sm`}>Manual Drive</span></div><div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Speed</span><div className="flex items-center gap-2"><input type="range" min="-5" max="15" value={manualTargetSpeed} onChange={(e) => updateManualSpeed(Number(e.target.value))} className="w-full accent-orange-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><span className={`font-mono font-bold text-lg w-12 text-center ${t.textMain}`}>{manualTargetSpeed}</span></div></div><div className="flex flex-col gap-1"><span className={`text-[10px] ${t.textSub} uppercase font-bold`}>Steering ({`${steeringAngle.toFixed(1)}\u00b0`})</span><div className="flex items-center gap-1"><button onClick={() => updateSteering(Math.max(steeringAngle - 5, -35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCcw className={`w-4 h-4 ${t.textMain}`} /></button><input type="range" min="-35" max="35" value={steeringAngle} onChange={(e) => updateSteering(Number(e.target.value))} className="w-full accent-blue-500 h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer" /><button onClick={() => updateSteering(Math.min(steeringAngle + 5, 35))} className={`p-1.5 rounded-lg border ${t.borderCard} hover:bg-orange-500/20 active:scale-95`}><RotateCw className={`w-4 h-4 ${t.textMain}`} /></button></div></div></div><p className={`text-[10px] ${t.textSub} mt-2 text-center`}>Arrow keys: Up / Down / Left / Right</p></div><QuickAction theme={t} icon={Video} label="Camera" sub="Monitor" onClick={() => { setMenuOpen(false); setCameraPanelOpen(true); }} /><QuickAction theme={t} icon={AlertTriangle} label="Diagnostics" sub="OBD / Logs" onClick={() => { setMenuOpen(false); setDiagnosticsPanelOpen(true); }} /><QuickAction theme={t} icon={Cpu} label="ISOBUS" sub="UT / TC" onClick={() => { setMenuOpen(false); setSettingsTab('isobus'); setSettingsOpen(true); }} /><QuickAction theme={t} icon={CornerUpLeft} label="U-Turn" sub="Headland" onClick={() => { setMenuOpen(false); setSettingsTab('uturn'); setSettingsOpen(true); }} /><QuickAction theme={t} icon={Activity} label="Terrain" sub="Comp." onClick={() => toggleFeatureSetting('terrainCompensation')} /><QuickAction theme={t} icon={Globe} label="Leveling" sub="GNSS" onClick={() => { setMenuOpen(false); setSettingsTab('landlevel'); setSettingsOpen(true); }} /><QuickAction theme={t} icon={Save} label="Data" sub="USB / Export" onClick={() => { setMenuOpen(false); setSettingsTab('data'); setSettingsOpen(true); }} /><QuickAction theme={t} icon={Navigation} label="NMEA" sub="Out" onClick={() => showNotification('NMEA output ready', 'info')} /></div></div></div>
                 )}

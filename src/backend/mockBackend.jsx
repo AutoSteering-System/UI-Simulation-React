@@ -54,7 +54,7 @@ const MockBackend = (() => {
             type: 'STRAIGHT_AB',
             isMulti: true,
             date: '2023-10-01',
-            points: { a: { x: -50, y: -200 }, b: { x: -50, y: 200 } }
+            points: { a: { x: 0, y: -200 }, b: { x: 0, y: 200 } }
           }
         ],
         tasks: [
