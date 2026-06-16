@@ -1,10 +1,35 @@
 const { useState, useEffect, useRef } = React;
 
+const DEFAULT_FEATURE_SETTINGS = {
+    terrainCompensation: true,
+    electricPowerSteering: true,
+    easySwitch: true,
+    manualIntervention: true,
+    isobusUT: true,
+    sectionControl: true,
+    variableRate: false,
+    obd: true,
+    wiredCamera: true,
+    wirelessCamera: false,
+    acreRecording: true,
+    liftSensor: true,
+    autoUTurn: true,
+    headlandTurn: true,
+    canbusSteerReady: true,
+    pwmSteerReady: false,
+    angleSensorEnabled: true,
+    mobaTrac: false,
+    landLeveling: false,
+    dataTransfer: true
+};
+
 const App = () => {
   const { state, actions } = window.MockBackend.useStore();
   const {
     vehicleSettings,
+    vehicleProfiles,
     implementSettings,
+    implementProfiles,
     rtkSettings,
     lineType,
     isMultiLineMode,
@@ -86,6 +111,7 @@ const App = () => {
   const [tempLineName, setTempLineName] = useState('');
   const [tempManualHeading, setTempManualHeading] = useState('0.0');
   const [settingsTab, setSettingsTab] = useState('overview');
+  const [fieldAssetTab, setFieldAssetTab] = useState('lines');
   const [rtkTestState, setRtkTestState] = useState('idle');
   const [baseSurveyState, setBaseSurveyState] = useState('idle');
   const [calibrationStatus, setCalibrationStatus] = useState({
@@ -98,30 +124,12 @@ const App = () => {
   const activeLaneRef = useRef(null);
   const bootstrappedLineRef = useRef(false);
 
-  const [featureSettings, setFeatureSettings] = useState({
-      terrainCompensation: true,
-      electricPowerSteering: true,
-      easySwitch: true,
-      manualIntervention: true,
-      isobusUT: true,
-      sectionControl: true,
-      variableRate: false,
-      obd: true,
-      wiredCamera: true,
-      wirelessCamera: false,
-      acreRecording: true,
-      liftSensor: true,
-      autoUTurn: true,
-      headlandTurn: true,
-      canbusSteerReady: true,
-      pwmSteerReady: false,
-      mobaTrac: false,
-      landLeveling: false,
-      dataTransfer: true
-  });
+  const [featureSettings, setFeatureSettings] = useState(DEFAULT_FEATURE_SETTINGS);
   const [cameraPanelOpen, setCameraPanelOpen] = useState(false);
   const [diagnosticsPanelOpen, setDiagnosticsPanelOpen] = useState(false);
   const [isCombinationPaused, setIsCombinationPaused] = useState(false);
+  const [vehicleProfileSearch, setVehicleProfileSearch] = useState('');
+  const [implementProfileSearch, setImplementProfileSearch] = useState('');
 
   const [satelliteCount, setSatelliteCount] = useState(12);
   const [notification, setNotification] = useState(null);
@@ -741,6 +749,62 @@ const App = () => {
 
   const toggleFeatureSetting = (key) => {
       setFeatureSettings(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const handleFactoryReset = () => {
+      const confirmed = window.confirm('Factory reset will clear fields, lines, tasks and setup values. Continue?');
+      if (!confirmed) return;
+      actions.factoryReset();
+      setSteeringMode('MANUAL');
+      setIsRecording(false);
+      setRtkStatus('FIX');
+      setCrossTrackError(0);
+      crossTrackErrorRef.current = 0;
+      setSpeed(0);
+      setManualTargetSpeed(0);
+      setSteeringAngle(0);
+      setWorldPos({ x: 0, y: 0 });
+      setHeading(0);
+      setMapVisualHeading(0);
+      mapVisualHeadingRef.current = 0;
+      physics.current = {
+          speed: 0,
+          targetSpeed: 0,
+          steeringAngle: 0,
+          heading: 0,
+          x: 0,
+          y: 0,
+          lastTime: 0
+      };
+      setWorkedArea(0);
+      setIsCreating(false);
+      setDockMenuOpen(false);
+      setFieldManagerOpen(false);
+      setLinesPanelOpen(false);
+      setLineModeModalOpen(false);
+      setLineNameModalOpen(false);
+      setManualHeadingModalOpen(false);
+      setBoundaryNameModalOpen(false);
+      setBoundaryAlertOpen(false);
+      setPreviewBoundary(null);
+      setDeleteModalOpen(false);
+      setItemToDelete(null);
+      setTempLineName('');
+      setTempManualHeading('0.0');
+      setSettingsTab('overview');
+      setRtkTestState('idle');
+      setBaseSurveyState('idle');
+      setCalibrationStatus({ vehicle: 'OK', implement: 'Needs Check', angle: 'OK' });
+      activeLaneRef.current = null;
+      bootstrappedLineRef.current = false;
+      turnAssistRef.current = null;
+      setTurnAssistActive(false);
+      setFeatureSettings(DEFAULT_FEATURE_SETTINGS);
+      setSatelliteCount(12);
+      setZoomLevel(0.6);
+      setDragOffset({ x: 0, y: 0 });
+      setIsDraggingMap(false);
+      showNotification('Factory reset complete', 'success');
   };
 
   const handleTrim = (direction) => {
@@ -1364,32 +1428,50 @@ const App = () => {
       );
   };
 
-  const renderMissionOverview = () => (
+  const renderMissionOverview = () => {
+      const runCardBg = theme === 'dark' ? 'bg-slate-900/80' : 'bg-white/90';
+      const runShelfBg = theme === 'dark' ? 'bg-slate-950/68' : 'bg-white/76';
+      const fieldName = activeFieldRecord?.name || 'No Field Loaded';
+      const lineName = activeLineRecord?.name || getGuidanceModeLabel();
+      const implementName = cleanProfileLabel(implementSettings.name, activeImplementProfile.label);
+
+      return (
       <div
-          className={`absolute left-4 bottom-4 z-20 w-[300px] rounded-xl border ${t.borderCard} ${t.bgCard} shadow-lg backdrop-blur p-3`}
+          className={`absolute left-4 right-[124px] bottom-4 z-20 rounded-2xl border ${t.borderCard} ${runShelfBg} shadow-xl backdrop-blur-md p-2.5`}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
       >
-          <div className="grid grid-cols-2 gap-2">
-              <div className={`rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white/70'} px-3 py-2 min-w-0`}>
-                  <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Field</div>
-                  <div className={`text-sm font-black truncate ${t.textMain}`}>{activeFieldRecord?.name || 'No Field'}</div>
+          <div className="grid grid-cols-2 xl:grid-cols-[minmax(180px,1.15fr)_minmax(160px,0.95fr)_minmax(170px,1fr)_minmax(160px,0.9fr)] gap-2.5">
+              <div className={`h-[68px] rounded-xl border ${t.borderCard} ${runCardBg} px-3 py-2 min-w-0`}>
+                  <div className={`text-[9px] uppercase font-black tracking-wider ${t.textSub}`}>Field / Line</div>
+                  <div className={`text-sm font-black truncate ${t.textMain}`}>{fieldName}</div>
+                  <div className="text-[10px] font-bold text-blue-500 truncate">{lineName}</div>
               </div>
-              <div className={`rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white/70'} px-3 py-2 min-w-0`}>
-                  <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Line</div>
-                  <div className={`text-sm font-black truncate ${t.textMain}`}>{activeLineRecord?.name || getGuidanceModeLabel()}</div>
+              <div className={`h-[68px] rounded-xl border ${t.borderCard} ${runCardBg} px-3 py-2 min-w-0`}>
+                  <div className={`text-[9px] uppercase font-black tracking-wider ${t.textSub}`}>Task / Coverage</div>
+                  <div className={`text-sm font-black truncate ${activeTaskRecord ? 'text-green-500' : t.textMain}`}>{activeTaskRecord?.name || 'No Active Task'}</div>
+                  <div className={`text-[10px] font-bold ${t.textSub}`}>{workedArea.toFixed(2)} ha done</div>
               </div>
-              <div className={`rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white/70'} px-3 py-2 min-w-0`}>
-                  <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Task</div>
-                  <div className={`text-sm font-black truncate ${activeTaskRecord ? 'text-blue-500' : t.textMain}`}>{activeTaskRecord?.name || 'No Active Task'}</div>
+              <div className={`h-[68px] rounded-xl border ${t.borderCard} ${runCardBg} px-3 py-2 min-w-0`}>
+                  <div className={`text-[9px] uppercase font-black tracking-wider ${t.textSub}`}>Implement</div>
+                  <div className={`text-sm font-black truncate ${t.textMain}`}>{implementName}</div>
+                  <div className={`text-[10px] font-bold ${t.textSub}`}>{Number(implementSettings.width || 0).toFixed(1)} m / {implementSettings.sections || 1} sections</div>
+                  {false && (
+                      <>
+                  <div className={`text-sm font-black ${t.textMain}`}>{getDisplayHeading()}°</div>
+                  <div className={`text-[10px] font-bold ${t.textSub}`}>{getCardinalShortDirection(heading)} / HDG UP</div>
+                      </>
+                  )}
               </div>
-              <div className={`rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white/70'} px-3 py-2 min-w-0`}>
-                  <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Implement</div>
-                  <div className={`text-sm font-black truncate ${t.textMain}`}>{implementSettings.width.toFixed(1)} m / {workedArea.toFixed(2)} ha</div>
+              <div className={`h-[68px] rounded-xl border ${t.borderCard} ${runCardBg} px-3 py-2 min-w-0`}>
+                  <div className={`text-[9px] uppercase font-black tracking-wider ${t.textSub}`}>GNSS / Steer</div>
+                  <div className={`text-sm font-black truncate ${rtkStatus === 'FIX' ? 'text-green-500' : 'text-yellow-500'}`}>{rtkStatus} / {steeringMode}</div>
+                  <div className={`text-[10px] font-bold ${t.textSub}`}>{satelliteCount} sats / {getDisplayHeading()}&deg; {getCardinalShortDirection(heading)}</div>
               </div>
           </div>
       </div>
-  );
+      );
+  };
 
   const FeatureToggle = ({ label, detail, featureKey, icon: Icon = CheckCircle2 }) => (
       <button
@@ -2316,9 +2398,110 @@ const App = () => {
       );
   };
 
+  const savedVehicleProfiles = vehicleProfiles || [];
+  const savedImplementProfiles = implementProfiles || [];
+  const filteredVehicleProfiles = savedVehicleProfiles.filter(profile => `${profile.label || ''} ${profile.type || ''} ${profile.detail || ''}`.toLowerCase().includes(vehicleProfileSearch.toLowerCase()));
+  const filteredImplementProfiles = savedImplementProfiles.filter(profile => `${profile.label || ''} ${profile.name || ''} ${profile.type || ''} ${profile.detail || ''}`.toLowerCase().includes(implementProfileSearch.toLowerCase()));
+  const activeVehicleProfile = savedVehicleProfiles.find(profile => profile.id === vehicleSettings.profileId) || savedVehicleProfiles[0] || vehicleSettings;
+  const activeImplementProfile = savedImplementProfiles.find(profile => profile.id === implementSettings.profileId) || savedImplementProfiles[0] || implementSettings;
+  const makeProfileId = (prefix, name) => `${prefix}-${String(name || 'profile').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${Date.now().toString(36)}`;
+  const cleanProfileLabel = (value, fallback) => String(value || fallback).replace(/_/g, ' ');
+  const getImplementProfileDetail = (profile) => `${profile.sections || 1} sections / ${Number(profile.width || 0).toFixed(1)} m`;
+  const getVehicleProfileDetail = (profile) => `${profile.steeringType || 'Front axle'} / ${Number(profile.wheelbase || 0).toFixed(1)} m wheelbase`;
+
+  const handleVehicleChange = (key, value) => {
+      actions.setVehicleSettings(prev => ({ ...prev, [key]: value }));
+  };
+
+  const applyVehicleProfile = (profile) => {
+      actions.setVehicleSettings(prev => ({ ...prev, ...profile, profileId: profile.id }));
+      showNotification(`${profile.label} vehicle profile applied`, 'success');
+  };
+
+  const saveVehicleProfile = (mode = 'update') => {
+      const currentProfile = savedVehicleProfiles.find(profile => profile.id === vehicleSettings.profileId);
+      if (mode === 'update' && currentProfile && !currentProfile.custom) {
+          return showNotification('Use Save New to copy a built-in vehicle template', 'warning');
+      }
+      const shouldUpdate = mode === 'update' && currentProfile?.custom === true;
+      const label = cleanProfileLabel(vehicleSettings.label || vehicleSettings.type, 'Vehicle Profile');
+      const id = shouldUpdate ? currentProfile.id : makeProfileId('vehicle', label);
+      const nextProfile = {
+          ...vehicleSettings,
+          id,
+          profileId: undefined,
+          label,
+          detail: getVehicleProfileDetail(vehicleSettings),
+          custom: true,
+          savedAt: 'Today'
+      };
+
+      actions.setVehicleProfiles(prev => shouldUpdate
+          ? prev.map(profile => profile.id === id ? nextProfile : profile)
+          : [nextProfile, ...prev]
+      );
+      actions.setVehicleSettings(prev => ({ ...prev, profileId: id }));
+      showNotification(`${label} vehicle profile ${shouldUpdate ? 'updated' : 'saved'}`, 'success');
+  };
+
+  const deleteVehicleProfile = (profile, event) => {
+      event.stopPropagation();
+      if (!profile.custom) return showNotification('Built-in vehicle templates cannot be deleted', 'warning');
+      const nextProfiles = savedVehicleProfiles.filter(item => item.id !== profile.id);
+      actions.setVehicleProfiles(nextProfiles);
+      if (vehicleSettings.profileId === profile.id) {
+          const fallback = nextProfiles[0];
+          if (fallback) applyVehicleProfile(fallback);
+      }
+      showNotification(`${profile.label} vehicle profile deleted`, 'info');
+  };
+
   // HANDLER FOR REAL-TIME IMPLEMENT CHANGE
   const handleImplementChange = (key, value) => {
       actions.setImplementSettings(prev => ({ ...prev, [key]: value }));
+  };
+
+  const applyImplementProfile = (profile) => {
+      actions.setImplementSettings(prev => ({ ...prev, ...profile, profileId: profile.id }));
+      showNotification(`${profile.label} implement profile applied`, 'success');
+  };
+
+  const saveImplementProfile = (mode = 'update') => {
+      const currentProfile = savedImplementProfiles.find(profile => profile.id === implementSettings.profileId);
+      if (mode === 'update' && currentProfile && !currentProfile.custom) {
+          return showNotification('Use Save New to copy a built-in implement template', 'warning');
+      }
+      const shouldUpdate = mode === 'update' && currentProfile?.custom === true;
+      const label = cleanProfileLabel(implementSettings.name, `${implementSettings.type || 'Implement'} ${Number(implementSettings.width || 0).toFixed(1)}m`);
+      const id = shouldUpdate ? currentProfile.id : makeProfileId('implement', label);
+      const nextProfile = {
+          ...implementSettings,
+          id,
+          profileId: undefined,
+          label,
+          detail: getImplementProfileDetail(implementSettings),
+          custom: true,
+          savedAt: 'Today'
+      };
+
+      actions.setImplementProfiles(prev => shouldUpdate
+          ? prev.map(profile => profile.id === id ? nextProfile : profile)
+          : [nextProfile, ...prev]
+      );
+      actions.setImplementSettings(prev => ({ ...prev, profileId: id }));
+      showNotification(`${label} implement profile ${shouldUpdate ? 'updated' : 'saved'}`, 'success');
+  };
+
+  const deleteImplementProfile = (profile, event) => {
+      event.stopPropagation();
+      if (!profile.custom) return showNotification('Built-in implement templates cannot be deleted', 'warning');
+      const nextProfiles = savedImplementProfiles.filter(item => item.id !== profile.id);
+      actions.setImplementProfiles(nextProfiles);
+      if (implementSettings.profileId === profile.id) {
+          const fallback = nextProfiles[0];
+          if (fallback) applyImplementProfile(fallback);
+      }
+      showNotification(`${profile.label} implement profile deleted`, 'info');
   };
 
   const handleRtkSettingChange = (key, value) => {
@@ -2374,7 +2557,7 @@ const App = () => {
   const SettingsMetric = ({ label, value, tone = t.textMain }) => (
       <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-3 rounded-xl border ${t.borderCard}`}>
           <div className={`text-[10px] uppercase font-black ${t.textSub}`}>{label}</div>
-          <div className={`text-lg font-black ${tone}`}>{value}</div>
+          <div className={`text-lg font-black truncate ${tone}`}>{value}</div>
       </div>
   );
 
@@ -2455,56 +2638,189 @@ const App = () => {
                 </SettingsSection>
             </div>
         );
-        case 'vehicle': return (
-            <div className="space-y-5">
-                <SettingsSection title="Vehicle Geometry" detail="Dimensions used by steering simulation and vehicle render." icon={Tractor}>
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                        <SettingsMetric label="Type" value={vehicleSettings.type} />
-                        <SettingsMetric label="Wheelbase" value={`${vehicleSettings.wheelbase} m`} />
-                        <SettingsMetric label="Rear Axle" value={`${vehicleSettings.rearAxleWidth} m`} />
-                        <SettingsMetric label="Turn Radius" value={`${vehicleSettings.turnRadius} m`} />
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <SettingInput theme={t} label="Vehicle Type" value={vehicleSettings.type} onChange={(e) => actions.setVehicleSettings({...vehicleSettings, type: e.target.value})} />
-                        <SettingInput theme={t} label="Wheelbase (m)" value={vehicleSettings.wheelbase} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, wheelbase: parseFloat(e.target.value) || 0})} />
-                        <SettingInput theme={t} label="Front Axle Width (m)" value={vehicleSettings.frontAxleWidth} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, frontAxleWidth: parseFloat(e.target.value) || 0})} />
-                        <SettingInput theme={t} label="Rear Axle Width (m)" value={vehicleSettings.rearAxleWidth} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, rearAxleWidth: parseFloat(e.target.value) || 0})} />
-                    </div>
-                </SettingsSection>
-                <SettingsSection title="Antenna / Hitch" detail="GNSS antenna and implement hitch reference points." icon={LocateFixed}>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <SettingInput theme={t} label="Antenna Height (m)" value={vehicleSettings.antennaHeight} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, antennaHeight: parseFloat(e.target.value) || 0})} />
-                        <SettingInput theme={t} label="Antenna Offset X (m)" value={vehicleSettings.antennaOffset} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, antennaOffset: parseFloat(e.target.value) || 0})} />
-                        <SettingInput theme={t} label="Rear Hitch Length (m)" value={vehicleSettings.rearHitch} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, rearHitch: parseFloat(e.target.value) || 0})} />
-                        <SettingInput theme={t} label="Turning Radius (m)" value={vehicleSettings.turnRadius} type="number" onChange={(e) => actions.setVehicleSettings({...vehicleSettings, turnRadius: parseFloat(e.target.value) || 0})} />
-                    </div>
-                </SettingsSection>
-            </div>
-        );
-        case 'implement': return (
-            <div className="space-y-5">
-                <SettingsSection title="Implement" detail="Working width, overlap and section timing." icon={Ruler}>
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                        <SettingsMetric label="Name" value={implementSettings.name} />
-                        <SettingsMetric label="Width" value={`${implementSettings.width} m`} />
-                        <SettingsMetric label="Overlap" value={`${implementSettings.overlap} cm`} />
-                        <SettingsMetric label="Area" value={`${workedArea.toFixed(2)} ha`} />
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <SettingInput theme={t} label="Implement Name" value={implementSettings.name} onChange={(e) => handleImplementChange('name', e.target.value)} />
-                        <SettingInput theme={t} label="Working Width (m)" value={implementSettings.width} type="number" onChange={(e) => handleImplementChange('width', parseFloat(e.target.value) || 0)} />
-                        <SettingInput theme={t} label="Overlap (cm)" value={implementSettings.overlap} type="number" onChange={(e) => handleImplementChange('overlap', parseFloat(e.target.value) || 0)} />
-                        <SettingInput theme={t} label="Lateral Offset (cm)" value={implementSettings.offset} type="number" onChange={(e) => handleImplementChange('offset', parseFloat(e.target.value) || 0)} />
-                    </div>
-                </SettingsSection>
-                <SettingsSection title="Section Timing" detail="Delay compensation for coverage and section control." icon={Activity}>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <SettingInput theme={t} label="Delay On (s)" value={implementSettings.delayOn} type="number" onChange={(e) => handleImplementChange('delayOn', parseFloat(e.target.value) || 0)} />
-                        <SettingInput theme={t} label="Delay Off (s)" value={implementSettings.delayOff} type="number" onChange={(e) => handleImplementChange('delayOff', parseFloat(e.target.value) || 0)} />
-                    </div>
-                </SettingsSection>
-            </div>
-        );
+        case 'vehicle': {
+            const avgTrack = ((Number(vehicleSettings.frontAxleWidth) || 0) + (Number(vehicleSettings.rearAxleWidth) || 0)) / 2;
+            return (
+                <div className="space-y-5">
+                    <SettingsSection
+                        title="Vehicle Profiles"
+                        detail="Saved machine setups. Pick the tractor once, then update only when hardware changes."
+                        icon={Tractor}
+                        actions={<><SettingsActionButton onClick={() => saveVehicleProfile('new')}>Save New</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => saveVehicleProfile('update')}>Update Profile</SettingsActionButton></>}
+                    >
+                        <div className="flex items-center gap-3">
+                            <div className="relative flex-1 min-w-0">
+                                <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${t.textDim}`} />
+                                <input
+                                    value={vehicleProfileSearch}
+                                    onChange={(e) => setVehicleProfileSearch(e.target.value)}
+                                    placeholder="Search vehicle profiles"
+                                    className={`w-full pl-9 pr-3 py-2.5 rounded-lg border ${t.borderCard} ${t.bgInput} ${t.textMain} outline-none focus:border-blue-500`}
+                                />
+                            </div>
+                            <span className={`shrink-0 text-xs font-black ${t.textSub}`}>{filteredVehicleProfiles.length}/{savedVehicleProfiles.length}</span>
+                        </div>
+                        <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3 max-h-[286px] overflow-y-auto pr-1">
+                            {filteredVehicleProfiles.map((profile) => {
+                                const active = vehicleSettings.profileId === profile.id;
+                                return (
+                                    <button
+                                        key={profile.id}
+                                        onClick={() => applyVehicleProfile(profile)}
+                                        className={`relative text-left rounded-xl border p-3 min-h-[128px] transition-all ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'} hover:brightness-95`}`}
+                                    >
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} text-blue-500`}`}>
+                                                <Tractor className="w-5 h-5" />
+                                            </div>
+                                            <div className="flex items-center gap-1">
+                                                {profile.custom && (
+                                                    <span
+                                                        role="button"
+                                                        tabIndex={0}
+                                                        onClick={(e) => deleteVehicleProfile(profile, e)}
+                                                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') deleteVehicleProfile(profile, e); }}
+                                                        className="p-1.5 rounded-md text-red-500 hover:bg-red-500/10"
+                                                    >
+                                                        <Trash2 className="w-3.5 h-3.5" />
+                                                    </span>
+                                                )}
+                                                {active && <CheckCircle2 className="w-5 h-5 text-blue-500" />}
+                                            </div>
+                                        </div>
+                                        <div className={`mt-3 font-black leading-tight truncate ${t.textMain}`}>{profile.label}</div>
+                                        <div className={`text-xs leading-snug ${t.textSub}`}>{profile.detail}</div>
+                                        {profile.custom && <div className="mt-2 inline-flex px-2 py-1 rounded-md bg-green-500/10 text-green-500 text-[9px] font-black uppercase">Saved</div>}
+                                    </button>
+                                );
+                            })}
+                            {filteredVehicleProfiles.length === 0 && (
+                                <div className={`col-span-full rounded-xl border border-dashed ${t.borderCard} p-5 text-center text-sm ${t.textDim}`}>No vehicle profile matched.</div>
+                            )}
+                        </div>
+                        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+                            <SettingsMetric label="Active Profile" value={activeVehicleProfile.label} />
+                            <SettingsMetric label="Wheelbase" value={`${vehicleSettings.wheelbase} m`} />
+                            <SettingsMetric label="Track Avg" value={`${avgTrack.toFixed(2)} m`} />
+                            <SettingsMetric label="Turn Radius" value={`${vehicleSettings.turnRadius} m`} />
+                        </div>
+                    </SettingsSection>
+
+                    <SettingsSection title="Vehicle Geometry" detail="Dimensions used by steering simulation, map rotation and hitch placement." icon={Ruler}>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <SettingInput theme={t} label="Vehicle Type" value={vehicleSettings.type} onChange={(e) => handleVehicleChange('type', e.target.value)} />
+                            <SettingSelect label="Steering Type" value={vehicleSettings.steeringType || 'Front axle'} onChange={(value) => handleVehicleChange('steeringType', value)} options={['Front axle', 'Articulated', 'Rear steer']} />
+                            <SettingInput theme={t} label="Wheelbase (m)" value={vehicleSettings.wheelbase} type="number" onChange={(e) => handleVehicleChange('wheelbase', parseFloat(e.target.value) || 0)} />
+                            <SettingInput theme={t} label="Turning Radius (m)" value={vehicleSettings.turnRadius} type="number" onChange={(e) => handleVehicleChange('turnRadius', parseFloat(e.target.value) || 0)} />
+                            <SettingInput theme={t} label="Front Axle Width (m)" value={vehicleSettings.frontAxleWidth} type="number" onChange={(e) => handleVehicleChange('frontAxleWidth', parseFloat(e.target.value) || 0)} />
+                            <SettingInput theme={t} label="Rear Axle Width (m)" value={vehicleSettings.rearAxleWidth} type="number" onChange={(e) => handleVehicleChange('rearAxleWidth', parseFloat(e.target.value) || 0)} />
+                        </div>
+                    </SettingsSection>
+
+                    <SettingsSection title="Antenna / Hitch" detail="GNSS antenna and implement hitch reference points." icon={LocateFixed}>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <SettingInput theme={t} label="Antenna Height (m)" value={vehicleSettings.antennaHeight} type="number" onChange={(e) => handleVehicleChange('antennaHeight', parseFloat(e.target.value) || 0)} />
+                            <SettingInput theme={t} label="Antenna Offset X (m)" value={vehicleSettings.antennaOffset} type="number" onChange={(e) => handleVehicleChange('antennaOffset', parseFloat(e.target.value) || 0)} />
+                            <SettingInput theme={t} label="Rear Hitch Length (m)" value={vehicleSettings.rearHitch} type="number" onChange={(e) => handleVehicleChange('rearHitch', parseFloat(e.target.value) || 0)} />
+                            <SettingSelect label="Hitch Type" value={vehicleSettings.hitchType || 'Rear 3-point'} onChange={(value) => handleVehicleChange('hitchType', value)} options={['Rear 3-point', 'Drawbar', 'Integrated', 'Front mount']} />
+                        </div>
+                    </SettingsSection>
+                </div>
+            );
+        }
+        case 'implement': {
+            const implementWidth = Number(implementSettings.width) || 0;
+            const implementSections = Math.max(1, Number(implementSettings.sections) || 1);
+            const sectionWidth = implementWidth / implementSections;
+            return (
+                <div className="space-y-5">
+                    <SettingsSection
+                        title="Implement Profiles"
+                        detail="Saved seasonal implements. Select a planter, sprayer or custom tool instead of rebuilding it each season."
+                        icon={Ruler}
+                        actions={<><SettingsActionButton onClick={() => saveImplementProfile('new')}>Save New</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => saveImplementProfile('update')}>Update Profile</SettingsActionButton></>}
+                    >
+                        <div className="flex items-center gap-3">
+                            <div className="relative flex-1 min-w-0">
+                                <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${t.textDim}`} />
+                                <input
+                                    value={implementProfileSearch}
+                                    onChange={(e) => setImplementProfileSearch(e.target.value)}
+                                    placeholder="Search implement profiles"
+                                    className={`w-full pl-9 pr-3 py-2.5 rounded-lg border ${t.borderCard} ${t.bgInput} ${t.textMain} outline-none focus:border-blue-500`}
+                                />
+                            </div>
+                            <span className={`shrink-0 text-xs font-black ${t.textSub}`}>{filteredImplementProfiles.length}/{savedImplementProfiles.length}</span>
+                        </div>
+                        <div className="grid grid-cols-[repeat(auto-fill,minmax(136px,1fr))] gap-3 max-h-[310px] overflow-y-auto pr-1">
+                            {filteredImplementProfiles.map((profile) => {
+                                const active = implementSettings.profileId === profile.id;
+                                const ProfileIcon = profile.type === 'Planter' ? Sprout : profile.type === 'Sprayer' ? Droplets : profile.type === 'Spreader' ? Layers : Ruler;
+                                return (
+                                    <button
+                                        key={profile.id}
+                                        onClick={() => applyImplementProfile(profile)}
+                                        className={`relative text-left rounded-xl border p-3 min-h-[136px] transition-all ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'} hover:brightness-95`}`}
+                                    >
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} text-blue-500`}`}>
+                                                <ProfileIcon className="w-5 h-5" />
+                                            </div>
+                                            <div className="flex items-center gap-1">
+                                                {profile.custom && (
+                                                    <span
+                                                        role="button"
+                                                        tabIndex={0}
+                                                        onClick={(e) => deleteImplementProfile(profile, e)}
+                                                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') deleteImplementProfile(profile, e); }}
+                                                        className="p-1.5 rounded-md text-red-500 hover:bg-red-500/10"
+                                                    >
+                                                        <Trash2 className="w-3.5 h-3.5" />
+                                                    </span>
+                                                )}
+                                                {active && <CheckCircle2 className="w-5 h-5 text-blue-500" />}
+                                            </div>
+                                        </div>
+                                        <div className={`mt-3 font-black leading-tight truncate ${t.textMain}`}>{profile.label}</div>
+                                        <div className={`text-xs leading-snug ${t.textSub}`}>{profile.detail}</div>
+                                        {profile.custom && <div className="mt-2 inline-flex px-2 py-1 rounded-md bg-green-500/10 text-green-500 text-[9px] font-black uppercase">Saved</div>}
+                                    </button>
+                                );
+                            })}
+                            {filteredImplementProfiles.length === 0 && (
+                                <div className={`col-span-full rounded-xl border border-dashed ${t.borderCard} p-5 text-center text-sm ${t.textDim}`}>No implement profile matched.</div>
+                            )}
+                        </div>
+                        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+                            <SettingsMetric label="Active" value={cleanProfileLabel(implementSettings.name, activeImplementProfile.label)} />
+                            <SettingsMetric label="Width" value={`${implementWidth.toFixed(1)} m`} />
+                            <SettingsMetric label="Sections" value={implementSections} />
+                            <SettingsMetric label="Section Width" value={`${sectionWidth.toFixed(2)} m`} />
+                        </div>
+                    </SettingsSection>
+
+                    <SettingsSection title="Working Setup" detail="Geometry used by coverage, pass spacing and section control." icon={Activity}>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <SettingInput theme={t} label="Implement Name" value={implementSettings.name} onChange={(e) => handleImplementChange('name', e.target.value)} />
+                            <SettingSelect label="Implement Type" value={implementSettings.type || 'Planter'} onChange={(value) => handleImplementChange('type', value)} options={['Planter', 'Sprayer', 'Spreader', 'Blade', 'Mower', 'Custom']} />
+                            <SettingInput theme={t} label="Working Width (m)" value={implementSettings.width} type="number" onChange={(e) => handleImplementChange('width', parseFloat(e.target.value) || 0)} />
+                            <SettingInput theme={t} label="Sections / Rows" value={implementSettings.sections || 1} type="number" onChange={(e) => handleImplementChange('sections', parseInt(e.target.value, 10) || 1)} />
+                            <SettingInput theme={t} label="Row Spacing (m)" value={implementSettings.rowSpacing || 0} type="number" onChange={(e) => handleImplementChange('rowSpacing', parseFloat(e.target.value) || 0)} />
+                            <SettingSelect label="Control Mode" value={implementSettings.controlMode || 'Section Control'} onChange={(value) => handleImplementChange('controlMode', value)} options={['Section Control', 'Boom Sections', 'Rate Control', 'Manual Lift']} />
+                            <SettingInput theme={t} label="Overlap (m)" value={implementSettings.overlap} type="number" onChange={(e) => handleImplementChange('overlap', parseFloat(e.target.value) || 0)} />
+                            <SettingInput theme={t} label="Lateral Offset (cm)" value={implementSettings.offset} type="number" onChange={(e) => handleImplementChange('offset', parseFloat(e.target.value) || 0)} />
+                        </div>
+                    </SettingsSection>
+
+                    <SettingsSection title="Section Timing" detail="Delay compensation for coverage and section control." icon={Activity}>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <SettingInput theme={t} label="Delay On (s)" value={implementSettings.delayOn} type="number" onChange={(e) => handleImplementChange('delayOn', parseFloat(e.target.value) || 0)} />
+                            <SettingInput theme={t} label="Delay Off (s)" value={implementSettings.delayOff} type="number" onChange={(e) => handleImplementChange('delayOff', parseFloat(e.target.value) || 0)} />
+                        </div>
+                    </SettingsSection>
+                </div>
+            );
+        }
         case 'guidance': return (
             <div className="space-y-5">
                 <SettingsSection
@@ -2633,6 +2949,16 @@ const App = () => {
                     </div>
                     <FeatureToggle label="On-Board Diagnostics" detail="Live vehicle status: RPM, engine load, temperature and alerts" featureKey="obd" icon={Gauge} />
                 </SettingsSection>
+                <SettingsSection
+                    title="Factory Reset"
+                    detail="Restore default fields, machine setup, RTK profile, guidance state and local run settings."
+                    icon={AlertTriangle}
+                    actions={<SettingsActionButton variant="danger" onClick={handleFactoryReset}>Factory Reset</SettingsActionButton>}
+                >
+                    <div className={`rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm ${theme === 'dark' ? 'text-red-200' : 'text-red-700'}`}>
+                        This clears saved demo fields, active line, tasks, RTK setup, vehicle/implement setup and runtime counters.
+                    </div>
+                </SettingsSection>
             </div>
         );
         case 'data': return (
@@ -2675,58 +3001,113 @@ const App = () => {
             </div>
         );
         case 'overview': {
-            const quickTiles = [
-              { id: 'calibration', label: 'Calibration', desc: 'Vehicle, implement, angle sensor', icon: Gauge },
-              { id: 'guidance', label: 'Guidance', desc: 'Lines, auto-steer behavior', icon: Navigation },
-              { id: 'rtk', label: 'RTK / GNSS', desc: 'Status + NTRIP settings', icon: Radio },
-              { id: 'vehicle', label: 'Vehicle', desc: 'Type, wheelbase, axle width', icon: Tractor },
-              { id: 'implement', label: 'Implement', desc: 'Width, offset, overlap', icon: Ruler },
-              { id: 'steering', label: 'Steering', desc: 'EPS, easy switch, CAN/PWM', icon: SteeringWheelIcon }
+            const correctionSource = rtkSettings.correctionSource || 'Base Station';
+            const calibrationReady = (calibrationStatus.vehicle === 'OK' ? 1 : 0)
+                + (calibrationStatus.implement === 'OK' ? 1 : 0)
+                + (!featureSettings.angleSensorEnabled || calibrationStatus.angle === 'OK' ? 1 : 0);
+            const overviewChecks = [
+              {
+                id: 'rtk',
+                title: 'Correction Source',
+                value: correctionSource === 'Base Station' ? 'Local Base' : correctionSource,
+                detail: correctionSource === 'Base Station' ? 'Base station is the primary workflow.' : 'Local Base is recommended when field base hardware is available.',
+                icon: LocateFixed,
+                status: rtkStatus,
+                tone: rtkStatus === 'FIX' ? 'text-green-500 border-green-500/40 bg-green-500/10' : 'text-yellow-500 border-yellow-500/40 bg-yellow-500/10'
+              },
+              {
+                id: 'vehicle',
+                title: 'Vehicle',
+                value: vehicleSettings.type,
+                detail: `${vehicleSettings.wheelbase} m wheelbase / ${vehicleSettings.steeringType || 'Front axle'}`,
+                icon: Tractor,
+                status: 'SET',
+                tone: 'text-blue-500 border-blue-500/40 bg-blue-500/10'
+              },
+              {
+                id: 'implement',
+                title: 'Implement',
+                value: implementSettings.name,
+                detail: `${Number(implementSettings.width || 0).toFixed(1)} m / ${implementSettings.sections || 1} sections`,
+                icon: Ruler,
+                status: implementSettings.profileId ? 'PROFILE' : 'CUSTOM',
+                tone: 'text-blue-500 border-blue-500/40 bg-blue-500/10'
+              },
+              {
+                id: 'calibration',
+                title: 'Calibration',
+                value: `${calibrationReady}/3 ready`,
+                detail: 'Vehicle, implement and angle sensor checks.',
+                icon: Gauge,
+                status: calibrationReady === 3 ? 'OK' : 'CHECK',
+                tone: calibrationReady === 3 ? 'text-green-500 border-green-500/40 bg-green-500/10' : 'text-yellow-500 border-yellow-500/40 bg-yellow-500/10'
+              },
+              {
+                id: 'guidance',
+                title: 'Guidance Line',
+                value: activeLineRecord?.name || getGuidanceModeLabel(),
+                detail: isMultiLineMode ? 'Parallel lanes enabled.' : 'Single active line.',
+                icon: Route,
+                status: guidanceLine ? 'READY' : 'SELECT',
+                tone: guidanceLine ? 'text-green-500 border-green-500/40 bg-green-500/10' : 'text-yellow-500 border-yellow-500/40 bg-yellow-500/10'
+              },
+              {
+                id: 'steering',
+                title: 'Steering',
+                value: steeringMode,
+                detail: featureSettings.canbusSteerReady ? 'CAN steer-ready path available.' : 'Manual steering path active.',
+                icon: SteeringWheelIcon,
+                status: featureSettings.canbusSteerReady ? 'CAN' : 'MANUAL',
+                tone: featureSettings.canbusSteerReady ? 'text-green-500 border-green-500/40 bg-green-500/10' : 'text-slate-500 border-slate-500/30 bg-slate-500/10'
+              }
             ];
 
             return (
-              <div className="space-y-6">
-                <div className="flex items-start justify-between gap-6">
-                  <div>
-                    <h3 className={`text-2xl font-bold ${t.textMain}`}>Critical Setup</h3>
-                    <p className={`${t.textSub} text-sm`}>Primary run, machine and steering modules.</p>
-                  </div>
-                  <div className={`px-4 py-2 rounded-lg border ${t.borderCard} ${t.textSub} text-xs font-bold uppercase`}>Ready Check</div>
-                </div>
+              <div className="space-y-5">
+                <SettingsSection
+                    title="Run Readiness"
+                    detail="Setup order for an auto steering run. Fix the warning cards before engaging auto steer."
+                    icon={LayoutGrid}
+                    actions={<SettingsActionButton variant="primary" onClick={() => setSettingsTab('rtk')}>Setup RTK</SettingsActionButton>}
+                >
+                    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+                        <SettingsMetric label="Correction" value={correctionSource === 'Base Station' ? 'Local Base' : correctionSource} tone={rtkStatus === 'FIX' ? 'text-green-500' : 'text-yellow-500'} />
+                        <SettingsMetric label="Field" value={activeFieldRecord?.name || 'No Field'} />
+                        <SettingsMetric label="Line" value={activeLineRecord?.name || getGuidanceModeLabel()} />
+                        <SettingsMetric label="Ready" value={`${overviewChecks.filter(item => ['OK', 'READY', 'SET', 'PROFILE', 'CAN', 'FIX'].includes(item.status)).length}/${overviewChecks.length}`} />
+                    </div>
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                        {overviewChecks.map((item) => (
+                            <button
+                                key={item.id}
+                                onClick={() => setSettingsTab(item.id)}
+                                className={`${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'} border ${t.borderCard} rounded-xl p-4 text-left min-h-[116px] hover:brightness-95 transition`}
+                            >
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="flex items-start gap-3 min-w-0">
+                                        <div className={`shrink-0 w-10 h-10 rounded-lg ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
+                                            <item.icon className="w-5 h-5 text-blue-500" />
+                                        </div>
+                                        <div className="min-w-0">
+                                            <div className={`text-[10px] uppercase font-black ${t.textSub}`}>{item.title}</div>
+                                            <div className={`font-black truncate ${t.textMain}`}>{item.value}</div>
+                                            <div className={`text-xs ${t.textSub}`}>{item.detail}</div>
+                                        </div>
+                                    </div>
+                                    <span className={`shrink-0 text-[10px] font-black px-2.5 py-1 rounded-full border ${item.tone}`}>{item.status}</span>
+                                </div>
+                            </button>
+                        ))}
+                    </div>
+                </SettingsSection>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                  {quickTiles.map((tile) => (
-                    <button
-                      key={tile.id}
-                      onClick={() => setSettingsTab(tile.id)}
-                      className={`text-left ${t.bgPanel} border ${t.borderCard} rounded-xl p-4 min-h-[112px] hover:brightness-95 transition`}
-                    >
-                      <div className="flex items-center justify-between mb-3">
-                        <div className={`w-10 h-10 rounded-lg ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
-                          <tile.icon className="w-5 h-5 text-blue-500" />
-                        </div>
-                        <ChevronRight className={`${t.textDim} w-5 h-5`} />
-                      </div>
-                      <div className={`text-base font-bold ${t.textMain}`}>{tile.label}</div>
-                      <div className={`text-xs ${t.textSub} mt-1`}>{tile.desc}</div>
-                    </button>
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-3 rounded-xl border ${t.borderCard}`}>
-                    <div className={`text-[10px] uppercase ${t.textSub}`}>RTK Status</div>
-                    <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus}</div>
-                  </div>
-                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-3 rounded-xl border ${t.borderCard}`}>
-                    <div className={`text-[10px] uppercase ${t.textSub}`}>Satellites</div>
-                    <div className={`text-lg font-bold ${t.textMain}`}>{satelliteCount}</div>
-                  </div>
-                  <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} p-3 rounded-xl border ${t.borderCard}`}>
-                    <div className={`text-[10px] uppercase ${t.textSub}`}>Angle Sensor</div>
-                    <div className={`text-lg font-bold ${t.textMain}`}>{`${steeringAngle.toFixed(1)}\u00b0`}</div>
-                  </div>
-                </div>
+                <SettingsSection title="Active Machine" detail="Current vehicle and implement pair used by coverage and guidance spacing." icon={Tractor}>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <ConfigTile icon={Tractor} label="Vehicle Profile" value={activeVehicleProfile.label} />
+                        <ConfigTile icon={Ruler} label="Implement Profile" value={activeImplementProfile.label} />
+                        <ConfigTile icon={Activity} label="Coverage Width" value={`${Number(implementSettings.width || 0).toFixed(1)} m`} />
+                    </div>
+                </SettingsSection>
               </div>
             );
         }
@@ -2737,14 +3118,16 @@ const App = () => {
                 key: 'vehicle',
                 icon: Tractor,
                 status: calibrationStatus.vehicle,
-                detail: 'Wheelbase and hitch reference.',
+                detail: 'Confirms wheelbase, antenna, hitch and steering limit.',
                 actions: [
-                  { label: 'Run', tone: 'primary', onClick: () => { setCalibrationStatus(prev => ({ ...prev, vehicle: 'OK' })); showNotification('Vehicle calibration completed', 'success'); } },
+                  { label: 'Run Geometry', tone: 'primary', onClick: () => { setCalibrationStatus(prev => ({ ...prev, vehicle: 'OK' })); showNotification('Vehicle geometry calibration completed', 'success'); } },
                   { label: 'Reset', tone: 'ghost', onClick: () => { setCalibrationStatus(prev => ({ ...prev, vehicle: 'Needs Check' })); showNotification('Vehicle calibration reset', 'info'); } }
                 ],
                 meta: [
-                    { label: 'Last Run', value: 'Today 08:45' },
-                    { label: 'Wheelbase', value: `${vehicleSettings.wheelbase} m` }
+                    { label: 'Wheelbase', value: `${vehicleSettings.wheelbase} m` },
+                    { label: 'Steering', value: vehicleSettings.steeringType || 'Front axle' },
+                    { label: 'Antenna', value: `${vehicleSettings.antennaHeight} m` },
+                    { label: 'Hitch', value: vehicleSettings.hitchType || 'Rear 3-point' }
                 ]
               },
               {
@@ -2752,29 +3135,35 @@ const App = () => {
                 key: 'implement',
                 icon: Ruler,
                 status: calibrationStatus.implement,
-                detail: 'Width, overlap and delay.',
+                detail: 'Confirms width, section count, offset, delay and lift state.',
                 actions: [
-                  { label: 'Run', tone: 'primary', onClick: () => { setCalibrationStatus(prev => ({ ...prev, implement: 'OK' })); showNotification('Implement calibration completed', 'success'); } },
+                  { label: 'Run Implement', tone: 'primary', onClick: () => { setCalibrationStatus(prev => ({ ...prev, implement: 'OK' })); showNotification('Implement calibration completed', 'success'); } },
                   { label: 'Reset', tone: 'ghost', onClick: () => { setCalibrationStatus(prev => ({ ...prev, implement: 'Needs Check' })); showNotification('Implement calibration reset', 'info'); } }
                 ],
                 meta: [
-                    { label: 'Last Run', value: 'Yesterday 17:20' },
-                    { label: 'Width', value: `${implementSettings.width} m` }
+                    { label: 'Type', value: implementSettings.type || 'Custom' },
+                    { label: 'Width', value: `${implementSettings.width} m` },
+                    { label: 'Sections', value: implementSettings.sections || 1 },
+                    { label: 'Delay', value: `${implementSettings.delayOn}/${implementSettings.delayOff}s` }
                 ]
               },
               {
                 title: 'Angle Sensor',
                 key: 'angle',
                 icon: Gauge,
-                status: calibrationStatus.angle,
-                detail: 'Zero point and range.',
-                actions: [
+                status: featureSettings.angleSensorEnabled ? calibrationStatus.angle : 'Disabled',
+                detail: featureSettings.angleSensorEnabled ? 'Zero steering angle and verify live range.' : 'System will estimate steering from commanded wheel angle.',
+                actions: featureSettings.angleSensorEnabled ? [
                   { label: 'Calibrate', tone: 'primary', onClick: () => { setCalibrationStatus(prev => ({ ...prev, angle: 'OK' })); showNotification('Angle sensor calibration completed', 'success'); } },
-                  { label: 'Zero', tone: 'ghost', onClick: () => { setCalibrationStatus(prev => ({ ...prev, angle: 'OK' })); showNotification('Angle sensor zeroed', 'success'); } }
+                  { label: 'Disable', tone: 'ghost', onClick: () => { updateFeatureSetting('angleSensorEnabled', false); showNotification('Angle sensor disabled', 'info'); } }
+                ] : [
+                  { label: 'Enable Sensor', tone: 'primary', onClick: () => { updateFeatureSetting('angleSensorEnabled', true); setCalibrationStatus(prev => ({ ...prev, angle: 'Needs Check' })); showNotification('Angle sensor enabled; calibration required', 'warning'); } }
                 ],
                 meta: [
-                    { label: 'Live Angle', value: `${steeringAngle.toFixed(1)}\u00b0` },
-                    { label: 'Range', value: '\u00b145\u00b0' }
+                    { label: 'Mode', value: featureSettings.angleSensorEnabled ? 'Sensor' : 'Disabled' },
+                    { label: 'Live Angle', value: featureSettings.angleSensorEnabled ? `${steeringAngle.toFixed(1)}\u00b0` : '--' },
+                    { label: 'Range', value: featureSettings.angleSensorEnabled ? '\u00b145\u00b0' : '--' },
+                    { label: 'Fallback', value: featureSettings.angleSensorEnabled ? 'Off' : 'Commanded' }
                 ]
               }
             ];
@@ -2782,9 +3171,10 @@ const App = () => {
             const statusClass = (status) => {
               if (status === 'OK') return 'bg-green-500/10 text-green-500 border-green-500/40';
               if (status === 'Needs Check') return 'bg-yellow-500/10 text-yellow-500 border-yellow-500/40';
+              if (status === 'Disabled') return 'bg-slate-500/10 text-slate-500 border-slate-500/40';
               return 'bg-slate-500/10 text-slate-500 border-slate-500/40';
             };
-            const doneCount = calibCards.filter(card => card.status === 'OK').length;
+            const doneCount = calibCards.filter(card => card.status === 'OK' || card.status === 'Disabled').length;
 
             return (
               <div className="space-y-5">
@@ -2806,23 +3196,25 @@ const App = () => {
 
                 <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
                   {calibCards.map((card) => (
-                    <article key={card.title} className={`${t.bgPanel} border ${t.borderCard} rounded-xl p-4 flex flex-col gap-3 min-h-[218px]`}>
-                      <div className="flex items-start justify-between gap-3">
-                        <div className={`shrink-0 w-10 h-10 rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
-                            <card.icon className="w-5 h-5 text-blue-500" />
+                    <article key={card.title} className={`${t.bgPanel} border ${t.borderCard} rounded-xl p-3 flex flex-col gap-2.5 min-h-[236px]`}>
+                      <div className="flex items-start justify-between gap-2.5">
+                        <div className="flex items-start gap-2.5 min-w-0">
+                            <div className={`shrink-0 w-9 h-9 rounded-lg ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
+                                <card.icon className="w-5 h-5 text-blue-500" />
+                            </div>
+                            <div className="min-w-0">
+                                <div className={`text-base font-black leading-tight ${t.textMain}`}>{card.title}</div>
+                                <div className={`text-[11px] leading-snug ${t.textSub}`}>{card.detail}</div>
+                            </div>
                         </div>
-                        <span className={`shrink-0 text-[11px] font-bold px-2.5 py-1 rounded-full border ${statusClass(card.status)}`}>{card.status}</span>
-                      </div>
-                      <div className="min-w-0">
-                          <div className={`text-base font-black leading-tight ${t.textMain}`}>{card.title}</div>
-                          <div className={`text-[11px] ${t.textSub}`}>{card.detail}</div>
+                        <span className={`shrink-0 text-[10px] font-black px-2 py-1 rounded-full border ${statusClass(card.status)}`}>{card.status}</span>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-2 gap-2">
                         {card.meta.map((item) => (
-                            <div key={item.label} className={`${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50'} border ${t.borderCard} rounded-lg p-2.5`}>
-                                <div className={`text-[10px] uppercase font-black ${t.textSub}`}>{item.label}</div>
-                                <div className={`text-sm font-black ${t.textMain}`}>{item.value}</div>
+                            <div key={item.label} className={`${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50'} border ${t.borderCard} rounded-lg p-2`}>
+                                <div className={`text-[9px] uppercase font-black ${t.textSub}`}>{item.label}</div>
+                                <div className={`text-[13px] font-black leading-tight ${t.textMain}`}>{item.value}</div>
                             </div>
                         ))}
                       </div>
@@ -2834,8 +3226,8 @@ const App = () => {
                             onClick={action.onClick}
                             className={
                               action.tone === 'primary'
-                                ? 'px-3.5 py-2 rounded-lg bg-blue-600 text-white font-black hover:bg-blue-500 text-xs whitespace-nowrap flex-1'
-                                : `px-3.5 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-black hover:brightness-95 text-xs whitespace-nowrap`
+                                ? 'px-3 py-2 rounded-lg bg-blue-600 text-white font-black hover:bg-blue-500 text-xs whitespace-nowrap flex-1'
+                                : `px-3 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-black hover:brightness-95 text-xs whitespace-nowrap`
                             }
                           >
                             {action.label}
@@ -2850,7 +3242,7 @@ const App = () => {
         }
         case 'rtk': {
             const rtkConfig = {
-              correctionSource: 'NTRIP',
+              correctionSource: 'Base Station',
               receiverPort: 'COM3',
               baudRate: '115200',
               protocol: 'RTCM3',
@@ -2884,8 +3276,8 @@ const App = () => {
                 ? 'NTRIP'
                 : (rtkConfig.correctionSource === 'Base Station' || rtkConfig.correctionSource === 'Radio Base') ? 'BASE' : 'EXTERNAL';
             const sourceModes = [
-                { id: 'NTRIP', source: 'NTRIP', label: 'NTRIP Rover', detail: 'Internet caster / VRS', icon: Globe },
                 { id: 'BASE', source: 'Base Station', label: 'Local Base', detail: 'Survey-in + radio link', icon: LocateFixed },
+                { id: 'NTRIP', source: 'NTRIP', label: 'NTRIP Rover', detail: 'Internet caster / VRS', icon: Globe },
                 { id: 'EXTERNAL', source: 'External Receiver', label: 'External GNSS', detail: 'Serial/USB receiver input', icon: Radio }
             ];
             const toggleRtkFlag = (key) => handleRtkSettingChange(key, !rtkConfig[key]);
@@ -2994,6 +3386,11 @@ const App = () => {
                             <SettingInput theme={t} label="Base Latitude" value={rtkConfig.baseLatitude} onChange={(e) => handleRtkSettingChange('baseLatitude', e.target.value)} />
                             <SettingInput theme={t} label="Base Longitude" value={rtkConfig.baseLongitude} onChange={(e) => handleRtkSettingChange('baseLongitude', e.target.value)} />
                             <SettingInput theme={t} label="Base Height (m)" value={rtkConfig.baseHeight} type="number" onChange={(e) => handleRtkSettingChange('baseHeight', e.target.value)} />
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <SettingSelect label="Receiver Port" value={rtkConfig.receiverPort} onChange={(value) => handleRtkSettingChange('receiverPort', value)} options={['COM1', 'COM2', 'COM3', 'USB', 'TCP']} />
+                            <SettingSelect label="Baud Rate" value={rtkConfig.baudRate} onChange={(value) => handleRtkSettingChange('baudRate', value)} options={['9600', '38400', '57600', '115200', '230400']} />
+                            <SettingSelect label="Correction Format" value={rtkConfig.protocol} onChange={(value) => handleRtkSettingChange('protocol', value)} options={['RTCM3', 'RTCM2', 'CMR+', 'NMEA']} />
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <SettingInput theme={t} label="Radio Channel" value={rtkConfig.radioChannel} onChange={(e) => handleRtkSettingChange('radioChannel', e.target.value)} />
@@ -3108,8 +3505,8 @@ const App = () => {
                   </div>
 
                   <div className={`flex-1 min-w-0 min-h-0 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
-                      <div className="flex-1 min-h-0 p-5 lg:p-7 overflow-y-auto">
-                          <div className="max-w-5xl pb-8">{renderSettingsContent()}</div>
+                      <div className="flex-1 min-h-0 p-5 lg:p-7 overflow-y-auto scroll-pb-28">
+                          <div className="max-w-5xl pb-24">{renderSettingsContent()}</div>
                       </div>
                       <div className={`p-4 lg:p-5 border-t ${t.borderCard} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
                           <button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`} onClick={() => setSettingsOpen(false)}>Cancel</button>
@@ -3126,7 +3523,7 @@ const renderLinesPanel = () => {
     const lines = activeField?.lines || [];
     const selectedLine = lines.find(line => line.id === activeLineId) || lines[0];
     const activeLineLength = selectedLine ? getLineLengthMeters(selectedLine) : null;
-    const panelBg = theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50';
+    const panelBg = theme === 'dark' ? 'bg-slate-950' : 'bg-white';
     const surfaceBg = theme === 'dark' ? 'bg-slate-900/80' : 'bg-white';
     const mutedBg = theme === 'dark' ? 'bg-slate-900/55' : 'bg-slate-50';
 
@@ -3215,33 +3612,35 @@ const renderLinesPanel = () => {
             </div>
 
             <div className="flex-1 min-h-0 p-5 lg:p-6 overflow-hidden">
-                <div className="h-full grid grid-cols-[minmax(330px,0.95fr)_minmax(0,1.25fr)] gap-5">
-                    <section className={`${surfaceBg} border ${t.borderCard} rounded-xl flex flex-col min-h-0 overflow-hidden`}>
-                        <div className={`p-4 border-b ${t.divider}`}>
-                            <div className="grid grid-cols-3 gap-2 mb-4">
-                                <div className={`${mutedBg} border ${t.borderCard} rounded-lg p-3`}>
-                                    <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Total</div>
-                                    <div className={`text-2xl font-black ${t.textMain}`}>{lines.length}</div>
+                  <div className="h-full grid grid-cols-[minmax(230px,0.5fr)_minmax(0,1.78fr)] gap-5">
+                    <section className={`${panelBg} border ${t.borderCard} rounded-xl flex flex-col min-h-0 overflow-hidden`}>
+                        <div className="p-4 pb-0">
+                            <div className={`${surfaceBg} border ${t.borderCard} rounded-xl p-4 shadow-sm`}>
+                                <div className="grid grid-cols-3 gap-2 mb-4">
+                                    <div className={`${mutedBg} border ${t.borderCard} rounded-lg p-3`}>
+                                        <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Total</div>
+                                        <div className={`text-2xl font-black ${t.textMain}`}>{lines.length}</div>
+                                    </div>
+                                    <div className={`${mutedBg} border ${t.borderCard} rounded-lg p-3`}>
+                                        <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Active</div>
+                                        <div className={`text-2xl font-black ${activeLineId ? 'text-green-500' : t.textMain}`}>{activeLineId ? 1 : 0}</div>
+                                    </div>
+                                    <div className={`${mutedBg} border ${t.borderCard} rounded-lg p-3`}>
+                                        <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Multi</div>
+                                        <div className={`text-2xl font-black ${t.textMain}`}>{lines.filter(line => line.isMulti).length}</div>
+                                    </div>
                                 </div>
-                                <div className={`${mutedBg} border ${t.borderCard} rounded-lg p-3`}>
-                                    <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Active</div>
-                                    <div className={`text-2xl font-black ${activeLineId ? 'text-green-500' : t.textMain}`}>{activeLineId ? 1 : 0}</div>
-                                </div>
-                                <div className={`${mutedBg} border ${t.borderCard} rounded-lg p-3`}>
-                                    <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Multi</div>
-                                    <div className={`text-2xl font-black ${t.textMain}`}>{lines.filter(line => line.isMulti).length}</div>
-                                </div>
+                                <button
+                                    onClick={() => {
+                                        setLinesPanelOpen(false);
+                                        setLineModeModalOpen(true);
+                                    }}
+                                    className="w-full px-5 py-3 bg-blue-600 text-white font-black rounded-lg hover:bg-blue-500 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20"
+                                >
+                                    <Plus className="w-5 h-5" />
+                                    New Guidance Line
+                                </button>
                             </div>
-                            <button
-                                onClick={() => {
-                                    setLinesPanelOpen(false);
-                                    setLineModeModalOpen(true);
-                                }}
-                                className="w-full px-5 py-3 bg-blue-600 text-white font-black rounded-lg hover:bg-blue-500 transition-colors flex items-center justify-center gap-2"
-                            >
-                                <Plus className="w-5 h-5" />
-                                New Guidance Line
-                            </button>
                         </div>
 
                         <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
@@ -3257,18 +3656,22 @@ const renderLinesPanel = () => {
                                     const lengthMeters = getLineLengthMeters(line);
                                     const active = activeLineId === line.id;
                                     return (
-                                        <div key={line.id} className={`p-3 rounded-xl border transition-all ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${mutedBg}`}`}>
-                                            <div className="flex items-start justify-between gap-3">
-                                                <div className="flex items-start gap-3 min-w-0">
-                                                    <div className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-blue-500 border ${t.borderCard}`}`}>
-                                                        <Icon className="w-5 h-5" />
-                                                    </div>
-                                                    <div className="min-w-0">
-                                                        <div className={`font-black ${t.textMain} truncate`}>{line.name || `Line ${index + 1}`}</div>
-                                                        <div className={`text-xs ${t.textSub}`}>{(line.type || 'LINE').replace(/_/g, ' ')} / {lengthMeters !== null ? `${lengthMeters.toFixed(1)} m` : '--'}</div>
-                                                    </div>
+                                        <div key={line.id} className={`p-3 rounded-xl border transition-all ${active ? 'border-blue-500 bg-blue-500/10 shadow-sm' : `${t.borderCard} ${surfaceBg}`}`}>
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-blue-500 border ${t.borderCard}`}`}>
+                                                    <Icon className="w-5 h-5" />
                                                 </div>
                                                 {active && <span className="shrink-0 px-2 py-1 rounded-md bg-green-500/15 text-green-500 text-[10px] font-black uppercase">Active</span>}
+                                            </div>
+                                            <div className="mt-2 min-w-0">
+                                                <div
+                                                    className={`font-black ${t.textMain} leading-tight`}
+                                                    title={line.name || `Line ${index + 1}`}
+                                                    style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                                                >
+                                                    {line.name || `Line ${index + 1}`}
+                                                </div>
+                                                <div className={`text-xs ${t.textSub}`}>{(line.type || 'LINE').replace(/_/g, ' ')} / {lengthMeters !== null ? `${lengthMeters.toFixed(1)} m` : '--'}</div>
                                             </div>
                                             <div className="mt-3 flex items-center justify-between gap-2">
                                                 <span className={`text-xs ${t.textSub}`}>{formatLineDate(line)}</span>
@@ -3288,10 +3691,10 @@ const renderLinesPanel = () => {
                         </div>
                     </section>
 
-                    <section className={`${surfaceBg} border ${t.borderCard} rounded-xl p-5 min-w-0 overflow-y-auto`}>
+                    <section className={`${surfaceBg} border ${t.borderCard} rounded-xl min-w-0 min-h-0 overflow-hidden flex flex-col`}>
                         {selectedLine ? (
-                            <div className="space-y-5">
-                                <div className="flex items-start justify-between gap-4">
+                            <>
+                                <div className={`shrink-0 p-5 border-b ${t.divider} flex items-start justify-between gap-4`}>
                                     <div className="min-w-0">
                                         <div className={`text-[10px] uppercase tracking-wider font-black ${t.textSub}`}>Selected line</div>
                                         <h3 className={`text-2xl font-black ${t.textMain} truncate`}>{selectedLine.name}</h3>
@@ -3300,23 +3703,46 @@ const renderLinesPanel = () => {
                                     {activeLineId === selectedLine.id && <span className="shrink-0 px-3 py-1.5 rounded-lg bg-green-500/15 text-green-500 text-xs font-black uppercase">Active</span>}
                                 </div>
 
-                                {renderLinePreview(selectedLine)}
-
-                                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                                    {[
-                                        ['Type', (selectedLine.type || 'LINE').replace(/_/g, ' ')],
-                                        ['Length', activeLineLength !== null ? `${activeLineLength.toFixed(1)} m` : '--'],
-                                        ['Created', formatLineDate(selectedLine)],
-                                        ['Pattern', selectedLine.isMulti ? 'Multi' : 'Single']
-                                    ].map(([label, value]) => (
-                                        <div key={label} className={`${mutedBg} border ${t.borderCard} rounded-lg p-3 min-w-0`}>
-                                            <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
-                                            <div className={`mt-1 text-sm font-black ${t.textMain} truncate`}>{value}</div>
+                                <div className="flex-1 min-h-0 p-5 grid grid-cols-1 xl:grid-cols-[minmax(0,1.08fr)_minmax(280px,0.72fr)] gap-5 overflow-hidden">
+                                    <div className="min-w-0 min-h-0 flex flex-col gap-4">
+                                        {renderLinePreview(selectedLine)}
+                                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                                            {[
+                                                ['Type', (selectedLine.type || 'LINE').replace(/_/g, ' ')],
+                                                ['Length', activeLineLength !== null ? `${activeLineLength.toFixed(1)} m` : '--'],
+                                                ['Created', formatLineDate(selectedLine)],
+                                                ['Pattern', selectedLine.isMulti ? 'Multi' : 'Single']
+                                            ].map(([label, value]) => (
+                                                <div key={label} className={`${mutedBg} border ${t.borderCard} rounded-lg p-3 min-w-0`}>
+                                                    <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
+                                                    <div className={`mt-1 text-sm font-black ${t.textMain} truncate`}>{value}</div>
+                                                </div>
+                                            ))}
                                         </div>
-                                    ))}
+                                    </div>
+
+                                    <div className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${mutedBg} p-4 flex flex-col`}>
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <Settings className="w-4 h-4 text-blue-500 shrink-0" />
+                                            <h4 className={`font-black uppercase tracking-wider text-xs ${t.textSub}`}>Line Setup</h4>
+                                        </div>
+                                        <div className="space-y-3">
+                                            {[
+                                                ['Field', activeField?.name || 'No field'],
+                                                ['Mode', (selectedLine.type || 'LINE').replace(/_/g, ' ')],
+                                                ['Run status', activeLineId === selectedLine.id ? 'Loaded' : 'Not loaded'],
+                                                ['Path', selectedLine.isMulti ? 'Parallel guidance' : 'Single guidance']
+                                            ].map(([label, value]) => (
+                                                <div key={label} className={`${surfaceBg} border ${t.borderCard} rounded-lg p-3 min-w-0`}>
+                                                    <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
+                                                    <div className={`mt-1 text-sm font-black ${value === 'Loaded' ? 'text-green-500' : t.textMain} truncate`}>{value}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
                                 </div>
 
-                                <div className={`pt-4 border-t ${t.borderCard} flex flex-wrap justify-end gap-3`}>
+                                <div className={`shrink-0 px-5 py-4 border-t ${t.divider} flex flex-wrap justify-between gap-3 ${theme === 'dark' ? 'bg-slate-950/50' : 'bg-white/70'}`}>
                                     <button onClick={() => confirmDelete('line', selectedLine.id)} className="px-5 py-3 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold flex items-center gap-2">
                                         <Trash2 className="w-5 h-5" />
                                         Delete
@@ -3326,7 +3752,7 @@ const renderLinesPanel = () => {
                                         {activeLineId === selectedLine.id ? 'Reload Line' : 'Load Line'}
                                     </button>
                                 </div>
-                            </div>
+                            </>
                         ) : (
                             <div className={`h-full min-h-[360px] flex flex-col items-center justify-center text-center ${t.textDim}`}>
                                 <Route className="w-16 h-16 mb-4 opacity-50" />
@@ -3344,7 +3770,7 @@ const renderLinesPanel = () => {
   const renderFieldManager = () => {
       const activeField = fields.find(f => f.id === selectedFieldId);
       const isLoadedActiveField = activeField && loadedField?.id === activeField.id;
-      const panelBg = theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50';
+      const panelBg = theme === 'dark' ? 'bg-slate-950' : 'bg-white';
       const softPanelBg = theme === 'dark' ? 'bg-slate-900/70' : 'bg-white';
       const mutedPanelBg = theme === 'dark' ? 'bg-slate-900/45' : 'bg-slate-50';
 
@@ -3412,8 +3838,8 @@ const renderLinesPanel = () => {
           const boundaryStroke = theme === 'dark' ? '#60a5fa' : '#2563eb';
 
           return (
-              <div className={`relative overflow-hidden rounded-xl border ${t.borderCard} ${mutedPanelBg}`}>
-                  <svg viewBox="0 0 360 230" className="w-full h-[230px] block" role="img" aria-label="Field preview">
+              <div className={`relative overflow-hidden rounded-xl border ${t.borderCard} ${mutedPanelBg} h-full min-h-[230px]`}>
+                  <svg viewBox="0 0 360 230" className="w-full h-full min-h-[230px] block" role="img" aria-label="Field preview">
                       <defs>
                           <pattern id={`field-grid-${fieldId}`} width="24" height="24" patternUnits="userSpaceOnUse">
                               <path d="M 24 0 L 0 0 0 24" fill="none" stroke={gridStroke} strokeWidth="0.7" opacity={theme === 'dark' ? '0.26' : '0.42'} />
@@ -3534,12 +3960,12 @@ const renderLinesPanel = () => {
                               <h3 className={`text-xl font-black ${t.textMain} truncate`}>Create Field</h3>
                           </div>
                       </div>
-                      <button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}>
+                      <button onClick={() => setFieldManagerOpen(false)} className="hidden">
                           <X className="w-5 h-5" />
                       </button>
                   </div>
 
-                  <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6">
+                  <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6 pb-28">
                       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)] gap-5 max-w-6xl">
                           <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-5 space-y-5`}>
                               <div>
@@ -3638,12 +4064,12 @@ const renderLinesPanel = () => {
                               <h3 className={`text-xl font-black ${t.textMain} truncate`}>New Task</h3>
                           </div>
                       </div>
-                      <button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}>
+                      <button onClick={() => setFieldManagerOpen(false)} className="hidden">
                           <X className="w-5 h-5" />
                       </button>
                   </div>
 
-                  <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6">
+                  <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6 pb-28">
                       <div className="max-w-4xl">
                           <div className={`mb-5 rounded-xl border ${t.borderCard} ${softPanelBg} p-4 flex flex-wrap items-center justify-between gap-3`}>
                               <div>
@@ -3677,43 +4103,125 @@ const renderLinesPanel = () => {
           const boundaries = activeField.boundaries || [];
           const lines = activeField.lines || [];
           const tasks = activeField.tasks || [];
+          const activeAssetTab = ['lines', 'boundaries', 'tasks'].includes(fieldAssetTab) ? fieldAssetTab : 'lines';
+          const assetTabs = [
+              { id: 'lines', label: 'Lines', count: lines.length, icon: Route },
+              { id: 'boundaries', label: 'Boundaries', count: boundaries.length, icon: MapPin },
+              { id: 'tasks', label: 'Tasks', count: tasks.length, icon: FileText }
+          ];
+          const activeAssetMeta = assetTabs.find(tab => tab.id === activeAssetTab) || assetTabs[0];
+          const ActiveAssetIcon = activeAssetMeta.icon;
+          const activeAssetActionLabel = activeAssetTab === 'lines' ? 'New Line' : activeAssetTab === 'boundaries' ? 'Add Boundary' : 'New Task';
+          const handleAssetAction = () => {
+              if (activeAssetTab === 'lines') {
+                  setFieldManagerOpen(false);
+                  setLineModeModalOpen(true);
+              } else if (activeAssetTab === 'boundaries') {
+                  startBoundaryCreation();
+              } else {
+                  startTaskCreation();
+              }
+          };
 
           rightContent = (
               <div className="flex-1 min-h-0 flex flex-col">
                   <div className={`px-5 lg:px-6 py-4 border-b ${t.divider} flex items-center justify-between gap-4 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
-                      <div className="min-w-0">
-                          <div className="flex items-center gap-2 min-w-0">
-                              <h3 className={`text-xl font-black ${t.textMain} truncate`}>{activeField.name}</h3>
-                              {isLoadedActiveField && <span className="shrink-0 px-2 py-1 rounded-md bg-green-500/15 text-green-500 text-[10px] font-black uppercase">Loaded</span>}
+                      <div className="min-w-0 flex items-center gap-3">
+                          <div className={`shrink-0 w-11 h-11 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
+                              <MapIcon className="w-6 h-6 text-blue-500" />
                           </div>
-                          <div className={`mt-1 flex flex-wrap items-center gap-2 text-xs ${t.textSub}`}>
-                              <span>{activeField.area}</span>
-                              <span className={t.textDim}>/</span>
-                              <span>Last used {activeField.lastUsed || '--'}</span>
+                          <div className="min-w-0">
+                              <div className="flex items-center gap-2 min-w-0">
+                                  <h3 className={`text-xl font-black ${t.textMain} truncate`}>{activeField.name}</h3>
+                                  {isLoadedActiveField && <span className="shrink-0 px-2 py-1 rounded-md bg-green-500/15 text-green-500 text-[10px] font-black uppercase">Loaded</span>}
+                              </div>
+                              <div className={`mt-1 flex flex-wrap items-center gap-2 text-xs ${t.textSub}`}>
+                                  <span>{activeField.area}</span>
+                                  <span className={t.textDim}>/</span>
+                                  <span>Last used {activeField.lastUsed || '--'}</span>
+                              </div>
                           </div>
                       </div>
-                      <button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}>
+                      <button onClick={() => setFieldManagerOpen(false)} className="hidden">
                           <X className="w-5 h-5" />
                       </button>
                   </div>
 
-                  <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6">
-                      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
-                          <StatCard icon={MapIcon} label="Area" value={activeField.area || '--'} sub="Saved field" />
-                          <StatCard icon={MapPin} label="Boundaries" value={boundaries.length} sub={activeBoundaryIdx >= 0 && boundaries[activeBoundaryIdx] ? boundaries[activeBoundaryIdx].name || `Boundary ${activeBoundaryIdx + 1}` : 'None'} tone="text-orange-500" />
-                          <StatCard icon={Route} label="Lines" value={lines.length} sub={activeLineId ? 'Guidance loaded' : 'Saved patterns'} tone="text-sky-500" />
-                          <StatCard icon={FileText} label="Tasks" value={tasks.length} sub={activeTaskId ? 'Task running' : 'Job history'} tone="text-green-500" />
-                      </div>
+                  <div className="flex-1 min-h-0 overflow-hidden p-5 lg:p-6 flex flex-col">
+                      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1.08fr)_minmax(360px,0.92fr)] gap-5 overflow-hidden">
+                          <section className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${softPanelBg} p-4 flex flex-col`}>
+                              <SectionTitle icon={MapIcon} title="Field Map" />
+                              <div className="min-h-0 flex-1">
+                                  <MiniFieldPreview field={activeField} />
+                              </div>
+                          </section>
 
-                      <div className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)] gap-5">
-                          <section className="space-y-5 min-w-0">
-                              <MiniFieldPreview field={activeField} />
+                          <section className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${softPanelBg} flex flex-col overflow-hidden`}>
+                              <div className={`shrink-0 p-4 border-b ${t.divider}`}>
+                                  <div className="flex items-center justify-between gap-3 mb-3">
+                                      <div className="flex items-center gap-2 min-w-0">
+                                          <ActiveAssetIcon className="w-4 h-4 text-blue-500 shrink-0" />
+                                          <h4 className={`font-black uppercase tracking-wider text-xs ${t.textSub} truncate`}>Field Assets</h4>
+                                      </div>
+                                  </div>
+                                  <div className={`grid grid-cols-3 gap-2 rounded-xl ${mutedPanelBg} p-1.5 border ${t.borderCard}`}>
+                                      {assetTabs.map(({ id, label, count, icon: Icon }) => (
+                                          <button
+                                              key={id}
+                                              onClick={() => setFieldAssetTab(id)}
+                                              className={`min-w-0 rounded-lg px-2.5 py-2.5 text-left transition-all border ${activeAssetTab === id ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/20' : `${theme === 'dark' ? 'bg-slate-900/70 border-slate-700' : 'bg-white border-gray-200'} ${t.textSub} hover:border-blue-400 hover:bg-blue-500/10`}`}
+                                          >
+                                              <div className="flex items-center justify-between gap-1">
+                                                  <Icon className="w-3.5 h-3.5 shrink-0" />
+                                                  <span className="text-sm font-black">{count}</span>
+                                              </div>
+                                              <div className="mt-0.5 text-[9px] uppercase font-black truncate">{label}</div>
+                                          </button>
+                                      ))}
+                                  </div>
+                              </div>
 
-                              <div className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-4`}>
-                                  <SectionTitle icon={MapPin} title="Boundaries" actionLabel="Add" onAction={startBoundaryCreation} />
-                                  {boundaries.length > 0 ? (
-                                      <div className="space-y-2">
-                                          {boundaries.map((boundary, index) => (
+                              <div className="flex-1 min-h-0 overflow-y-auto p-4 pb-6 space-y-2">
+                                  {activeAssetTab === 'lines' && (
+                                      lines.length > 0 ? (
+                                          lines.map((line) => {
+                                              const Icon = getLineIcon(line);
+                                              const active = activeLineId === line.id;
+                                              return (
+                                                  <div key={line.id} className={`relative flex items-center justify-between gap-3 p-3 rounded-lg border transition-all ${active ? 'border-blue-600 bg-blue-600/10 shadow-sm ring-1 ring-blue-500/20' : `${t.borderCard} ${mutedPanelBg} hover:border-blue-400`}`}>
+                                                      {active && <div className="absolute left-0 top-3 bottom-3 w-1 rounded-r bg-blue-600" />}
+                                                      <div className="flex items-center gap-3 min-w-0">
+                                                          <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-blue-500`}`}>
+                                                              <Icon className="w-4 h-4" />
+                                                          </div>
+                                                          <div className="min-w-0">
+                                                              <div
+                                                                  className={`font-bold ${t.textMain} leading-tight`}
+                                                                  title={line.name || 'Guidance line'}
+                                                                  style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                                                              >
+                                                                  {line.name || 'Guidance line'}
+                                                              </div>
+                                                              <div className={`text-xs ${t.textSub}`}>{(line.type || 'LINE').replaceAll('_', ' ')} / {line.date || '--'}</div>
+                                                          </div>
+                                                      </div>
+                                                      <div className="shrink-0 flex items-center gap-2">
+                                                          <button onClick={() => confirmDelete('line', line.id)} className="p-2 rounded-lg text-red-500 hover:bg-red-500/10">
+                                                              <Trash2 className="w-4 h-4" />
+                                                          </button>
+                                                          <button onClick={() => handleLoadLine(line)} className={`px-3 py-2 rounded-lg text-xs font-black ${active ? 'bg-blue-600 text-white' : `border ${t.borderCard} ${t.textMain} hover:brightness-95`}`}>
+                                                              {active ? 'Active' : 'Load'}
+                                                          </button>
+                                                      </div>
+                                                  </div>
+                                              );
+                                          })
+                                      ) : <EmptyState label="No saved guidance line for this field." />
+                                  )}
+
+                                  {activeAssetTab === 'boundaries' && (
+                                      boundaries.length > 0 ? (
+                                          boundaries.map((boundary, index) => (
                                               <div
                                                   key={`${boundary.name || 'boundary'}-${index}`}
                                                   role="button"
@@ -3741,63 +4249,13 @@ const renderLinesPanel = () => {
                                                       </button>
                                                   </div>
                                               </div>
-                                          ))}
-                                      </div>
-                                  ) : (
-                                      <EmptyState label="No boundary saved. Record one to lock field shape." />
+                                          ))
+                                      ) : <EmptyState label="No boundary saved. Record one to lock field shape." />
                                   )}
-                              </div>
-                          </section>
 
-                          <section className="space-y-5 min-w-0">
-                              <div className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-4`}>
-                                  <SectionTitle
-                                      icon={Route}
-                                      title="Guidance Lines"
-                                      actionLabel="New"
-                                      onAction={() => {
-                                          setFieldManagerOpen(false);
-                                          setLineModeModalOpen(true);
-                                      }}
-                                  />
-                                  {lines.length > 0 ? (
-                                      <div className="space-y-2">
-                                          {lines.map((line) => {
-                                              const Icon = getLineIcon(line);
-                                              const active = activeLineId === line.id;
-                                              return (
-                                                  <div key={line.id} className={`flex items-center justify-between gap-3 p-3 rounded-lg border ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${mutedPanelBg}`}`}>
-                                                      <div className="flex items-center gap-3 min-w-0">
-                                                          <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-blue-500`}`}>
-                                                              <Icon className="w-4 h-4" />
-                                                          </div>
-                                                          <div className="min-w-0">
-                                                              <div className={`font-bold ${t.textMain} truncate`}>{line.name || 'Guidance line'}</div>
-                                                              <div className={`text-xs ${t.textSub}`}>{(line.type || 'LINE').replaceAll('_', ' ')} / {line.date || '--'}</div>
-                                                          </div>
-                                                      </div>
-                                                      <div className="shrink-0 flex items-center gap-2">
-                                                          <button onClick={() => confirmDelete('line', line.id)} className="p-2 rounded-lg text-red-500 hover:bg-red-500/10">
-                                                              <Trash2 className="w-4 h-4" />
-                                                          </button>
-                                                          <button onClick={() => handleLoadLine(line)} className={`px-3 py-2 rounded-lg text-xs font-black ${active ? 'bg-blue-600 text-white' : `border ${t.borderCard} ${t.textMain} hover:brightness-95`}`}>
-                                                              {active ? 'Active' : 'Load'}
-                                                          </button>
-                                                      </div>
-                                                  </div>
-                                              );
-                                          })}
-                                      </div>
-                                  ) : (
-                                      <EmptyState label="No saved guidance line for this field." />
-                                  )}
-                              </div>
-
-                              <div className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-4`}>
-                                  <SectionTitle icon={FileText} title="Tasks / Jobs" actionLabel="New" onAction={startTaskCreation} />
-                                  {tasks.length > 0 ? (
-                                      <div className="space-y-2">
-                                          {tasks.map((task) => {
+                                  {activeAssetTab === 'tasks' && (
+                                      tasks.length > 0 ? (
+                                          tasks.map((task) => {
                                               const Icon = getTaskIcon(task);
                                               const active = activeTaskId === task.id;
                                               return (
@@ -3836,11 +4294,15 @@ const renderLinesPanel = () => {
                                                       </div>
                                                   </div>
                                               );
-                                          })}
-                                      </div>
-                                  ) : (
-                                      <EmptyState label="No task created yet." />
+                                          })
+                                      ) : <EmptyState label="No task created yet." />
                                   )}
+                              </div>
+                              <div className={`shrink-0 p-4 border-t ${t.divider} ${theme === 'dark' ? 'bg-slate-950/40' : 'bg-white/70'}`}>
+                                  <button onClick={handleAssetAction} className="w-full h-12 rounded-xl bg-blue-600 text-white font-black hover:bg-blue-500 active:scale-[0.99] transition-all shadow-lg shadow-blue-900/20 flex items-center justify-center gap-2">
+                                      <Plus className="w-5 h-5" />
+                                      {activeAssetActionLabel}
+                                  </button>
                               </div>
                           </section>
                       </div>
@@ -3873,75 +4335,102 @@ const renderLinesPanel = () => {
       }
 
       return (
-          <div className="flex h-full w-full min-w-0">
-              <div className={`w-[32%] min-w-[300px] max-w-[390px] border-r ${t.border} ${t.bgPanel} flex flex-col min-h-0`}>
-                  <div className={`p-5 border-b ${t.divider}`}>
-                      <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                              <h2 className={`text-xl font-black flex items-center gap-3 ${t.textMain}`}>
-                                  <FolderOpen className="w-6 h-6 text-blue-500 shrink-0" />
-                                  <span className="truncate">Field Library</span>
-                              </h2>
-                              <div className={`mt-1 text-xs ${t.textSub}`}>{fields.length} saved fields</div>
-                          </div>
-                          <button onClick={() => setFieldManagerOpen(false)} className={`shrink-0 p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 xl:hidden`}>
-                              <X className="w-5 h-5" />
-                          </button>
+          <div className={`w-full h-full flex flex-col ${panelBg}`}>
+              <div className={`flex items-center justify-between gap-4 px-6 py-5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+                  <div className="min-w-0 flex items-center gap-3">
+                      <div className={`shrink-0 w-11 h-11 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
+                          <FolderOpen className="w-6 h-6 text-blue-500" />
                       </div>
-                      <button
-                          onClick={startFieldCreation}
-                          className="mt-4 w-full py-3 bg-blue-600 text-white rounded-xl font-black flex justify-center items-center gap-2 hover:bg-blue-500"
-                      >
-                          <Plus className="w-5 h-5" />
-                          New Field
-                      </button>
+                      <div className="min-w-0">
+                          <h2 className={`text-xl font-black ${t.textMain}`}>Field Library</h2>
+                          <div className={`text-xs ${t.textSub} truncate`}>{fields.length} saved fields / {loadedField ? `${loadedField.name} loaded` : 'No field loaded'}</div>
+                      </div>
                   </div>
+                  <button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 transition-all`}>
+                      <X className="w-5 h-5" />
+                  </button>
+              </div>
 
-                  <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
-                      {fields.map(f => {
-                          const selected = selectedFieldId === f.id;
-                          const loaded = loadedField?.id === f.id;
-                          const fieldBoundaries = f.boundaries || [];
-                          const fieldLines = f.lines || [];
-                          const fieldTasks = f.tasks || [];
-                          return (
+              <div className="flex-1 min-h-0 p-5 lg:p-6 overflow-hidden">
+                  <div className="h-full grid grid-cols-[minmax(230px,0.5fr)_minmax(0,1.85fr)] gap-5">
+                      <section className={`${softPanelBg} border ${t.borderCard} rounded-xl flex flex-col min-h-0 overflow-hidden`}>
+                          <div className="p-4 border-b border-transparent">
+                              <div className="grid grid-cols-3 gap-2 mb-4">
+                                  <div className={`${mutedPanelBg} border ${t.borderCard} rounded-lg p-3`}>
+                                      <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Fields</div>
+                                      <div className={`text-2xl font-black ${t.textMain}`}>{fields.length}</div>
+                                  </div>
+                                  <div className={`${mutedPanelBg} border ${t.borderCard} rounded-lg p-3`}>
+                                      <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Loaded</div>
+                                      <div className={`text-2xl font-black ${loadedField ? 'text-green-500' : t.textMain}`}>{loadedField ? 1 : 0}</div>
+                                  </div>
+                                  <div className={`${mutedPanelBg} border ${t.borderCard} rounded-lg p-3`}>
+                                      <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Lines</div>
+                                      <div className={`text-2xl font-black ${t.textMain}`}>{fields.reduce((total, f) => total + (f.lines || []).length, 0)}</div>
+                                  </div>
+                              </div>
                               <button
-                                  key={f.id}
-                                  onClick={() => { actions.setSelectedFieldId(f.id); actions.setViewMode('LIST'); }}
-                                  className={`w-full text-left p-4 rounded-xl border transition-all ${selected ? t.selectedItem : `${t.bgCard} ${t.borderCard} hover:brightness-95`}`}
+                                  onClick={startFieldCreation}
+                                  className="w-full py-3 bg-blue-600 text-white rounded-lg font-black flex justify-center items-center gap-2 hover:bg-blue-500 shadow-lg shadow-blue-900/20"
                               >
-                                  <div className="flex items-start justify-between gap-3">
-                                      <div className="flex items-start gap-3 min-w-0">
-                                          <div className={`shrink-0 w-11 h-11 rounded-xl flex items-center justify-center ${selected ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textSub}`}`}>
-                                              <MapIcon className="w-5 h-5" />
+                                  <Plus className="w-5 h-5" />
+                                  New Field
+                              </button>
+                          </div>
+
+                          <div className="flex-1 min-h-0 overflow-y-auto p-4 pt-0 space-y-3">
+                              {fields.map(f => {
+                                  const selected = selectedFieldId === f.id;
+                                  const loaded = loadedField?.id === f.id;
+                                  const fieldBoundaries = f.boundaries || [];
+                                  const fieldLines = f.lines || [];
+                                  const fieldTasks = f.tasks || [];
+                                  return (
+                                      <button
+                                          key={f.id}
+                                          onClick={() => { actions.setSelectedFieldId(f.id); actions.setViewMode('LIST'); }}
+                                          title={f.name}
+                                          className={`w-full text-left p-4 rounded-xl border transition-all ${selected ? t.selectedItem : `${softPanelBg} ${t.borderCard} hover:brightness-95`}`}
+                                      >
+                                          <div className="flex items-center justify-between gap-3">
+                                              <div className={`shrink-0 w-11 h-11 rounded-xl flex items-center justify-center ${selected ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textSub}`}`}>
+                                                  <MapIcon className="w-5 h-5" />
+                                              </div>
+                                              {loaded ? <CheckCircle2 className="shrink-0 w-5 h-5 text-green-500" /> : selected ? <Check className="shrink-0 w-5 h-5 text-blue-500" /> : null}
                                           </div>
-                                          <div className="min-w-0">
-                                              <div className={`font-black ${t.textMain} truncate`}>{f.name}</div>
+                                          <div className="mt-3 min-w-0">
+                                              <div
+                                                  className={`font-black ${t.textMain} leading-tight`}
+                                                  style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                                              >
+                                                  {f.name}
+                                              </div>
                                               <div className={`text-xs ${t.textSub}`}>{f.area || '--'} / {f.lastUsed || '--'}</div>
                                           </div>
-                                      </div>
-                                      {loaded ? <CheckCircle2 className="shrink-0 w-5 h-5 text-green-500" /> : selected ? <Check className="shrink-0 w-5 h-5 text-blue-500" /> : null}
-                                  </div>
-                                  <div className="mt-4 grid grid-cols-3 gap-2">
-                                      <div className={`rounded-lg ${mutedPanelBg} border ${t.borderCard} px-2 py-2 text-center`}>
-                                          <div className={`text-sm font-black ${t.textMain}`}>{fieldBoundaries.length}</div>
-                                          <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>Bounds</div>
-                                      </div>
-                                      <div className={`rounded-lg ${mutedPanelBg} border ${t.borderCard} px-2 py-2 text-center`}>
-                                          <div className={`text-sm font-black ${t.textMain}`}>{fieldLines.length}</div>
-                                          <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>Lines</div>
-                                      </div>
-                                      <div className={`rounded-lg ${mutedPanelBg} border ${t.borderCard} px-2 py-2 text-center`}>
-                                          <div className={`text-sm font-black ${t.textMain}`}>{fieldTasks.length}</div>
-                                          <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>Tasks</div>
-                                      </div>
-                                  </div>
-                              </button>
-                          );
-                      })}
+                                          <div className="mt-4 grid grid-cols-3 gap-2">
+                                              <div className={`rounded-lg ${mutedPanelBg} border ${t.borderCard} px-2 py-2 text-center`}>
+                                                  <div className={`text-sm font-black ${t.textMain}`}>{fieldBoundaries.length}</div>
+                                                  <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>Bounds</div>
+                                              </div>
+                                              <div className={`rounded-lg ${mutedPanelBg} border ${t.borderCard} px-2 py-2 text-center`}>
+                                                  <div className={`text-sm font-black ${t.textMain}`}>{fieldLines.length}</div>
+                                                  <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>Lines</div>
+                                              </div>
+                                              <div className={`rounded-lg ${mutedPanelBg} border ${t.borderCard} px-2 py-2 text-center`}>
+                                                  <div className={`text-sm font-black ${t.textMain}`}>{fieldTasks.length}</div>
+                                                  <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>Tasks</div>
+                                              </div>
+                                          </div>
+                                      </button>
+                                  );
+                              })}
+                          </div>
+                      </section>
+                      <section className={`${softPanelBg} border ${t.borderCard} rounded-xl flex flex-col min-h-0 overflow-hidden`}>
+                          {rightContent}
+                      </section>
                   </div>
               </div>
-              <div className={`flex-1 min-w-0 flex flex-col ${panelBg}`}>{rightContent}</div>
           </div>
       );
   };
@@ -3977,7 +4466,7 @@ const renderLinesPanel = () => {
             {/* MAIN AREA */}
             <main className={`flex-1 relative flex flex-col ${t.textMain} font-sans select-none`}>
                 {/* 2B) MAP CANVAS */}
-                <div className={`absolute inset-x-0 top-[72px] bottom-[92px] ${t.bgMain} z-0 overflow-hidden transition-colors duration-500`}
+                <div className={`absolute inset-x-0 top-[72px] bottom-[98px] ${t.bgMain} z-0 overflow-hidden transition-colors duration-500`}
                      onPointerDown={handleMapPointerDown}
                      onPointerMove={handleMapPointerMove}
                      onPointerUp={handleMapPointerUp}
@@ -4183,13 +4672,11 @@ const renderLinesPanel = () => {
                         </button>
                     )}
 
-                    {renderFeatureStatusStrip()}
-                    {renderMissionOverview()}
                     {renderCompassWidget()}
                 </div>
 
                 {/* ... rest of the app ... */}
-                <header className={`h-[72px] min-h-[72px] ${t.bgHeader} backdrop-blur-md grid grid-cols-[minmax(240px,1fr)_minmax(290px,390px)_minmax(270px,1fr)] items-center gap-4 px-[3%] z-20 border-b ${t.border}`}>
+                <header className={`h-[72px] min-h-[72px] ${t.bgHeader} backdrop-blur-md grid grid-cols-[minmax(240px,1fr)_minmax(290px,390px)_minmax(170px,0.7fr)] items-center gap-4 px-[3%] z-20 border-b ${t.border}`}>
                     <div className="min-w-0 flex items-center gap-3">
                         <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-100'} flex items-center justify-center`}>
                             <MapIcon className="w-5 h-5 text-blue-500" />
@@ -4197,7 +4684,7 @@ const renderLinesPanel = () => {
                         <div className="min-w-0">
                             <div className={`flex items-center gap-2 text-[10px] lg:text-xs ${t.textSub} uppercase tracking-wider font-black`}>
                                 <Layers className="w-3 h-3 shrink-0" />
-                                <span className="truncate">Run / Field / Guidance</span>
+                                <span className="truncate">Run / {activeTaskRecord?.name || 'No Task'} / {Number(implementSettings.width || 0).toFixed(1)} m</span>
                             </div>
                             <div className="min-w-0 flex items-center gap-1.5 lg:gap-2">
                                 <span className={`${t.textMain} font-black text-xs lg:text-base truncate`}>{activeFieldRecord?.name || 'No Field Loaded'}</span>
@@ -4211,11 +4698,7 @@ const renderLinesPanel = () => {
                     </div>
                     <div className="min-w-0 flex items-center justify-end">
                         <div className={`h-12 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/75' : 'bg-gray-50'} overflow-hidden flex shadow-sm`}>
-                            <div className={`hidden lg:flex min-w-[92px] px-3 flex-col justify-center border-r ${t.borderCard}`}>
-                                <span className={`text-[10px] uppercase font-black ${t.textSub}`}>Heading</span>
-                                <span className={`font-mono text-sm font-black leading-none ${t.textMain}`}>{`${getDisplayHeading()}\u00b0`}</span>
-                            </div>
-                            <div className={`min-w-[70px] px-3 flex flex-col justify-center border-r ${t.borderCard}`}>
+                            <div className={`min-w-[74px] px-3 flex flex-col justify-center border-r ${t.borderCard}`}>
                                 <span className={`text-[10px] uppercase font-black ${t.textSub}`}>Sats</span>
                                 <div className={`flex items-center gap-1 ${t.textMain}`}>
                                     <Globe className="w-3.5 h-3.5 text-blue-500" />
@@ -4231,20 +4714,20 @@ const renderLinesPanel = () => {
                 </header>
 
                 {/* BOTTOM BAR */}
-                <div className={`absolute bottom-0 left-0 right-0 h-[108px] min-h-[96px] ${t.bgBottom} backdrop-blur-xl border-t ${t.border} grid grid-cols-[minmax(178px,0.82fr)_minmax(360px,auto)_minmax(190px,0.82fr)] items-center gap-3 px-[3%] z-30`}>
+                <div className={`absolute bottom-0 left-0 right-0 h-[98px] min-h-[92px] ${t.bgBottom} backdrop-blur-xl border-t ${t.border} grid grid-cols-[minmax(270px,0.82fr)_minmax(360px,auto)_minmax(190px,0.72fr)] items-center gap-3 px-[3%] z-30`}>
                     <div className="min-w-0 flex items-center gap-2.5 h-full py-3">
-                        <button onClick={handleUTurn} className={`h-full min-w-[84px] px-2.5 rounded-xl border ${turnAssistActive ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'}`} flex flex-col items-center justify-center active:scale-95`}>
+                        <button onClick={handleUTurn} className={`h-full min-w-[82px] px-2.5 rounded-xl border ${turnAssistActive ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'}`} flex flex-col items-center justify-center active:scale-95`}>
                             <CornerUpLeft className={`w-7 h-7 ${turnAssistActive ? 'text-blue-500' : t.textDim}`}/>
                             <span className={`text-[11px] font-black ${turnAssistActive ? 'text-blue-500' : t.textSub}`}>U-TURN</span>
                         </button>
-                        <button onClick={() => setIsRecording(!isRecording)} className={`h-full min-w-[88px] px-2.5 rounded-xl border flex flex-col items-center justify-center ${isRecording?'bg-red-900/20 border-red-500 text-red-500':`${theme==='dark'?'bg-slate-900 border-slate-700':'bg-gray-100 border-gray-300'} ${t.textDim}`}`}>
+                        <button onClick={() => setIsRecording(!isRecording)} className={`h-full min-w-[90px] px-2.5 rounded-xl border flex flex-col items-center justify-center ${isRecording?'bg-red-900/20 border-red-500 text-red-500':`${theme==='dark'?'bg-slate-900 border-slate-700':'bg-gray-100 border-gray-300'} ${t.textDim}`}`}>
                             <div className={`w-4 h-4 rounded-full ${isRecording?'bg-red-500 animate-pulse':'bg-slate-500'}`}/>
                             <span className="text-[11px] font-black tracking-widest">{isRecording?'REC':'COVERAGE'}</span>
                         </button>
-                        <div className={`hidden xl:flex min-w-0 h-full px-4 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900/70':'bg-gray-100'} flex-col justify-center`}>
-                            <span className={`text-[10px] uppercase font-black ${t.textSub}`}>Task area</span>
-                            <span className={`text-2xl font-black leading-none ${theme==='dark'?'text-slate-200':'text-slate-700'}`}>{workedArea.toFixed(2)}</span>
-                            <span className={`text-[10px] uppercase font-bold ${t.textSub}`}>ha done</span>
+                        <div className={`h-full min-w-[92px] px-2.5 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex flex-col items-center justify-center`}>
+                            <span className={`text-[10px] font-black uppercase ${t.textSub}`}>Area</span>
+                            <span className={`text-2xl font-black leading-none ${t.textMain}`}>{workedArea.toFixed(2)}</span>
+                            <span className={`text-[10px] font-black uppercase ${t.textSub}`}>ha</span>
                         </div>
                     </div>
 
@@ -4442,15 +4925,70 @@ const renderLinesPanel = () => {
                 )}
 
                 {lineModeModalOpen && (
-                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6"><div className={`${t.bgPanel} rounded-2xl w-full max-w-3xl max-h-[88vh] overflow-y-auto border ${t.borderCard} shadow-2xl p-6`}><div className="flex justify-between items-center mb-6"><h3 className={`text-xl font-bold ${t.textMain}`}>Select Guidance Mode</h3><button onClick={() => setLineModeModalOpen(false)} className={`p-2 rounded-lg hover:bg-slate-800/50 ${t.textDim}`}><X className="w-6 h-6" /></button></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><button onClick={() => selectLineMode('STRAIGHT_AB')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'STRAIGHT_AB' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><GitCommitHorizontal className={`w-12 h-12 ${lineType === 'STRAIGHT_AB' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Straight AB</span><span className={`text-xs ${t.textSub}`}>Standard straight line A to B</span></button><button onClick={() => selectLineMode('A_PLUS')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'A_PLUS' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><ArrowUpFromDot className={`w-12 h-12 ${lineType === 'A_PLUS' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>A+ Heading</span><span className={`text-xs ${t.textSub}`}>Straight line with defined heading</span></button><button onClick={() => selectLineMode('CURVE')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'CURVE' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><Spline className={`w-12 h-12 ${lineType === 'CURVE' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Curve</span><span className={`text-xs ${t.textSub}`}>Adaptive curved guidance</span></button><button onClick={() => selectLineMode('PIVOT')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'PIVOT' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><CircleDashed className={`w-12 h-12 ${lineType === 'PIVOT' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Pivot</span><span className={`text-xs ${t.textSub}`}>Center pivot circular pattern</span></button><button onClick={() => selectLineMode('COMBINATION')} className={`p-6 rounded-xl border ${t.borderCard} ${lineType === 'COMBINATION' ? 'bg-blue-500/10 border-blue-500' : 'hover:bg-slate-800/30'} flex flex-col items-center gap-3 transition-all`}><AlignJustify className={`w-12 h-12 ${lineType === 'COMBINATION' ? 'text-blue-500' : t.textDim}`} /><span className={`font-bold text-lg ${t.textMain}`}>Combination</span><span className={`text-xs ${t.textSub}`}>Curve plus straight segments</span></button>
-                    {/* MULTI-LINE OPTION */}
-                    <div className={`md:col-span-2 mt-4 flex items-center justify-between p-4 rounded-xl border ${t.borderCard} ${t.bgInput}`}>
-                        <span className={`text-sm font-bold ${t.textMain}`}>Parallel Guidance Lines</span>
-                        <div onClick={handleToggleMultiLine} className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-colors ${isMultiLineMode ? 'bg-blue-600' : 'bg-slate-600'}`}>
-                            <div className={`w-4 h-4 rounded-full bg-white shadow-sm transform transition-transform ${isMultiLineMode ? 'translate-x-6' : ''}`} />
+                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+                        <div className={`${t.bgPanel} rounded-2xl w-full max-w-4xl max-h-[88vh] border ${t.borderCard} shadow-2xl overflow-hidden flex flex-col`}>
+                            <div className={`shrink-0 px-5 py-4 border-b ${t.divider} flex items-center justify-between gap-4`}>
+                                <div className="min-w-0">
+                                    <div className={`text-[10px] uppercase tracking-widest font-black ${t.textSub}`}>Create Guidance</div>
+                                    <h3 className={`text-xl font-black ${t.textMain}`}>Choose Line Type</h3>
+                                </div>
+                                <button onClick={() => setLineModeModalOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}>
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+
+                            <div className="min-h-0 flex-1 grid grid-cols-1 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.78fr)] overflow-hidden">
+                                <div className="min-h-0 overflow-y-auto p-5 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {[
+                                        { type: 'STRAIGHT_AB', title: 'Straight AB', detail: 'Set A, drive forward, set B.', icon: GitCommitHorizontal, tag: 'Most used' },
+                                        { type: 'A_PLUS', title: 'A+ Heading', detail: 'Set A and enter or capture heading.', icon: ArrowUpFromDot },
+                                        { type: 'CURVE', title: 'Curve', detail: 'Record a curved pass while driving.', icon: Spline },
+                                        { type: 'PIVOT', title: 'Pivot', detail: 'Set center and edge radius.', icon: CircleDashed },
+                                        { type: 'COMBINATION', title: 'Combination', detail: 'Record curve with straight segments.', icon: AlignJustify }
+                                    ].map(({ type, title, detail, icon: Icon, tag }) => {
+                                        const active = lineType === type;
+                                        return (
+                                            <button
+                                                key={type}
+                                                onClick={() => selectLineMode(type)}
+                                                className={`text-left rounded-xl border p-4 min-h-[104px] transition-all flex items-start gap-4 ${active ? 'border-blue-500 bg-blue-500/10 ring-2 ring-blue-500/15' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'} hover:border-blue-400 hover:bg-blue-500/5`}`}
+                                            >
+                                                <div className={`shrink-0 w-11 h-11 rounded-xl flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} text-blue-500`}`}>
+                                                    <Icon className="w-5 h-5" />
+                                                </div>
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="flex items-center gap-2 min-w-0">
+                                                        <span className={`font-black ${t.textMain} whitespace-nowrap`}>{title}</span>
+                                                        {tag && <span className="px-1.5 py-0.5 rounded bg-green-500/15 text-green-500 text-[8px] font-black uppercase whitespace-nowrap">{tag}</span>}
+                                                    </div>
+                                                    <div className={`mt-1 text-xs leading-relaxed ${t.textSub}`}>{detail}</div>
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+
+                                <aside className={`min-h-0 border-t lg:border-t-0 lg:border-l ${t.divider} ${theme === 'dark' ? 'bg-slate-950/45' : 'bg-slate-50'} p-5 flex flex-col gap-4`}>
+                                    <div className={`rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'} p-4`}>
+                                        <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Next step</div>
+                                        <div className={`mt-2 text-sm font-bold ${t.textMain}`}>After choosing a type, the right-side run dock changes to the exact buttons needed to capture that line.</div>
+                                    </div>
+                                    <button onClick={handleToggleMultiLine} className={`w-full rounded-xl border ${isMultiLineMode ? 'border-blue-500 bg-blue-500/10' : t.borderCard} p-4 text-left flex items-center justify-between gap-3`}>
+                                        <div className="min-w-0">
+                                            <div className={`font-black ${t.textMain}`}>Parallel Guidance Lines</div>
+                                            <div className={`text-xs ${t.textSub}`}>Create offset lines for implement passes.</div>
+                                        </div>
+                                        <div className={`shrink-0 w-12 h-7 rounded-full p-1 transition-colors ${isMultiLineMode ? 'bg-blue-600' : 'bg-slate-500'}`}>
+                                            <div className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${isMultiLineMode ? 'translate-x-5' : ''}`} />
+                                        </div>
+                                    </button>
+                                    <button onClick={() => setLineModeModalOpen(false)} className={`mt-auto w-full h-11 rounded-xl border ${t.borderCard} ${t.textMain} font-black hover:brightness-95`}>
+                                        Cancel
+                                    </button>
+                                </aside>
+                            </div>
                         </div>
                     </div>
-                    </div></div></div>
                 )}
                 {/* ACTION DOCK */}
                 <div className="absolute right-4 top-[150px] bottom-[128px] w-[96px] z-20 flex flex-col justify-center pointer-events-none">

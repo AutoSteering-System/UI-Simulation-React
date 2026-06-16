@@ -72,3 +72,4 @@ const Copy = makeIconComponent('copy');
 const AlignJustify = makeIconComponent('align-justify');
 const Eye = makeIconComponent('eye');
 const EyeOff = makeIconComponent('eye-off');
+const Search = makeIconComponent('search');
