@@ -71,8 +71,6 @@ const App = () => {
   const [lineModeModalOpen, setLineModeModalOpen] = useState(false);
   const [lineNameModalOpen, setLineNameModalOpen] = useState(false);
   const [manualHeadingModalOpen, setManualHeadingModalOpen] = useState(false);
-  const [rtkAdvancedOpen, setRtkAdvancedOpen] = useState(false);
-  const [gnssTab, setGnssTab] = useState('GNSS');
 
   // Boundary States
   const [boundaryNameModalOpen, setBoundaryNameModalOpen] = useState(false);
@@ -88,6 +86,13 @@ const App = () => {
   const [tempLineName, setTempLineName] = useState('');
   const [tempManualHeading, setTempManualHeading] = useState('0.0');
   const [settingsTab, setSettingsTab] = useState('overview');
+  const [rtkTestState, setRtkTestState] = useState('idle');
+  const [baseSurveyState, setBaseSurveyState] = useState('idle');
+  const [calibrationStatus, setCalibrationStatus] = useState({
+      vehicle: 'OK',
+      implement: 'Needs Check',
+      angle: 'OK'
+  });
 
   // NEW: Locked Lane Index for Auto Steer
   const activeLaneRef = useRef(null);
@@ -140,6 +145,7 @@ const App = () => {
   const turnAssistRef = useRef(null);
   const [turnAssistActive, setTurnAssistActive] = useState(false);
   const [currentTime, setCurrentTime] = useState('');
+  const setupOverlayOpen = menuOpen || settingsOpen || cameraPanelOpen || diagnosticsPanelOpen || linesPanelOpen || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || manualHeadingModalOpen || boundaryAlertOpen || deleteModalOpen || (fieldManagerOpen && !isRecordingBoundary);
 
   // Store refs to guidance data for physics loop
   const guidanceRef = useRef({
@@ -454,6 +460,10 @@ const App = () => {
         physics.current.lastTime = time;
 
         const p = physics.current;
+        if (setupOverlayOpen) {
+            animationFrameId = requestAnimationFrame(loop);
+            return;
+        }
 
         // --- SPEED CONTROL (Available in BOTH Manual and Auto) ---
         if (keysPressed.current['ArrowUp']) p.targetSpeed = Math.min(p.targetSpeed + 10 * dt, 15);
@@ -623,7 +633,7 @@ const App = () => {
 
     animationFrameId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [steeringMode, setManualTargetSpeed, vehicleSettings?.wheelbase, isMap3D]);
+  }, [steeringMode, setManualTargetSpeed, vehicleSettings?.wheelbase, isMap3D, setupOverlayOpen]);
 
   // --- 4. RECORDING ---
   useEffect(() => {
@@ -2724,12 +2734,13 @@ const App = () => {
             const calibCards = [
               {
                 title: 'Vehicle Geometry',
+                key: 'vehicle',
                 icon: Tractor,
-                status: 'OK',
+                status: calibrationStatus.vehicle,
                 detail: 'Wheelbase and hitch reference.',
                 actions: [
-                  { label: 'Run', tone: 'primary', onClick: () => showNotification('Vehicle calibration started', 'success') },
-                  { label: 'Reset', tone: 'ghost', onClick: () => showNotification('Vehicle calibration reset', 'info') }
+                  { label: 'Run', tone: 'primary', onClick: () => { setCalibrationStatus(prev => ({ ...prev, vehicle: 'OK' })); showNotification('Vehicle calibration completed', 'success'); } },
+                  { label: 'Reset', tone: 'ghost', onClick: () => { setCalibrationStatus(prev => ({ ...prev, vehicle: 'Needs Check' })); showNotification('Vehicle calibration reset', 'info'); } }
                 ],
                 meta: [
                     { label: 'Last Run', value: 'Today 08:45' },
@@ -2738,12 +2749,13 @@ const App = () => {
               },
               {
                 title: 'Implement Setup',
+                key: 'implement',
                 icon: Ruler,
-                status: 'Needs Check',
+                status: calibrationStatus.implement,
                 detail: 'Width, overlap and delay.',
                 actions: [
-                  { label: 'Run', tone: 'primary', onClick: () => showNotification('Implement calibration started', 'success') },
-                  { label: 'Reset', tone: 'ghost', onClick: () => showNotification('Implement calibration reset', 'info') }
+                  { label: 'Run', tone: 'primary', onClick: () => { setCalibrationStatus(prev => ({ ...prev, implement: 'OK' })); showNotification('Implement calibration completed', 'success'); } },
+                  { label: 'Reset', tone: 'ghost', onClick: () => { setCalibrationStatus(prev => ({ ...prev, implement: 'Needs Check' })); showNotification('Implement calibration reset', 'info'); } }
                 ],
                 meta: [
                     { label: 'Last Run', value: 'Yesterday 17:20' },
@@ -2752,12 +2764,13 @@ const App = () => {
               },
               {
                 title: 'Angle Sensor',
+                key: 'angle',
                 icon: Gauge,
-                status: 'OK',
+                status: calibrationStatus.angle,
                 detail: 'Zero point and range.',
                 actions: [
-                  { label: 'Calibrate', tone: 'primary', onClick: () => showNotification('Angle sensor calibration started', 'success') },
-                  { label: 'Zero', tone: 'ghost', onClick: () => showNotification('Angle sensor zeroed', 'info') }
+                  { label: 'Calibrate', tone: 'primary', onClick: () => { setCalibrationStatus(prev => ({ ...prev, angle: 'OK' })); showNotification('Angle sensor calibration completed', 'success'); } },
+                  { label: 'Zero', tone: 'ghost', onClick: () => { setCalibrationStatus(prev => ({ ...prev, angle: 'OK' })); showNotification('Angle sensor zeroed', 'success'); } }
                 ],
                 meta: [
                     { label: 'Live Angle', value: `${steeringAngle.toFixed(1)}\u00b0` },
@@ -2779,7 +2792,7 @@ const App = () => {
                     title="Calibration Center"
                     detail="Run the required calibration before engaging auto steer."
                     icon={Gauge}
-                    actions={<SettingsActionButton variant="primary" onClick={() => showNotification('Calibration check started', 'info')}>Run Check</SettingsActionButton>}
+                    actions={<SettingsActionButton variant="primary" onClick={() => { setCalibrationStatus({ vehicle: 'OK', implement: 'OK', angle: 'OK' }); showNotification('All calibration checks completed', 'success'); }}>Run Check</SettingsActionButton>}
                 >
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         <SettingsMetric label="Ready Modules" value={`${doneCount}/${calibCards.length}`} tone={doneCount === calibCards.length ? 'text-green-500' : 'text-yellow-500'} />
@@ -2795,16 +2808,14 @@ const App = () => {
                   {calibCards.map((card) => (
                     <article key={card.title} className={`${t.bgPanel} border ${t.borderCard} rounded-xl p-4 flex flex-col gap-3 min-h-[218px]`}>
                       <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start gap-3 min-w-0">
-                          <div className={`shrink-0 w-10 h-10 rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
-                              <card.icon className="w-5 h-5 text-blue-500" />
-                          </div>
-                          <div className="min-w-0">
-                              <div className={`text-base font-black ${t.textMain}`}>{card.title}</div>
-                              <div className={`text-[11px] ${t.textSub}`}>{card.detail}</div>
-                          </div>
+                        <div className={`shrink-0 w-10 h-10 rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
+                            <card.icon className="w-5 h-5 text-blue-500" />
                         </div>
                         <span className={`shrink-0 text-[11px] font-bold px-2.5 py-1 rounded-full border ${statusClass(card.status)}`}>{card.status}</span>
+                      </div>
+                      <div className="min-w-0">
+                          <div className={`text-base font-black leading-tight ${t.textMain}`}>{card.title}</div>
+                          <div className={`text-[11px] ${t.textSub}`}>{card.detail}</div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-3">
@@ -2869,32 +2880,16 @@ const App = () => {
             const rtkLabel = rtkStatus === 'FIX' ? 'CONNECTED' : rtkStatus === 'FLOAT' ? 'FLOAT' : rtkStatus === 'DIFF' ? 'DIFF' : 'DISCONNECTED';
             const rtkBadge = rtkStatus === 'FIX' ? 'text-green-500' : rtkStatus === 'FLOAT' ? 'text-yellow-500' : rtkStatus === 'DIFF' ? 'text-orange-500' : 'text-red-500';
             const rtkBar = rtkStatus === 'FIX' ? 'bg-green-500' : rtkStatus === 'FLOAT' ? 'bg-yellow-500' : rtkStatus === 'DIFF' ? 'bg-orange-500' : 'bg-red-500';
-            const gnssTabs = ['GNSS', 'RNSS', 'SBAS'];
-            const usedSatellites = [
-              { label: 'GPS', count: 8, color: 'bg-blue-500' },
-              { label: 'GLONASS', count: 4, color: 'bg-red-500' },
-              { label: 'BEIDOU', count: 6, color: 'bg-emerald-500' },
-              { label: 'GALILEO', count: 5, color: 'bg-yellow-500' }
+            const rtkMode = rtkConfig.correctionSource === 'NTRIP'
+                ? 'NTRIP'
+                : (rtkConfig.correctionSource === 'Base Station' || rtkConfig.correctionSource === 'Radio Base') ? 'BASE' : 'EXTERNAL';
+            const sourceModes = [
+                { id: 'NTRIP', source: 'NTRIP', label: 'NTRIP Rover', detail: 'Internet caster / VRS', icon: Globe },
+                { id: 'BASE', source: 'Base Station', label: 'Local Base', detail: 'Survey-in + radio link', icon: LocateFixed },
+                { id: 'EXTERNAL', source: 'External Receiver', label: 'External GNSS', detail: 'Serial/USB receiver input', icon: Radio }
             ];
-            const unusedSatellites = [
-              { label: 'GPS', count: 10, color: 'bg-blue-500' },
-              { label: 'GLONASS', count: 3, color: 'bg-red-500' },
-              { label: 'BEIDOU', count: 8, color: 'bg-emerald-500' },
-              { label: 'GALILEO', count: 2, color: 'bg-yellow-500' }
-            ];
-            const skyPoints = [
-              { id: 15, az: 15, el: 70 },
-              { id: 7, az: 40, el: 35 },
-              { id: 29, az: 95, el: 60 },
-              { id: 42, az: 140, el: 20 },
-              { id: 66, az: 210, el: 45 },
-              { id: 25, az: 250, el: 25 },
-              { id: 86, az: 315, el: 15 }
-            ];
-            const skySize = 150;
-            const skyRadius = 62;
             const toggleRtkFlag = (key) => handleRtkSettingChange(key, !rtkConfig[key]);
-            const ToggleFlag = ({ label, detail, flagKey, icon: Icon = CheckCircle2 }) => (
+            const renderToggleFlag = ({ label, detail, flagKey, icon: Icon = CheckCircle2 }) => (
                 <button
                     onClick={() => toggleRtkFlag(flagKey)}
                     className={`p-4 rounded-xl border text-left flex items-center justify-between gap-4 ${rtkConfig[flagKey] ? 'border-green-500/50 bg-green-500/10' : `${t.borderCard} ${t.bgInput}`}`}
@@ -2913,182 +2908,131 @@ const App = () => {
                     </div>
                 </button>
             );
+            const renderModeCard = (mode) => {
+                const active = rtkMode === mode.id;
+                const Icon = mode.icon;
+                return (
+                    <button
+                        key={mode.id}
+                        onClick={() => {
+                            handleRtkSettingChange('correctionSource', mode.source);
+                            setRtkTestState('idle');
+                            setBaseSurveyState('idle');
+                        }}
+                        className={`text-left rounded-xl border p-4 min-h-[112px] transition-all ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'} hover:brightness-95`}`}
+                    >
+                        <div className="flex items-start justify-between gap-3">
+                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} text-blue-500`}`}>
+                                <Icon className="w-5 h-5" />
+                            </div>
+                            {active && <CheckCircle2 className="w-5 h-5 text-blue-500" />}
+                        </div>
+                        <div className={`mt-3 font-black ${t.textMain}`}>{mode.label}</div>
+                        <div className={`text-xs ${t.textSub}`}>{mode.detail}</div>
+                    </button>
+                );
+            };
 
             return (
-              <div className="flex flex-col gap-5">
-                <div className="order-4">
+              <div className="space-y-5">
                 <SettingsSection
-                    title="Receiver Status"
-                    detail="Live GNSS quality and satellite visibility."
+                    title="RTK Setup"
+                    detail="Pick one correction workflow first, then configure only that workflow."
                     icon={Radio}
-                    actions={<><SettingsActionButton onClick={() => { setRtkStatus('FLOAT'); showNotification('RTK status set to FLOAT for test', 'info'); }}>Sim Float</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => { setRtkStatus('FIX'); setSatelliteCount(12); showNotification('RTK caster connection OK', 'success'); }}>Test Link</SettingsActionButton></>}
+                    actions={<SettingsActionButton onClick={() => { setRtkStatus('FLOAT'); setRtkTestState('idle'); showNotification('RTK link set to FLOAT for test', 'info'); }}>Sim Float</SettingsActionButton>}
                 >
-                    <div className="flex flex-wrap gap-2 border-b border-slate-300/40 pb-2">
-                        {gnssTabs.map((tab) => (
-                            <button
-                                key={tab}
-                                onClick={() => setGnssTab(tab)}
-                                className={`px-4 py-2 text-sm font-bold rounded-lg border ${gnssTab === tab ? 'bg-blue-600 text-white border-blue-600' : `${t.borderCard} ${t.textSub}`}`}
-                            >
-                                {tab}
-                            </button>
-                        ))}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {sourceModes.map(renderModeCard)}
                     </div>
-
-                    <div className={`${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50'} border ${t.borderCard} rounded-xl p-4`}>
-                        <div className="flex items-center justify-between mb-3">
-                            <div>
-                                <div className={`text-xs uppercase tracking-widest ${t.textSub}`}>Link Status</div>
-                                <div className={`text-lg font-bold ${t.textMain}`}>{rtkStatus}</div>
-                            </div>
-                            <div className={`text-sm font-black ${rtkBadge}`}>{rtkLabel}</div>
-                        </div>
-                        <div className={`h-2 ${theme === 'dark' ? 'bg-slate-700' : 'bg-gray-200'} rounded-full overflow-hidden`}>
-                            <div className={`h-full ${rtkBar}`} style={{ width: `${rtkQuality}%` }}></div>
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-center">
-                        <div className="xl:col-span-3">
-                            <div className={`text-xs uppercase font-black ${t.textSub} mb-3`}>Satellites Used</div>
-                            <div className="space-y-3">
-                                {usedSatellites.map((item) => (
-                                    <div key={item.label} className="flex items-center justify-between">
-                                        <div className="flex items-center gap-2">
-                                            <span className={`w-2.5 h-2.5 rounded-full ${item.color}`}></span>
-                                            <span className={`text-sm ${t.textMain}`}>{item.label}</span>
-                                        </div>
-                                        <span className={`text-sm font-bold ${t.textMain}`}>{item.count}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        <div className="xl:col-span-6 flex justify-center">
-                            <div className={`rounded-full border ${t.borderCard} p-2 ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-50'}`}>
-                                <svg width={skySize} height={skySize} viewBox={`0 0 ${skySize} ${skySize}`}>
-                                    <circle cx={skySize / 2} cy={skySize / 2} r={skyRadius} fill="none" stroke={theme === 'dark' ? '#475569' : '#cbd5f5'} strokeWidth="2" />
-                                    <circle cx={skySize / 2} cy={skySize / 2} r={skyRadius * 0.66} fill="none" stroke={theme === 'dark' ? '#475569' : '#cbd5f5'} strokeWidth="1" />
-                                    <circle cx={skySize / 2} cy={skySize / 2} r={skyRadius * 0.33} fill="none" stroke={theme === 'dark' ? '#475569' : '#cbd5f5'} strokeWidth="1" />
-                                    <line x1={skySize / 2} y1={skySize / 2 - skyRadius} x2={skySize / 2} y2={skySize / 2 + skyRadius} stroke={theme === 'dark' ? '#64748b' : '#94a3b8'} strokeWidth="1" />
-                                    <line x1={skySize / 2 - skyRadius} y1={skySize / 2} x2={skySize / 2 + skyRadius} y2={skySize / 2} stroke={theme === 'dark' ? '#64748b' : '#94a3b8'} strokeWidth="1" />
-                                    {skyPoints.map((sat) => {
-                                        const r = (1 - sat.el / 90) * skyRadius;
-                                        const theta = (sat.az - 90) * (Math.PI / 180);
-                                        const x = skySize / 2 + r * Math.cos(theta);
-                                        const y = skySize / 2 + r * Math.sin(theta);
-                                        return (
-                                            <g key={sat.id}>
-                                                <circle cx={x} cy={y} r="11" fill={theme === 'dark' ? '#0f172a' : '#ffffff'} stroke={theme === 'dark' ? '#94a3b8' : '#64748b'} strokeWidth="1" />
-                                                <text x={x} y={y + 4} textAnchor="middle" fontSize="10" fill={theme === 'dark' ? '#e2e8f0' : '#0f172a'}>{sat.id}</text>
-                                            </g>
-                                        );
-                                    })}
-                                </svg>
-                            </div>
-                        </div>
-
-                        <div className="xl:col-span-3">
-                            <div className={`text-xs uppercase font-black ${t.textSub} mb-3`}>Satellites Unused</div>
-                            <div className="space-y-3">
-                                {unusedSatellites.map((item) => (
-                                    <div key={item.label} className="flex items-center justify-between">
-                                        <div className="flex items-center gap-2">
-                                            <span className={`w-2.5 h-2.5 rounded-full ${item.color} opacity-40`}></span>
-                                            <span className={`text-sm ${t.textMain}`}>{item.label}</span>
-                                        </div>
-                                        <span className={`text-sm font-bold ${t.textMain}`}>{item.count}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-
                     <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-                        <SettingsMetric label="Correction Age" value={rtkStatus === 'FIX' ? '0.7s' : 'N/A'} />
-                        <SettingsMetric label="Latency" value={rtkStatus === 'FIX' ? '220ms' : 'N/A'} />
-                        <SettingsMetric label="Baseline" value={rtkStatus === 'FIX' ? '12.4 km' : 'N/A'} />
+                        <SettingsMetric label="Mode" value={sourceModes.find(mode => mode.id === rtkMode)?.label || 'External'} />
+                        <SettingsMetric label="RTK Status" value={rtkStatus} tone={rtkStatus === 'FIX' ? 'text-green-500' : 'text-yellow-500'} />
+                        <SettingsMetric label="Satellites" value={satelliteCount} />
                         <SettingsMetric label="Accuracy H/V" value={rtkStatus === 'FIX' ? '2.2 / 3.1 cm' : 'N/A'} />
                     </div>
-                </SettingsSection>
-                </div>
-
-                <div className="order-1">
-                <SettingsSection title="Correction Input" detail="Receiver input and correction source configuration." icon={LocateFixed}>
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                        <SettingSelect label="Correction Source" value={rtkConfig.correctionSource} onChange={(value) => handleRtkSettingChange('correctionSource', value)} options={['NTRIP', 'Base Station', 'Radio Base', 'External Receiver', 'SBAS']} />
-                        <SettingSelect label="Protocol" value={rtkConfig.protocol} onChange={(value) => handleRtkSettingChange('protocol', value)} options={['RTCM3', 'RTCM2', 'CMR+', 'NMEA']} />
-                        <SettingSelect label="Receiver Port" value={rtkConfig.receiverPort} onChange={(value) => handleRtkSettingChange('receiverPort', value)} options={['COM1', 'COM2', 'COM3', 'USB', 'TCP']} />
-                        <SettingSelect label="Baud Rate" value={rtkConfig.baudRate} onChange={(value) => handleRtkSettingChange('baudRate', value)} options={['9600', '38400', '57600', '115200', '230400']} />
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <ToggleFlag label="Auto Reconnect" detail="Reconnect caster or receiver after signal drop." flagKey="autoReconnect" icon={RotateCw} />
-                        <ToggleFlag label="Send GGA Position" detail="Required by most NTRIP VRS mountpoints." flagKey="sendGga" icon={Navigation} />
+                    <div className={`h-2 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-200'} rounded-full overflow-hidden`}>
+                        <div className={`h-full ${rtkBar}`} style={{ width: `${rtkQuality}%` }}></div>
                     </div>
                 </SettingsSection>
-                </div>
 
-                <div className="order-3">
-                <SettingsSection
-                    title="NTRIP Caster"
-                    detail="Caster endpoint, mountpoint and account."
-                    icon={Radio}
-                    actions={<><SettingsActionButton onClick={() => setRtkAdvancedOpen((prev) => !prev)}>{rtkAdvancedOpen ? 'Hide Details' : 'Show Details'}</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => showNotification('NTRIP profile saved', 'success')}>Save Profile</SettingsActionButton></>}
-                >
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <SettingInput theme={t} label="Host" value={rtkConfig.ntripHost} onChange={(e) => handleRtkSettingChange('ntripHost', e.target.value)} />
-                        <SettingInput theme={t} label="Port" value={rtkConfig.port} onChange={(e) => handleRtkSettingChange('port', e.target.value)} />
-                        <SettingInput theme={t} label="Mountpoint" value={rtkConfig.mountpoint} onChange={(e) => handleRtkSettingChange('mountpoint', e.target.value)} />
-                        <SettingInput theme={t} label="GGA Interval (s)" value={rtkConfig.ggaInterval} type="number" onChange={(e) => handleRtkSettingChange('ggaInterval', e.target.value)} />
-                        <SettingInput theme={t} label="User" value={rtkConfig.user} onChange={(e) => handleRtkSettingChange('user', e.target.value)} />
-                        <SettingInput theme={t} label="Password" value={rtkConfig.password} type="password" onChange={(e) => handleRtkSettingChange('password', e.target.value)} />
-                    </div>
-                    {rtkAdvancedOpen && (
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                            <ConfigTile icon={Radio} label="Stream" value={rtkConfig.protocol} />
-                            <ConfigTile icon={Globe} label="Caster" value={`${rtkConfig.ntripHost || 'not set'}:${rtkConfig.port || '0'}`} />
-                            <ConfigTile icon={LocateFixed} label="Mountpoint" value={rtkConfig.mountpoint || 'not set'} />
+                {rtkMode === 'NTRIP' && (
+                    <SettingsSection
+                        title="NTRIP Rover"
+                        detail="Use mobile internet to receive VRS/caster corrections."
+                        icon={Globe}
+                        actions={<><SettingsActionButton onClick={() => { setRtkTestState('ok'); setRtkStatus('FIX'); setSatelliteCount(12); showNotification('NTRIP caster connection OK', 'success'); }}>{rtkTestState === 'ok' || rtkTestState === 'saved' ? 'Tested OK' : 'Test Caster'}</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => { setRtkTestState('saved'); showNotification('NTRIP profile saved', 'success'); }}>{rtkTestState === 'saved' ? 'Saved' : 'Save NTRIP'}</SettingsActionButton></>}
+                    >
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <SettingInput theme={t} label="Caster Host" value={rtkConfig.ntripHost} onChange={(e) => handleRtkSettingChange('ntripHost', e.target.value)} />
+                            <SettingInput theme={t} label="Port" value={rtkConfig.port} onChange={(e) => handleRtkSettingChange('port', e.target.value)} />
+                            <SettingInput theme={t} label="Mountpoint" value={rtkConfig.mountpoint} onChange={(e) => handleRtkSettingChange('mountpoint', e.target.value)} />
+                            <SettingInput theme={t} label="GGA Interval (s)" value={rtkConfig.ggaInterval} type="number" onChange={(e) => handleRtkSettingChange('ggaInterval', e.target.value)} />
+                            <SettingInput theme={t} label="User" value={rtkConfig.user} onChange={(e) => handleRtkSettingChange('user', e.target.value)} />
+                            <SettingInput theme={t} label="Password" value={rtkConfig.password} type="password" onChange={(e) => handleRtkSettingChange('password', e.target.value)} />
                         </div>
-                    )}
-                </SettingsSection>
-                </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {renderToggleFlag({ label: 'Auto Reconnect', detail: 'Reconnect caster after mobile signal drop.', flagKey: 'autoReconnect', icon: RotateCw })}
+                            {renderToggleFlag({ label: 'Send GGA Position', detail: 'Required by most VRS mountpoints.', flagKey: 'sendGga', icon: Navigation })}
+                        </div>
+                    </SettingsSection>
+                )}
 
-                <div className="order-2">
-                <SettingsSection
-                    title="Base / Radio Setup"
-                    detail="Local base station and radio correction setup for offline RTK."
-                    icon={LocateFixed}
-                    actions={<><SettingsActionButton onClick={() => showNotification('Base survey-in started', 'info')}>Start Survey</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => showNotification('Base station profile saved', 'success')}>Save Base</SettingsActionButton></>}
-                >
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                        <SettingSelect label="Base Mode" value={rtkConfig.baseMode} onChange={(value) => handleRtkSettingChange('baseMode', value)} options={['Survey In', 'Known Position', 'Moving Base']} />
-                        <SettingInput theme={t} label="Base ID" value={rtkConfig.baseId} onChange={(e) => handleRtkSettingChange('baseId', e.target.value)} />
-                        <SettingInput theme={t} label="Survey Duration (s)" value={rtkConfig.surveyDuration} type="number" onChange={(e) => handleRtkSettingChange('surveyDuration', e.target.value)} />
-                        <SettingInput theme={t} label="Target Accuracy (cm)" value={rtkConfig.surveyAccuracy} type="number" onChange={(e) => handleRtkSettingChange('surveyAccuracy', e.target.value)} />
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <SettingInput theme={t} label="Base Latitude" value={rtkConfig.baseLatitude} onChange={(e) => handleRtkSettingChange('baseLatitude', e.target.value)} />
-                        <SettingInput theme={t} label="Base Longitude" value={rtkConfig.baseLongitude} onChange={(e) => handleRtkSettingChange('baseLongitude', e.target.value)} />
-                        <SettingInput theme={t} label="Base Height (m)" value={rtkConfig.baseHeight} type="number" onChange={(e) => handleRtkSettingChange('baseHeight', e.target.value)} />
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <SettingInput theme={t} label="Radio Channel" value={rtkConfig.radioChannel} onChange={(e) => handleRtkSettingChange('radioChannel', e.target.value)} />
-                        <SettingInput theme={t} label="Radio Frequency (MHz)" value={rtkConfig.radioFrequency} onChange={(e) => handleRtkSettingChange('radioFrequency', e.target.value)} />
-                        <SettingSelect label="Radio Power" value={rtkConfig.radioPower} onChange={(value) => handleRtkSettingChange('radioPower', value)} options={['0.5W', '1W', '2W', '5W']} />
-                    </div>
-                </SettingsSection>
-                </div>
+                {rtkMode === 'BASE' && (
+                    <SettingsSection
+                        title="Local Base / Radio"
+                        detail="Setup a field base station and send correction through radio."
+                        icon={LocateFixed}
+                        actions={<><SettingsActionButton onClick={() => { setBaseSurveyState('running'); setRtkStatus('FLOAT'); showNotification('Base survey-in started', 'info'); }}>{baseSurveyState === 'saved' ? 'Survey OK' : baseSurveyState === 'running' ? 'Surveying' : 'Start Survey'}</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => { setBaseSurveyState('saved'); setRtkStatus('FIX'); showNotification('Base station profile saved', 'success'); }}>{baseSurveyState === 'saved' ? 'Base Saved' : 'Save Base'}</SettingsActionButton></>}
+                    >
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <SettingSelect label="Base Mode" value={rtkConfig.baseMode} onChange={(value) => handleRtkSettingChange('baseMode', value)} options={['Survey In', 'Known Position', 'Moving Base']} />
+                            <SettingInput theme={t} label="Base ID" value={rtkConfig.baseId} onChange={(e) => handleRtkSettingChange('baseId', e.target.value)} />
+                            <SettingInput theme={t} label="Survey Duration (s)" value={rtkConfig.surveyDuration} type="number" onChange={(e) => handleRtkSettingChange('surveyDuration', e.target.value)} />
+                            <SettingInput theme={t} label="Target Accuracy (cm)" value={rtkConfig.surveyAccuracy} type="number" onChange={(e) => handleRtkSettingChange('surveyAccuracy', e.target.value)} />
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <SettingInput theme={t} label="Base Latitude" value={rtkConfig.baseLatitude} onChange={(e) => handleRtkSettingChange('baseLatitude', e.target.value)} />
+                            <SettingInput theme={t} label="Base Longitude" value={rtkConfig.baseLongitude} onChange={(e) => handleRtkSettingChange('baseLongitude', e.target.value)} />
+                            <SettingInput theme={t} label="Base Height (m)" value={rtkConfig.baseHeight} type="number" onChange={(e) => handleRtkSettingChange('baseHeight', e.target.value)} />
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <SettingInput theme={t} label="Radio Channel" value={rtkConfig.radioChannel} onChange={(e) => handleRtkSettingChange('radioChannel', e.target.value)} />
+                            <SettingInput theme={t} label="Radio Frequency (MHz)" value={rtkConfig.radioFrequency} onChange={(e) => handleRtkSettingChange('radioFrequency', e.target.value)} />
+                            <SettingSelect label="Radio Power" value={rtkConfig.radioPower} onChange={(value) => handleRtkSettingChange('radioPower', value)} options={['0.5W', '1W', '2W', '5W']} />
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <ConfigTile icon={LocateFixed} label="Survey State" value={baseSurveyState === 'saved' ? 'Saved' : baseSurveyState === 'running' ? 'Running' : 'Ready'} tone={baseSurveyState === 'saved' ? 'text-green-500' : 'text-blue-500'} />
+                            <ConfigTile icon={Radio} label="Radio Link" value={`${rtkConfig.radioFrequency} MHz / ${rtkConfig.radioPower}`} />
+                            <ConfigTile icon={CheckCircle2} label="Correction" value={rtkStatus} tone={rtkStatus === 'FIX' ? 'text-green-500' : 'text-yellow-500'} />
+                        </div>
+                    </SettingsSection>
+                )}
 
-                <div className="order-5">
-                <SettingsSection title="GNSS Output" detail="NMEA forwarding for external displays or controllers." icon={Activity}>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <ToggleFlag label="NMEA Output" detail="Forward GNSS position to another controller." flagKey="nmeaOutput" icon={Navigation} />
-                        <div className={`${t.bgInput} border ${t.borderCard} rounded-xl p-4`}>
+                {rtkMode === 'EXTERNAL' && (
+                    <SettingsSection
+                        title="External GNSS Receiver"
+                        detail="Use an external GNSS receiver through serial, USB or TCP input."
+                        icon={Radio}
+                        actions={<SettingsActionButton variant="primary" onClick={() => { setRtkTestState('external'); setRtkStatus('FIX'); showNotification('External receiver detected', 'success'); }}>{rtkTestState === 'external' ? 'Detected' : 'Probe Receiver'}</SettingsActionButton>}
+                    >
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <SettingSelect label="Input Port" value={rtkConfig.receiverPort} onChange={(value) => handleRtkSettingChange('receiverPort', value)} options={['COM1', 'COM2', 'COM3', 'USB', 'TCP']} />
+                            <SettingSelect label="Baud Rate" value={rtkConfig.baudRate} onChange={(value) => handleRtkSettingChange('baudRate', value)} options={['9600', '38400', '57600', '115200', '230400']} />
+                            <SettingSelect label="Protocol" value={rtkConfig.protocol} onChange={(value) => handleRtkSettingChange('protocol', value)} options={['RTCM3', 'RTCM2', 'CMR+', 'NMEA']} />
                             <SettingSelect label="NMEA Rate (Hz)" value={rtkConfig.nmeaRate} onChange={(value) => handleRtkSettingChange('nmeaRate', value)} options={['1', '5', '10', '20']} />
                         </div>
+                        {renderToggleFlag({ label: 'NMEA Output', detail: 'Forward GNSS position to another controller.', flagKey: 'nmeaOutput', icon: Navigation })}
+                    </SettingsSection>
+                )}
+
+                <SettingsSection title="Receiver Health" detail="Compact live status; detailed satellite view is kept out of setup flow." icon={Activity}>
+                    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+                        <SettingsMetric label="Link" value={rtkLabel} tone={rtkBadge} />
+                        <SettingsMetric label="Correction Age" value={rtkStatus === 'FIX' ? '0.7s' : 'N/A'} />
+                        <SettingsMetric label="Latency" value={rtkStatus === 'FIX' ? '220ms' : 'N/A'} />
+                        <SettingsMetric label="Baseline" value={rtkMode === 'BASE' ? 'Local base' : rtkStatus === 'FIX' ? '12.4 km' : 'N/A'} />
                     </div>
                 </SettingsSection>
-                </div>
               </div>
             );
         }
