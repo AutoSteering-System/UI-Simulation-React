@@ -1,7 +1,51 @@
 const { useState, useEffect } = React;
 
 const MockBackend = (() => {
+  const STORAGE_KEY = 'autosteer.local.db.v1';
+  const STORAGE_VERSION = 1;
+  const PERSISTED_KEYS = [
+    'vehicleSettings',
+    'vehicleProfiles',
+    'implementSettings',
+    'implementProfiles',
+    'rtkSettings',
+    'wifiSettings',
+    'uTurnSettings',
+    'systemHealth',
+    'gnssTelemetry',
+    'fields',
+    'selectedFieldId',
+    'activeTaskId',
+    'loadedField',
+    'activeBoundaryIdx',
+    'activeLineId',
+    'lineType',
+    'isMultiLineMode',
+    'manualOffset',
+    'showGuidanceLines',
+    'guidanceLine',
+    'pointA',
+    'pointB',
+    'aPlusPoint',
+    'aPlusHeading',
+    'curvePoints',
+    'pivotCenter',
+    'pivotRadius',
+    'currentFieldBoundaries',
+    'localDatabase'
+  ];
+
   const createInitialState = () => ({
+    localDatabase: {
+      enabled: true,
+      adapter: 'localStorage',
+      name: 'Autosteer Local DB',
+      storageKey: STORAGE_KEY,
+      version: STORAGE_VERSION,
+      lastLoadedAt: null,
+      lastSavedAt: null,
+      status: 'Ready'
+    },
     vehicleSettings: {
       profileId: 'tractor-4wd',
       type: 'Tractor 4WD',
@@ -66,6 +110,101 @@ const MockBackend = (() => {
       radioPower: '1W',
       radioFrequency: '464.500'
     },
+    wifiSettings: {
+      enabled: true,
+      mode: 'Client',
+      status: 'Connected',
+      ssid: 'Farm_RTK_Network',
+      security: 'WPA2/WPA3',
+      password: '',
+      signalDbm: -58,
+      channel: '6',
+      band: '2.4 GHz',
+      autoReconnect: true,
+      dhcp: true,
+      ipAddress: '192.168.1.48',
+      subnetMask: '255.255.255.0',
+      gateway: '192.168.1.1',
+      dnsPrimary: '8.8.8.8',
+      dnsSecondary: '1.1.1.1',
+      hotspotEnabled: false,
+      hotspotSsid: 'Autosteer_Setup',
+      hotspotPassword: '',
+      lteFallback: true,
+      lastScanAt: null,
+      savedNetworks: [
+        { ssid: 'Farm_RTK_Network', security: 'WPA2/WPA3', signalDbm: -58, status: 'Connected' },
+        { ssid: 'Tractor_Hotspot', security: 'WPA2', signalDbm: -67, status: 'Saved' },
+        { ssid: 'Workshop_AP', security: 'WPA2', signalDbm: -74, status: 'Saved' }
+      ]
+    },
+    uTurnSettings: {
+      enabled: true,
+      headlandMode: 'Auto from boundary',
+      pattern: 'Smart U-Turn',
+      direction: 'Auto',
+      nextPass: 'Adjacent',
+      skipPasses: 0,
+      trigger: 'Manual confirm',
+      startDistanceM: 18,
+      turnSpeedKmh: 5.5,
+      aggressiveness: 70,
+      liftAction: true,
+      resumeAutosteer: true,
+      pauseCoverage: true,
+      requireBoundary: false
+    },
+    systemHealth: {
+      gnss: 'OK',
+      imu: 'OK',
+      steering: 'OK',
+      canbus: 'OK',
+      obd: 'OK',
+      camera: 'OK'
+    },
+    runStatus: {
+      steeringState: 'READY',
+      steeringReason: 'Line loaded, RTK fixed',
+      overrideDetected: false,
+      engageAllowed: true,
+      recoveryAction: 'Engage autosteer'
+    },
+    rtkTelemetry: {
+      fixType: 'FIX',
+      ageSec: 1.2,
+      latencyMs: 48,
+      hdop: 0.7,
+      pdop: 1.1,
+      baseSource: 'BASE-01',
+      lastUpdateTs: Date.now()
+    },
+    gnssTelemetry: {
+      roverVisibleSats: 38,
+      roverUsedSats: 12,
+      baseVisibleSats: 4,
+      constellations: 'GPS / GLO / GAL / BDS',
+      roverStatus: 'FIX',
+      horizontalAccuracyCm: 2.2,
+      verticalAccuracyCm: 3.1,
+      correctionAgeSec: 1.2,
+      baselineKm: 0.8,
+      antenna: 'Rover roof'
+    },
+    runKpi: {
+      xteCm: 0,
+      headingErrDeg: 0,
+      speedKmh: 0,
+      targetSpeedKmh: 0,
+      areaDoneHa: 0,
+      areaRemainingHa: 12.5,
+      etaMin: null,
+      workRateHaHr: 0,
+      passIndex: 0
+    },
+    alarms: [],
+    eventLog: [
+      { id: 1, severity: 'info', message: 'System ready', timestamp: new Date().toISOString(), acked: true }
+    ],
     lineType: 'STRAIGHT_AB',
     isMultiLineMode: true,
     manualOffset: 0,
@@ -129,7 +268,50 @@ const MockBackend = (() => {
     currentFieldBoundaries: []
   });
 
-  let state = createInitialState();
+  const pickPersistedState = (source) => PERSISTED_KEYS.reduce((acc, key) => {
+    if (source[key] !== undefined) acc[key] = source[key];
+    return acc;
+  }, {});
+
+  const readPersistedState = () => {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || parsed.version !== STORAGE_VERSION || !parsed.data) return null;
+      return parsed;
+    } catch (error) {
+      console.warn('Failed to read local database', error);
+      return null;
+    }
+  };
+
+  const hydrateState = () => {
+    const base = createInitialState();
+    const persisted = readPersistedState();
+    if (!persisted) return base;
+
+    const next = { ...base, ...persisted.data };
+    next.vehicleSettings = { ...base.vehicleSettings, ...(persisted.data.vehicleSettings || {}) };
+    next.implementSettings = { ...base.implementSettings, ...(persisted.data.implementSettings || {}) };
+    next.rtkSettings = { ...base.rtkSettings, ...(persisted.data.rtkSettings || {}) };
+    next.wifiSettings = { ...base.wifiSettings, ...(persisted.data.wifiSettings || {}) };
+    next.uTurnSettings = { ...base.uTurnSettings, ...(persisted.data.uTurnSettings || {}) };
+    next.systemHealth = { ...base.systemHealth, ...(persisted.data.systemHealth || {}) };
+    next.gnssTelemetry = { ...base.gnssTelemetry, ...(persisted.data.gnssTelemetry || {}) };
+    next.localDatabase = {
+      ...base.localDatabase,
+      ...(persisted.data.localDatabase || {}),
+      storageKey: STORAGE_KEY,
+      version: STORAGE_VERSION,
+      lastLoadedAt: new Date().toISOString(),
+      lastSavedAt: persisted.savedAt || persisted.data.localDatabase?.lastSavedAt || null,
+      status: 'Loaded'
+    };
+    return next;
+  };
+
+  let state = hydrateState();
 
   const listeners = new Set();
 
@@ -137,8 +319,41 @@ const MockBackend = (() => {
     listeners.forEach((listener) => listener(state));
   };
 
+  const persistState = () => {
+    if (!state.localDatabase?.enabled) return;
+    try {
+      const savedAt = new Date().toISOString();
+      state = {
+        ...state,
+        localDatabase: {
+          ...state.localDatabase,
+          storageKey: STORAGE_KEY,
+          version: STORAGE_VERSION,
+          lastSavedAt: savedAt,
+          status: 'Saved'
+        }
+      };
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        version: STORAGE_VERSION,
+        savedAt,
+        data: pickPersistedState(state)
+      }));
+    } catch (error) {
+      state = {
+        ...state,
+        localDatabase: {
+          ...state.localDatabase,
+          status: 'Save failed'
+        }
+      };
+      console.warn('Failed to save local database', error);
+    }
+  };
+
   const setState = (patch) => {
     state = { ...state, ...patch };
+    const shouldPersist = Object.keys(patch).some((key) => PERSISTED_KEYS.includes(key));
+    if (shouldPersist) persistState();
     emit();
   };
 
@@ -163,6 +378,16 @@ const MockBackend = (() => {
     setImplementSettings: (next) => setKey('implementSettings', next),
     setImplementProfiles: (next) => setKey('implementProfiles', next),
     setRtkSettings: (next) => setKey('rtkSettings', next),
+    setWifiSettings: (next) => setKey('wifiSettings', next),
+    setUTurnSettings: (next) => setKey('uTurnSettings', next),
+    setSystemHealth: (next) => setKey('systemHealth', next),
+    setGnssTelemetry: (next) => setKey('gnssTelemetry', next),
+    setLocalDatabase: (next) => setKey('localDatabase', next),
+    setRunStatus: (next) => setKey('runStatus', next),
+    setRtkTelemetry: (next) => setKey('rtkTelemetry', next),
+    setRunKpi: (next) => setKey('runKpi', next),
+    setAlarms: (next) => setKey('alarms', next),
+    setEventLog: (next) => setKey('eventLog', next),
     setLineType: (next) => setKey('lineType', next),
     setIsMultiLineMode: (next) => setKey('isMultiLineMode', next),
     setManualOffset: (next) => setKey('manualOffset', next),
@@ -189,7 +414,13 @@ const MockBackend = (() => {
     setTempBoundary: (next) => setKey('tempBoundary', next),
     setCurrentFieldBoundaries: (next) => setKey('currentFieldBoundaries', next),
     factoryReset: () => {
+      try {
+        window.localStorage.removeItem(STORAGE_KEY);
+      } catch (error) {
+        console.warn('Failed to clear local database', error);
+      }
       state = createInitialState();
+      persistState();
       emit();
     }
   };
