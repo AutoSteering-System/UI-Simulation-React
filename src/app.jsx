@@ -123,6 +123,8 @@ const App = () => {
   const [settingsTab, setSettingsTab] = useState('overview');
   const [fieldAssetTab, setFieldAssetTab] = useState('lines');
   const [showArchivedLines, setShowArchivedLines] = useState(false);
+  const [lineCatalogFilter, setLineCatalogFilter] = useState('ALL');
+  const [selectedCatalogLineId, setSelectedCatalogLineId] = useState(null);
   const [rtkTestState, setRtkTestState] = useState('idle');
   const [baseSurveyState, setBaseSurveyState] = useState('idle');
   const readUiLocalState = () => {
@@ -183,6 +185,24 @@ const App = () => {
   const [turnAssistActive, setTurnAssistActive] = useState(false);
   const [currentTime, setCurrentTime] = useState('');
   const setupOverlayOpen = menuOpen || settingsOpen || cameraPanelOpen || diagnosticsPanelOpen || linesPanelOpen || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || manualHeadingModalOpen || boundaryAlertOpen || deleteModalOpen || (fieldManagerOpen && !isRecordingBoundary);
+
+  useEffect(() => {
+      if (!dockMenuOpen) return;
+      const shouldCloseDockTools = isCreating
+          || isRecordingBoundary
+          || uTurnPanelOpen
+          || menuOpen
+          || settingsOpen
+          || fieldManagerOpen
+          || linesPanelOpen
+          || lineModeModalOpen
+          || lineNameModalOpen
+          || boundaryNameModalOpen
+          || manualHeadingModalOpen
+          || boundaryAlertOpen
+          || deleteModalOpen;
+      if (shouldCloseDockTools) setDockMenuOpen(false);
+  }, [dockMenuOpen, isCreating, isRecordingBoundary, uTurnPanelOpen, menuOpen, settingsOpen, fieldManagerOpen, linesPanelOpen, lineModeModalOpen, lineNameModalOpen, boundaryNameModalOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen]);
 
   // Store refs to guidance data for physics loop
   const guidanceRef = useRef({
@@ -481,6 +501,10 @@ const App = () => {
       actions.setGuidanceLine(defaultLine.type);
       if (defaultLine.isMulti !== undefined) actions.setIsMultiLineMode(defaultLine.isMulti);
   }, [fields, selectedFieldId, loadedField, activeLineId, guidanceLine]);
+
+  useEffect(() => {
+      setSelectedCatalogLineId(null);
+  }, [selectedFieldId]);
 
   // --- 2. INPUT ---
   useEffect(() => {
@@ -877,7 +901,7 @@ const App = () => {
   };
 
   const toggleSteering = () => {
-    if (!guidanceLine && steeringMode === 'MANUAL') {
+    if (!hasGuidanceToEngage && steeringMode === 'MANUAL') {
         addAlarm('no-guidance-line', 'warning', 'Autosteer blocked: no guidance line loaded');
         return showNotification("Set Line first!", "warning");
     }
@@ -1009,6 +1033,46 @@ const App = () => {
       setSceneViewMode(mode);
       window.setTimeout(() => setViewTransitioning(false), 280);
   };
+  const openRunScreen = () => {
+      setMenuOpen(false);
+      setSettingsOpen(false);
+      setFieldManagerOpen(false);
+      setLinesPanelOpen(false);
+      setDockMenuOpen(false);
+      setUTurnPanelOpen(false);
+      actions.setViewMode('LIST');
+  };
+  const openFieldAssetPanel = (tab = 'lines') => {
+      setMenuOpen(false);
+      setFieldAssetTab(tab);
+      actions.setViewMode('LIST');
+      setFieldManagerOpen(true);
+      setSettingsOpen(false);
+      setLinesPanelOpen(false);
+      setDockMenuOpen(false);
+      setUTurnPanelOpen(false);
+  };
+  const openLinesCatalog = () => {
+      setMenuOpen(false);
+      setLinesPanelOpen(true);
+      setFieldManagerOpen(false);
+      setSettingsOpen(false);
+      setDockMenuOpen(false);
+      setUTurnPanelOpen(false);
+      actions.setViewMode('LIST');
+  };
+  const openSystemPanel = () => {
+      setMenuOpen(false);
+      setSettingsOpen(true);
+      setFieldManagerOpen(false);
+      setLinesPanelOpen(false);
+      setDockMenuOpen(false);
+      setUTurnPanelOpen(false);
+  };
+  const openWifiPanel = () => {
+      setSettingsTab('wifi');
+      openSystemPanel();
+  };
 
   const handleMapPointerDown = (e) => {
       setIsDraggingMap(false);
@@ -1025,7 +1089,7 @@ const App = () => {
   const cancelLineCreation = () => {
       resetLines();
       setIsCreating(false); // EXIT CREATION MODE
-      setDockMenuOpen(true); // RETURN TO DOCK MENU
+      setDockMenuOpen(false);
       showNotification("Creation Cancelled", "info");
   };
 
@@ -1123,6 +1187,7 @@ const App = () => {
           showNotification('Archived line cannot be loaded', 'warning');
           return;
       }
+      setSelectedCatalogLineId(line.id);
       actions.setActiveLineId(line.id);
       actions.setLineType(line.type);
       actions.setPointA(line.points.a);
@@ -1135,11 +1200,15 @@ const App = () => {
       actions.setGuidanceLine(line.type);
       if (line.isMulti !== undefined) actions.setIsMultiLineMode(line.isMulti);
       setLinesPanelOpen(false);
+      setIsCreating(false);
+      setDockMenuOpen(false);
+      setLineModeModalOpen(false);
       showNotification(`Loaded Line: ${line.name}`, "success");
   };
 
   const handleRenameLine = (line) => {
       if (!line) return;
+      setSelectedCatalogLineId(line.id);
       const nextName = window.prompt('Rename guidance line', line.name || 'Guidance line');
       if (!nextName || !nextName.trim()) return;
       updateSelectedFieldLines(lines => lines.map(item => item.id === line.id ? { ...item, name: nextName.trim(), updatedAt: new Date().toISOString() } : item));
@@ -1157,11 +1226,13 @@ const App = () => {
           updatedAt: new Date().toISOString()
       };
       updateSelectedFieldLines(lines => [duplicate, ...lines]);
+      setSelectedCatalogLineId(duplicate.id);
       showNotification('Line duplicated', 'success');
   };
 
   const handleArchiveLine = (line) => {
       if (!line) return;
+      setSelectedCatalogLineId(line.id);
       updateSelectedFieldLines(lines => lines.map(item => item.id === line.id ? { ...item, archived: true, archivedAt: new Date().toISOString() } : item));
       if (activeLineId === line.id) {
           resetLines();
@@ -1173,6 +1244,7 @@ const App = () => {
 
   const handleRestoreLine = (line) => {
       if (!line) return;
+      setSelectedCatalogLineId(line.id);
       updateSelectedFieldLines(lines => lines.map(item => item.id === line.id ? { ...item, archived: false, restoredAt: new Date().toISOString() } : item));
       showNotification('Line restored', 'success');
   };
@@ -1182,6 +1254,27 @@ const App = () => {
       setTempLineName(`${lineType.replace('_', ' ')} ${count + 1}`);
       setLineNameModalOpen(true);
   }
+
+  const finishGuidanceLineCreation = (message = "Line ready. Engage autosteer when aligned.") => {
+      setIsCreating(false);
+      setDockMenuOpen(false);
+      setLineModeModalOpen(false);
+      showNotification(message, "success");
+  };
+
+  const startStraightABCreation = () => {
+      actions.setLineType('STRAIGHT_AB');
+      resetLines();
+      setIsCreating(true);
+      setDockMenuOpen(false);
+      setLineModeModalOpen(false);
+      showNotification("Straight AB: Set A, drive, set B", "info");
+  };
+
+  const cancelSaveLineModal = () => {
+      setLineNameModalOpen(false);
+      setTempLineName('');
+  };
 
   const handleSaveLine = () => {
     if (!tempLineName.trim()) { showNotification("Please enter line name", "warning"); return; }
@@ -1196,9 +1289,9 @@ const App = () => {
         points: { a: pointA, b: pointB, curve: curvePoints, pivot: { center: pivotCenter, radius: pivotRadius }, aplus: { point: aPlusPoint, heading: aPlusHeading } }
     };
     actions.setFields(prev => prev.map(f => { if (f.id === selectedFieldId) { return { ...f, lines: [...(f.lines || []), newLine] }; } return f; }));
-    setLineNameModalOpen(false); setTempLineName(''); actions.setActiveLineId(newLine.id);
+    setLineNameModalOpen(false); setTempLineName(''); actions.setActiveLineId(newLine.id); setSelectedCatalogLineId(newLine.id);
     setIsCreating(false); // Stop creating
-    setDockMenuOpen(true); // RETURN TO DOCK MENU
+    setDockMenuOpen(false);
     showNotification("Line Saved Successfully", "success");
     if (loadedField && loadedField.id === selectedFieldId) { actions.setLoadedField(prev => ({ ...prev, lines: [...(prev.lines || []), newLine] })); }
   };
@@ -1218,8 +1311,7 @@ const App = () => {
           const snappedHeading = normalizeHeadingValue(Math.atan2(nextPointB.x - pointA.x, pointA.y - nextPointB.y) * 180 / Math.PI);
           mapVisualHeadingRef.current = snappedHeading;
           setMapVisualHeading(snappedHeading);
-          showNotification("AB Line Created!", "success");
-          setTimeout(openSaveLineModal, 500);
+          finishGuidanceLineCreation("AB Line ready");
       }
       else {
           resetLines();
@@ -1255,14 +1347,13 @@ const App = () => {
       if (aPlusHeading === null || aPlusHeading === undefined) return showNotification("Please Set Heading first", "warning");
 
       actions.setGuidanceLine('A_PLUS');
-      showNotification("A+ Line Created!", "success");
-      setTimeout(openSaveLineModal, 500);
+      finishGuidanceLineCreation("A+ Line ready");
   };
 
   const handleRecordCurve = () => {
       if (isRecordingCurve) {
           actions.setIsRecordingCurve(false);
-          if (curvePoints.length > 2) { actions.setGuidanceLine('CURVE'); showNotification("Curve Saved!", "success"); setTimeout(openSaveLineModal, 500); }
+          if (curvePoints.length > 2) { actions.setGuidanceLine('CURVE'); finishGuidanceLineCreation("Curve line ready"); }
           else { showNotification("Curve too short!", "error"); actions.setCurvePoints([]); }
       } else { resetLines(); actions.setIsRecordingCurve(true); actions.setCurvePoints([{...worldPos}]); showNotification("Recording Curve...", "info"); }
   };
@@ -1285,8 +1376,7 @@ const App = () => {
       setIsCombinationPaused(false);
       if (curvePoints.length > 2) {
           actions.setGuidanceLine('COMBINATION');
-          showNotification("Combination Line Created!", "success");
-          setTimeout(openSaveLineModal, 500);
+          finishGuidanceLineCreation("Combination line ready");
       } else {
           actions.setCurvePoints([]);
           showNotification("Combination line too short", "warning");
@@ -1294,7 +1384,7 @@ const App = () => {
   };
 
   const handleSetCenter = () => { resetLines(); actions.setPivotCenter({ ...worldPos }); showNotification("Pivot Center Set. Drive to Edge.", "info"); };
-  const handleSetRadius = () => { if (!pivotCenter) return showNotification("Set Center first", "warning"); const radius = Math.hypot(worldPos.x - pivotCenter.x, worldPos.y - pivotCenter.y); if (radius < 50) return showNotification("Radius too small!", "warning"); actions.setPivotRadius(radius); actions.setGuidanceLine('PIVOT'); showNotification("Pivot Created!", "success"); setTimeout(openSaveLineModal, 500); };
+  const handleSetRadius = () => { if (!pivotCenter) return showNotification("Set Center first", "warning"); const radius = Math.hypot(worldPos.x - pivotCenter.x, worldPos.y - pivotCenter.y); if (radius < 50) return showNotification("Radius too small!", "warning"); actions.setPivotRadius(radius); actions.setGuidanceLine('PIVOT'); finishGuidanceLineCreation("Pivot line ready"); };
 
   const selectLineMode = (type) => {
       actions.setLineType(type);
@@ -1443,7 +1533,7 @@ const App = () => {
       actions.setTempBoundary([]);
       setTempBoundaryName('');
       actions.setIsRecordingBoundary(false);
-      setDockMenuOpen(true);
+      setDockMenuOpen(false);
       showNotification("Boundary Saved & Active!", "success");
   }
 
@@ -1452,7 +1542,7 @@ const App = () => {
     physics.current.targetSpeed = 0;
     actions.setTempBoundary([]);
     setPreviewBoundary(null);
-    setDockMenuOpen(true);
+    setDockMenuOpen(false);
     showNotification("Recording Cancelled", "info");
   };
 
@@ -1501,6 +1591,7 @@ const App = () => {
                 actions.setGuidanceLine(null);
                 resetLines();
             }
+            setSelectedCatalogLineId(prev => prev === id ? null : prev);
             showNotification("Line Deleted", "info");
       } else if (type === 'task') {
             const updatedFields = fields.map(f => {
@@ -1566,6 +1657,7 @@ const App = () => {
   const activeLineRecord = activeLineId ? (activeFieldRecord?.lines || fields.find(f => f.id === selectedFieldId)?.lines || []).filter(line => !line.archived).find(line => line.id === activeLineId) : null;
   const activeFieldAreaHa = parseFloat(String(activeFieldRecord?.area || '0').replace(/[^\d.]/g, '')) || 0;
   const liveGuide = guidanceRef.current;
+  const hasGuidanceToEngage = Boolean(guidanceLine || activeLineRecord || liveGuide?.type);
   const liveGuidanceMetrics = getGuidanceMetrics(liveGuide, { ...worldPos, heading });
   const getAxisHeadingError = (lineHeading, vehicleHeading) => {
       let diff = normalizeAngle(lineHeading - vehicleHeading);
@@ -1608,7 +1700,7 @@ const App = () => {
       if (steeringMode === 'AUTO') {
           return { steeringState: 'ENGAGED', steeringReason: 'Autosteer controlling active pass', overrideDetected: false, engageAllowed: true, recoveryAction: 'Disengage' };
       }
-      if (!guidanceLine) {
+      if (!hasGuidanceToEngage) {
           return { steeringState: 'MANUAL', steeringReason: 'Create or load a guidance line', overrideDetected: false, engageAllowed: false, recoveryAction: 'Load line' };
       }
       if (rtkStatus !== 'FIX') {
@@ -1617,6 +1709,21 @@ const App = () => {
       return { steeringState: 'READY', steeringReason: 'Ready to engage autosteer', overrideDetected: runStatus?.overrideDetected || false, engageAllowed: true, recoveryAction: 'Engage autosteer' };
   })();
   const currentRunStatus = { ...(runStatus || {}), ...liveRunStatus };
+  const autosteerReady = hasGuidanceToEngage && rtkStatus === 'FIX';
+  const autosteerPrimaryLabel = steeringMode === 'AUTO'
+      ? 'ENGAGED'
+      : !hasGuidanceToEngage
+          ? 'NO LINE'
+          : rtkStatus !== 'FIX'
+              ? 'WAIT RTK'
+              : 'READY';
+  const autosteerSubLabel = steeringMode === 'AUTO'
+      ? (rtkStatus === 'FIX' ? 'RTK fixed' : 'RTK lost')
+      : !hasGuidanceToEngage
+          ? 'Create or load line'
+          : rtkStatus === 'FIX'
+              ? 'Tap to engage'
+              : 'Waiting RTK';
   const currentRtkTelemetry = {
       ...(rtkTelemetry || {}),
       fixType: rtkStatus,
@@ -2389,6 +2496,62 @@ const App = () => {
       return dense;
   };
 
+  const normalizeDashPattern = (dashPattern, fallback = [42, 34]) => {
+      const rawValues = Array.isArray(dashPattern)
+          ? dashPattern
+          : String(dashPattern || '').split(/[,\s]+/);
+      const values = rawValues
+          .map(Number)
+          .filter(value => Number.isFinite(value) && value > 0.001);
+      const normalized = values.length ? values : fallback;
+      return normalized.length % 2 === 0 ? normalized : normalized.concat(normalized);
+  };
+
+  const getWorldAnchoredDashSegments = (points, dashPattern) => {
+      if (!points || points.length < 2) return [];
+
+      const pattern = normalizeDashPattern(dashPattern);
+      const segments = [];
+      let patternIndex = 0;
+      let remainingInPattern = pattern[0];
+
+      for (let i = 0; i < points.length - 1; i++) {
+          const start = points[i];
+          const end = points[i + 1];
+          const segmentLength = Math.hypot(end.x - start.x, end.y - start.y);
+          if (!Number.isFinite(segmentLength) || segmentLength <= 0.001) continue;
+
+          let travelled = 0;
+          while (travelled < segmentLength - 0.001) {
+              const step = Math.min(remainingInPattern, segmentLength - travelled);
+              const shouldDraw = patternIndex % 2 === 0;
+              if (shouldDraw && step > 0.001) {
+                  const t0 = travelled / segmentLength;
+                  const t1 = (travelled + step) / segmentLength;
+                  segments.push({
+                      start: {
+                          x: start.x + (end.x - start.x) * t0,
+                          y: start.y + (end.y - start.y) * t0
+                      },
+                      end: {
+                          x: start.x + (end.x - start.x) * t1,
+                          y: start.y + (end.y - start.y) * t1
+                      }
+                  });
+              }
+
+              travelled += step;
+              remainingInPattern -= step;
+              if (remainingInPattern <= 0.001) {
+                  patternIndex = (patternIndex + 1) % pattern.length;
+                  remainingInPattern = pattern[patternIndex];
+              }
+          }
+      }
+
+      return segments;
+  };
+
   const parsePolylinePoints = (pointsText) => {
       if (!pointsText) return [];
       return pointsText.trim().split(/\s+/).map((pair) => {
@@ -2566,6 +2729,40 @@ const App = () => {
       const projectionOptions = options.ground
           ? { lateralGain: map3DLateralGain, forwardGain: map3DForwardGain, usePerspectiveScale: true }
           : { lateralGain: map3DLateralGain, forwardGain: map3DForwardGain, usePerspectiveScale: true };
+      if (options.anchoredDash) {
+          const dashSegments = getWorldAnchoredDashSegments(points, options.worldDash || options.dash);
+          const segmentNodes = dashSegments.map((segment, index) => {
+              const projectedStart = getProjected3DPoint(segment.start, { ...projectionOptions, ...options.projection });
+              const projectedEnd = getProjected3DPoint(segment.end, { ...projectionOptions, ...options.projection });
+              if (!projectedStart || !projectedEnd) return null;
+              return (
+                  <line
+                      key={`${key}-dash-${index}`}
+                      data-boundary-dash-segment={key}
+                      x1={projectedStart.x.toFixed(1)}
+                      y1={projectedStart.y.toFixed(1)}
+                      x2={projectedEnd.x.toFixed(1)}
+                      y2={projectedEnd.y.toFixed(1)}
+                      stroke={stroke}
+                      strokeWidth={strokeWidth}
+                      strokeLinecap={options.cap || 'round'}
+                      strokeOpacity={options.opacity ?? 1}
+                      vectorEffect="non-scaling-stroke"
+                  />
+              );
+          }).filter(Boolean);
+
+          if (!segmentNodes.length) return null;
+          return (
+              <g
+                  key={key}
+                  {...(options.ground ? { 'data-ground-3d-path': key } : { 'data-guidance-3d-path': key })}
+                  data-anchored-dashes="true"
+              >
+                  {segmentNodes}
+              </g>
+          );
+      }
       const projectedPoints = densifyPoints(points, options.maxStep || 42)
           .map((pt) => getProjected3DPoint(pt, { ...projectionOptions, ...options.projection }))
           .filter(Boolean);
@@ -2902,13 +3099,23 @@ const App = () => {
                   [...pts, pts[0]],
                   bIdx === activeBoundaryIdx ? '#eab308' : boundaryStroke,
                   bIdx === activeBoundaryIdx ? 2.8 : 2,
-                  { dash: '8 8', opacity: bIdx === activeBoundaryIdx ? 0.9 : 0.55, maxStep: 38 }
+                  {
+                      anchoredDash: true,
+                      worldDash: [48, 34],
+                      opacity: bIdx === activeBoundaryIdx ? 0.9 : 0.55,
+                      projection: { screenMargin: 96 }
+                  }
               ));
           }
       });
 
       if (previewBoundary?.length > 1) {
-          elements.push(renderProjected3DPath('preview-boundary', [...previewBoundary, previewBoundary[0]], '#22c55e', 3, { dash: '8 7', opacity: 0.9 }));
+          elements.push(renderProjected3DPath('preview-boundary', [...previewBoundary, previewBoundary[0]], '#22c55e', 3, {
+              anchoredDash: true,
+              worldDash: [48, 34],
+              opacity: 0.9,
+              projection: { screenMargin: 96 }
+          }));
       }
 
       if (!guidanceLine && !activeLineRecord && pointA && straightABPreviewEnd && lineType === 'STRAIGHT_AB') {
@@ -3359,169 +3566,361 @@ const App = () => {
   };
 
   const renderActionDock = () => {
-      // 1. Boundary Recording Active? Show controls
-      if (isRecordingBoundary) {
-          return (
-            <div className={`p-2.5 rounded-2xl ${t.bgCard} shadow-xl border ${t.borderCard} flex flex-col gap-2 pointer-events-auto w-[86px]`}>
-               <div className={`text-center font-black text-orange-500 uppercase text-[9px] tracking-wider`}>Boundary</div>
-               <DockButton theme={t} icon={Square} label="Finish" color="green" onClick={finishBoundaryRecording}/>
-               <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelBoundaryRecording}/>
-            </div>
-          );
-      }
-
-      if (uTurnPanelOpen) return null;
-
-      // 4. Default State (Collapsed Symbol)
-      // If Auto is engaged, show trim controls - TAKES PRECEDENCE over creation if Auto is active
-      if (steeringMode === 'AUTO') {
-           return (
-            <div className={`p-2.5 rounded-2xl ${t.bgCard} shadow-xl border ${t.borderCard} flex flex-col gap-2 pointer-events-auto w-[86px]`}>
-               <span className={`text-[9px] text-center ${t.textSub} font-black uppercase tracking-wider`}>Trim</span>
-               <DockButton theme={t} icon={CornerUpLeft} label="L 1cm" color="green" onClick={() => handleTrim('left')}/>
-               <DockButton theme={t} icon={CornerUpRight} label="R 1cm" color="green" onClick={() => handleTrim('right')}/>
-               <div className={`h-px ${t.divider}`}></div>
-               <DockButton theme={t} icon={Pause} label="Pause" color="orange" onClick={toggleSteering}/>
-            </div>
-           );
-      }
-
-      // 2. Creating a Line? Show specific line creation controls
-      if (isCreating) {
-        let content = null;
-        switch (lineType) {
-            case 'STRAIGHT_AB':
-                let abLabel = "Set A"; let abColor = "blue";
-                if (pointA && !pointB) { abLabel = "Set B"; abColor = "red"; } else if (pointA && pointB) { abLabel = "Set A"; abColor = "green"; }
-
-                const handleCancelAB = () => {
-                    if (pointA && !pointB) {
-                        actions.setPointA(null);
-                        showNotification("Reset to Set A", "info");
-                    } else {
-                        cancelLineCreation();
-                    }
-                };
-
-                content = ( <><DockButton theme={t} icon={Target} label={abLabel} color={abColor} onClick={handleABButtonClick} /><DockButton theme={t} icon={X} label="Cancel" color="red" onClick={handleCancelAB}/></> );
-                break;
-            case 'A_PLUS':
-                if (!aPlusPoint) {
-                    content = (
-                      <>
-                        <DockButton theme={t} icon={Target} label="Set A" color="blue" onClick={handleSetAPlus_PointA}/>
-                        <DockButton theme={t} icon={ArrowLeftRight} label="Shift" color="gray"/>
-                        <DockButton theme={t} icon={MapPin} label="Bound" color="orange" onClick={startBoundaryCreation}/>
-                        {/* Added Cancel Button */}
-                        <div className={`h-px ${t.divider} mx-1`}></div>
-                        <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/>
-                      </>
-                    );
-                } else {
-                    content = (
-                        <>
-                            <DockButton theme={t} icon={RotateCcw} label="Reset A" color="orange" onClick={() => { actions.setAPlusPoint({ ...worldPos }); actions.setAPlusHeading(null); showNotification("Point A Reset to Current Position", "info"); }}/>
-                            <DockButton theme={t} icon={Compass} label={aPlusHeading !== null ? `${aPlusHeading.toFixed(0)}\u00b0` : "Head"} color={aPlusHeading !== null ? "green" : "blue"} onClick={handleSetAPlus_HeadingCurrent}/>
-                            <DockButton theme={t} icon={Keyboard} label="Input" color="gray" onClick={() => { setManualHeadingModalOpen(true); setTempManualHeading(heading.toFixed(1)); }}/>
-                            <div className={`h-px ${t.divider} mx-1`}></div>
-
-                            {aPlusHeading !== null && (
-                                <DockButton theme={t} icon={Check} label="OK" color="green" onClick={handleConfirmAPlus}/>
-                            )}
-
-                            <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={() => { actions.setAPlusPoint(null); actions.setAPlusHeading(null); }}/>
-                        </>
-                    );
-                }
-                break;
-            case 'CURVE':
-                content = ( <><DockButton theme={t} icon={isRecordingCurve ? Disc : Spline} label={isRecordingCurve ? "Stop" : "Record"} color={isRecordingCurve ? "red" : "blue"} onClick={handleRecordCurve} className={isRecordingCurve ? "animate-pulse" : ""} /><DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/></> );
-                break;
-            case 'COMBINATION':
-                content = (
-                    <>
-                        <DockButton theme={t} icon={isRecordingCurve ? Pause : Disc} label={isRecordingCurve ? "Pause" : (curvePoints.length > 0 ? "Cont" : "Record")} color={isRecordingCurve ? "orange" : "blue"} onClick={isRecordingCurve ? handleCombinationPause : handleCombinationRecord} className={isRecordingCurve ? "animate-pulse" : ""} />
-                        {curvePoints.length > 2 && <DockButton theme={t} icon={Check} label="Finish" color="green" onClick={handleCombinationFinish} />}
-                        {isCombinationPaused && <DockButton theme={t} icon={AlignJustify} label="Line" color="gray" onClick={handleCombinationRecord} />}
-                        <DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/>
-                    </>
-                );
-                break;
-            case 'PIVOT':
-                content = ( <><DockButton theme={t} icon={Target} label="Center" color={pivotCenter?"green":"blue"} onClick={handleSetCenter}/><DockButton theme={t} icon={CircleDashed} label="Edge" color={pivotRadius?"green":"blue"} onClick={handleSetRadius}/><DockButton theme={t} icon={X} label="Cancel" color="red" onClick={cancelLineCreation}/></> );
-                break;
-            default: break;
-        }
-        return (
-            <div className={`p-2.5 rounded-2xl ${t.bgCard} shadow-xl border ${t.borderCard} flex flex-col gap-2 pointer-events-auto w-[86px]`}>
-                 <div className={`text-[9px] font-black ${t.textSub} uppercase text-center mb-1 leading-tight`}>{lineType.replace(/_/g,' ')}</div>
-                 {content}
-            </div>
-        );
-      }
-
-      const compactDockButton = 'min-h-[42px]';
-      const DockLabel = ({ children }) => (
-          <div className={`text-[8px] text-center ${t.textSub} font-black uppercase tracking-wider leading-none pt-1`}>
+      const isDarkDock = theme === 'dark';
+      const shellClass = `w-[96px] rounded-[22px] border ${isDarkDock ? 'border-slate-700/90 bg-slate-950/92 shadow-black/30' : 'border-slate-200 bg-white/96 shadow-slate-900/12'} shadow-xl backdrop-blur-md pointer-events-auto p-1.5 flex flex-col gap-1.5 select-none`;
+      const flyoutClass = `absolute right-[104px] top-1/2 -translate-y-1/2 w-[246px] max-w-[calc(100vw-134px)] max-h-[calc(100vh-260px)] overflow-y-auto rounded-[22px] border ${isDarkDock ? 'border-slate-700/90 bg-slate-950/94 shadow-black/35' : 'border-slate-200 bg-white/96 shadow-slate-900/14'} shadow-2xl backdrop-blur-md pointer-events-auto p-2 select-none`;
+      const buttonTone = {
+          blue: 'bg-blue-600 text-white border-blue-500 shadow-blue-900/20 hover:bg-blue-500',
+          green: 'bg-green-600 text-white border-green-500 shadow-green-900/20 hover:bg-green-500',
+          orange: 'bg-orange-500 text-white border-orange-400 shadow-orange-900/20 hover:bg-orange-400',
+          red: 'bg-red-500 text-white border-red-400 shadow-red-900/20 hover:bg-red-400',
+          gray: isDarkDock ? 'bg-slate-900 text-slate-200 border-slate-700 hover:bg-slate-800' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+      };
+      const secondaryTone = {
+          blue: isDarkDock ? 'text-blue-300 bg-blue-500/12 border-blue-400/30' : 'text-blue-700 bg-blue-50 border-blue-200',
+          green: isDarkDock ? 'text-green-300 bg-green-500/12 border-green-400/30' : 'text-green-700 bg-green-50 border-green-200',
+          orange: isDarkDock ? 'text-orange-300 bg-orange-500/12 border-orange-400/30' : 'text-orange-700 bg-orange-50 border-orange-200',
+          red: isDarkDock ? 'text-red-300 bg-red-500/12 border-red-400/30' : 'text-red-700 bg-red-50 border-red-200',
+          gray: isDarkDock ? 'text-slate-200 bg-slate-900/88 border-slate-700 hover:bg-slate-800' : 'text-slate-700 bg-white border-slate-200 hover:bg-slate-50'
+      };
+      const statusTone = {
+          blue: isDarkDock ? 'bg-blue-500/14 text-blue-300' : 'bg-blue-50 text-blue-700',
+          green: isDarkDock ? 'bg-green-500/14 text-green-300' : 'bg-green-50 text-green-700',
+          orange: isDarkDock ? 'bg-orange-500/14 text-orange-300' : 'bg-orange-50 text-orange-700',
+          red: isDarkDock ? 'bg-red-500/14 text-red-300' : 'bg-red-50 text-red-700',
+          gray: isDarkDock ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'
+      };
+      const dotTone = {
+          blue: 'bg-blue-500',
+          green: 'bg-green-500',
+          orange: 'bg-orange-500',
+          red: 'bg-red-500',
+          gray: isDarkDock ? 'bg-slate-500' : 'bg-slate-400'
+      };
+      const stopDockPointer = (event) => {
+          event.stopPropagation();
+      };
+      const runDockAction = (handler) => (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          handler?.(event);
+      };
+      const renderShell = ({ status, tone = 'gray', children }) => (
+          <div className={shellClass} onPointerDown={stopDockPointer} onPointerMove={stopDockPointer} onPointerUp={stopDockPointer} onClick={stopDockPointer}>
+              <div className={`h-6 rounded-full flex items-center justify-center gap-1.5 text-[8px] font-black uppercase tracking-wide ${statusTone[tone] || statusTone.gray}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${dotTone[tone] || dotTone.gray}`} />
+                  <span className="truncate">{status}</span>
+              </div>
               {children}
           </div>
       );
-      const openWifiSetup = () => {
-          setDockMenuOpen(false);
-          setUTurnPanelOpen(false);
-          setSettingsTab('wifi');
-          setSettingsOpen(true);
-          setFieldManagerOpen(false);
-          setLinesPanelOpen(false);
+      const renderMainButton = ({ icon: Icon, label, sub, color = 'blue', onClick, pulse = false }) => (
+          <button
+              type="button"
+              onPointerDown={stopDockPointer}
+              onPointerUp={stopDockPointer}
+              onClick={runDockAction(onClick)}
+              title={sub ? `${label} ${sub}` : label}
+              className={`w-full h-[72px] rounded-[18px] border ${buttonTone[color] || buttonTone.gray} flex flex-col items-center justify-center gap-1 active:scale-[0.98] transition-all shadow-lg focus:outline-none focus:ring-2 focus:ring-blue-500/45 touch-manipulation ${pulse ? 'animate-pulse' : ''}`}
+          >
+              <Icon className="w-6 h-6 shrink-0" />
+              <span className="max-w-full px-1 text-[10px] font-black uppercase leading-none truncate">{label}</span>
+              {sub && <span className="max-w-full px-1 text-[8px] font-black uppercase leading-none opacity-80 truncate">{sub}</span>}
+          </button>
+      );
+      const renderTinyButton = ({ icon: Icon, label, color = 'gray', onClick, hidden = false }) => {
+          if (hidden) return null;
+          return (
+              <button
+                  type="button"
+                  onPointerDown={stopDockPointer}
+                  onPointerUp={stopDockPointer}
+                  onClick={runDockAction(onClick)}
+                  title={label}
+                  className={`h-[42px] min-w-0 rounded-[15px] border ${secondaryTone[color] || secondaryTone.gray} flex items-center gap-1.5 px-2.5 active:scale-[0.98] transition-all shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/35 touch-manipulation`}
+              >
+                  <Icon className="w-4 h-4 shrink-0" />
+                  <span className="min-w-0 flex-1 text-left text-[10px] font-black uppercase leading-none truncate">{label}</span>
+              </button>
+          );
       };
+      const renderToolButton = ({ icon: Icon, label, color = 'gray', onClick }) => (
+          <button
+              type="button"
+              onPointerDown={stopDockPointer}
+              onPointerUp={stopDockPointer}
+              onClick={runDockAction(onClick)}
+              title={label}
+              className={`h-[60px] min-w-0 rounded-[16px] border ${secondaryTone[color] || secondaryTone.gray} flex flex-col items-center justify-center gap-1 px-1 active:scale-[0.98] transition-all shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/35 touch-manipulation`}
+          >
+              <Icon className="w-5 h-5 shrink-0" />
+              <span className="max-w-full text-center text-[9px] font-black uppercase leading-none truncate">{label}</span>
+          </button>
+      );
+      const renderGrid = (children) => <div className="flex flex-col gap-1.5">{children}</div>;
+      const renderStepLine = (steps) => (
+          <div className={`h-6 rounded-full border ${t.borderCard} ${isDarkDock ? 'bg-slate-900/80' : 'bg-slate-50'} flex items-center justify-center gap-2`}>
+              {steps.map((step, index) => (
+                  <div key={`${step.label}-${index}`} className={`flex items-center gap-1 text-[8px] font-black uppercase ${step.done ? 'text-blue-500' : t.textSub}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${step.done ? 'bg-blue-500' : isDarkDock ? 'bg-slate-700' : 'bg-slate-300'}`} />
+                      {step.label}
+                  </div>
+              ))}
+          </div>
+      );
+      const compactStatus = (value) => String(value || '').replace(/_/g, ' ');
       const openUTurnSetup = () => {
           setDockMenuOpen(false);
           setUTurnPanelOpen(true);
       };
-      const openFieldLibrary = () => {
-          setDockMenuOpen(false);
-          setFieldManagerOpen(true);
-          setSettingsOpen(false);
-          setLinesPanelOpen(false);
-      };
       const openLinesLibrary = () => {
-          setDockMenuOpen(false);
-          setLinesPanelOpen(true);
-          setFieldManagerOpen(false);
-          setSettingsOpen(false);
+          openLinesCatalog();
       };
+      const openLineTypePicker = () => {
+          setDockMenuOpen(false);
+          setLinesPanelOpen(false);
+          setFieldManagerOpen(false);
+          setUTurnPanelOpen(false);
+          setLineModeModalOpen(true);
+      };
+      const toggleDockMenu = () => setDockMenuOpen(open => !open);
+      const renderToolsToggle = () => renderTinyButton({
+          icon: dockMenuOpen ? X : MoreHorizontal,
+          label: dockMenuOpen ? "Close" : "Tools",
+          color: dockMenuOpen ? "blue" : "gray",
+          onClick: toggleDockMenu
+      });
+      const renderFlyout = () => (
+          <div className={flyoutClass} onPointerDown={stopDockPointer} onPointerMove={stopDockPointer} onPointerUp={stopDockPointer} onClick={stopDockPointer}>
+              <div className={`h-8 mb-1.5 px-2 rounded-[14px] flex items-center justify-between ${isDarkDock ? 'bg-slate-900/85 text-slate-200' : 'bg-slate-50 text-slate-700'}`}>
+                  <span className="text-[10px] font-black uppercase tracking-wide">Tools</span>
+                  <button
+                      type="button"
+                      onPointerDown={stopDockPointer}
+                      onPointerUp={stopDockPointer}
+                      onClick={runDockAction(() => setDockMenuOpen(false))}
+                      className={`w-7 h-7 rounded-lg border ${secondaryTone.gray} flex items-center justify-center active:scale-95 transition-all`}
+                      title="Close tools"
+                  >
+                      <X className="w-4 h-4" />
+                  </button>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                  {renderToolButton({ icon: CornerUpLeft, label: "U-Turn", color: turnAssistActive ? "green" : "gray", onClick: () => handleUTurn() })}
+                  {renderToolButton({ icon: Settings, label: "Plan", color: "gray", onClick: openUTurnSetup })}
+                  {renderToolButton({ icon: GitCommitHorizontal, label: "Type", color: "blue", onClick: openLineTypePicker })}
+                  {renderToolButton({ icon: FolderOpen, label: "Lines", color: "gray", onClick: openLinesLibrary })}
+                  {renderToolButton({ icon: MapPin, label: "Bound", color: "orange", onClick: startBoundaryCreation })}
+                  {renderToolButton({ icon: showGuidanceLines ? EyeOff : Eye, label: showGuidanceLines ? "Hide" : "Show", color: showGuidanceLines ? "blue" : "gray", onClick: () => actions.setShowGuidanceLines(!showGuidanceLines) })}
+                  {renderToolButton({ icon: sceneViewMode === '3D' ? MapIcon : Layers, label: sceneViewMode === '3D' ? "2D" : "3D", color: "gray", onClick: () => handleSceneViewChange(sceneViewMode === '3D' ? '2D' : '3D') })}
+                  {renderToolButton({ icon: Plus, label: "Zoom +", color: "gray", onClick: () => handleZoom('in') })}
+                  {renderToolButton({ icon: Minus, label: "Zoom -", color: "gray", onClick: () => handleZoom('out') })}
+                  {renderToolButton({ icon: Menu, label: "Menu", color: "gray", onClick: () => { setDockMenuOpen(false); setMenuOpen(true); } })}
+              </div>
+          </div>
+      );
+      const renderDockWithFlyout = (children) => (
+          <div className="relative pointer-events-auto" onPointerDown={stopDockPointer} onPointerMove={stopDockPointer} onPointerUp={stopDockPointer} onClick={stopDockPointer}>
+              {dockMenuOpen && renderFlyout()}
+              {children}
+          </div>
+      );
 
-      // 3. Dock Menu Open? Show advanced tools
-      if (dockMenuOpen) {
-          return (
-            <div className={`p-2 rounded-2xl ${t.bgCard} shadow-xl border ${t.borderCard} flex flex-col gap-1.5 pointer-events-auto w-[94px] animate-in slide-in-from-right-5 fade-in duration-200`}>
-               <DockLabel>Run</DockLabel>
-               <DockButton theme={t} icon={CornerUpLeft} label="U-Turn" color={turnAssistActive ? "green" : "gray"} onClick={() => handleUTurn() } className={compactDockButton}/>
-               <DockButton theme={t} icon={Settings} label="Turn Plan" color="blue" onClick={openUTurnSetup} className={compactDockButton}/>
-               <div className={`h-px ${t.divider}`}></div>
-               <DockLabel>Open</DockLabel>
-               <DockButton theme={t} icon={Menu} label="Menu" color="gray" onClick={() => { setDockMenuOpen(false); setMenuOpen(true); }} className={compactDockButton}/>
-               <DockButton theme={t} icon={X} label="Close" color="gray" onClick={() => setDockMenuOpen(false)} className={compactDockButton}/>
-            </div>
-          );
+      if (isRecordingBoundary) {
+          return renderShell({
+              status: "Bound",
+              tone: "orange",
+              children: (
+                  <>
+                      {renderMainButton({ icon: Square, label: "Finish", sub: `${tempBoundary.length} pts`, color: "green", onClick: finishBoundaryRecording })}
+                      {renderTinyButton({ icon: X, label: "Cancel", color: "red", onClick: cancelBoundaryRecording })}
+                  </>
+              )
+          });
       }
 
-      // Default run toolbar
-      return (
-         <div className={`p-2 rounded-2xl ${t.bgCard} shadow-xl border ${t.borderCard} pointer-events-auto w-[94px] flex flex-col gap-1.5`}>
-            <DockLabel>Create</DockLabel>
-            <DockButton theme={t} icon={Route} label="Line" color="blue" onClick={() => setLineModeModalOpen(true)} className={compactDockButton}/>
-            <DockButton theme={t} icon={MapPin} label="Bound" color="orange" onClick={startBoundaryCreation} className={compactDockButton}/>
-            <div className={`h-px ${t.divider}`}></div>
-            <DockLabel>View</DockLabel>
-            <DockButton theme={t} icon={showGuidanceLines ? Eye : EyeOff} label={showGuidanceLines ? "Lines On" : "Lines Off"} color={showGuidanceLines ? "blue" : "gray"} onClick={() => actions.setShowGuidanceLines(!showGuidanceLines)} className={compactDockButton}/>
-            <DockButton theme={t} icon={sceneViewMode === '3D' ? MapIcon : Layers} label={sceneViewMode === '3D' ? "2D" : "3D"} color="gray" onClick={() => handleSceneViewChange(sceneViewMode === '3D' ? '2D' : '3D')} className={compactDockButton}/>
-            <DockButton theme={t} icon={Plus} label="Zoom +" color="gray" onClick={() => handleZoom('in')} className={compactDockButton}/>
-            <DockButton theme={t} icon={Minus} label="Zoom -" color="gray" onClick={() => handleZoom('out')} className={compactDockButton}/>
-            <div className={`h-px ${t.divider}`}></div>
-            <DockButton theme={t} icon={MoreHorizontal} label="More" color="gray" onClick={() => setDockMenuOpen(true)} className={compactDockButton}/>
-         </div>
-      );
+      if (uTurnPanelOpen) return null;
+
+      if (steeringMode === 'AUTO') {
+          return renderDockWithFlyout(renderShell({
+              status: "Auto",
+              tone: "green",
+              children: (
+                  <>
+                      {renderMainButton({ icon: Pause, label: "Pause", color: "orange", onClick: toggleSteering })}
+                      {renderGrid(
+                          <>
+                              {renderTinyButton({ icon: CornerUpLeft, label: "L 1cm", color: "green", onClick: () => handleTrim('left') })}
+                              {renderTinyButton({ icon: CornerUpRight, label: "R 1cm", color: "green", onClick: () => handleTrim('right') })}
+                              {renderTinyButton({ icon: CornerUpLeft, label: "U-Turn", color: turnAssistActive ? "green" : "gray", onClick: () => handleUTurn() })}
+                              {renderToolsToggle()}
+                          </>
+                      )}
+                  </>
+              )
+          }));
+      }
+
+      if (isCreating) {
+          let title = compactStatus(lineType);
+          let status = "Create";
+          let primary = null;
+          let content = null;
+          let tone = "blue";
+          switch (lineType) {
+              case 'STRAIGHT_AB':
+                  let abLabel = "Set A"; let abColor = "blue";
+                  if (pointA && !pointB) { abLabel = "Set B"; abColor = "red"; } else if (pointA && pointB) { abLabel = "Set A"; abColor = "green"; }
+
+                  const handleCancelAB = () => {
+                      if (pointA && !pointB) {
+                          actions.setPointA(null);
+                          showNotification("Reset to Set A", "info");
+                      } else {
+                          cancelLineCreation();
+                      }
+                  };
+
+                  status = pointA ? "B next" : "A next";
+                  tone = pointA ? "orange" : "blue";
+                  primary = renderMainButton({ icon: Target, label: abLabel, color: abColor, onClick: handleABButtonClick });
+                  content = (
+                      <>
+                          {renderStepLine([{ label: 'A', done: Boolean(pointA) }, { label: 'B', done: Boolean(pointB) }])}
+                          {renderGrid(
+                              <>
+                                  {renderTinyButton({ icon: GitCommitHorizontal, label: "Type", color: "gray", onClick: openLineTypePicker })}
+                                  {renderTinyButton({ icon: X, label: pointA && !pointB ? "Reset" : "Cancel", color: "red", onClick: handleCancelAB })}
+                              </>
+                          )}
+                      </>
+                  );
+                  break;
+              case 'A_PLUS':
+                  title = "A+";
+                  if (!aPlusPoint) {
+                      status = "A next";
+                      primary = renderMainButton({ icon: Target, label: "Set A", color: "blue", onClick: handleSetAPlus_PointA });
+                      content = renderGrid(
+                          <>
+                              {renderTinyButton({ icon: GitCommitHorizontal, label: "Type", color: "gray", onClick: openLineTypePicker })}
+                              {renderTinyButton({ icon: X, label: "Cancel", color: "red", onClick: cancelLineCreation })}
+                          </>
+                      );
+                  } else {
+                      status = aPlusHeading !== null ? "Ready" : "Head";
+                      tone = aPlusHeading !== null ? "green" : "orange";
+                      primary = aPlusHeading !== null
+                          ? renderMainButton({ icon: Check, label: "OK", sub: `${aPlusHeading.toFixed(0)} deg`, color: "green", onClick: handleConfirmAPlus })
+                          : renderMainButton({ icon: Compass, label: "Head", sub: `${heading.toFixed(0)} deg`, color: "blue", onClick: handleSetAPlus_HeadingCurrent });
+                      content = (
+                          <>
+                              {renderStepLine([{ label: 'A', done: Boolean(aPlusPoint) }, { label: 'H', done: aPlusHeading !== null }])}
+                              {renderGrid(
+                                  <>
+                                      {renderTinyButton({ icon: Keyboard, label: "Input", color: "gray", onClick: () => { setManualHeadingModalOpen(true); setTempManualHeading(heading.toFixed(1)); } })}
+                                      {renderTinyButton({ icon: RotateCcw, label: "Reset", color: "orange", onClick: () => { actions.setAPlusPoint({ ...worldPos }); actions.setAPlusHeading(null); showNotification("Point A Reset to Current Position", "info"); } })}
+                                      {renderTinyButton({ icon: GitCommitHorizontal, label: "Type", color: "gray", onClick: openLineTypePicker })}
+                                      {renderTinyButton({ icon: X, label: "Cancel", color: "red", onClick: () => { actions.setAPlusPoint(null); actions.setAPlusHeading(null); } })}
+                                  </>
+                              )}
+                          </>
+                      );
+                  }
+                  break;
+              case 'CURVE':
+                  status = isRecordingCurve ? "REC" : "Ready";
+                  tone = isRecordingCurve ? "red" : "blue";
+                  primary = renderMainButton({ icon: isRecordingCurve ? Disc : Spline, label: isRecordingCurve ? "Stop" : "Record", sub: `${curvePoints.length}`, color: isRecordingCurve ? "red" : "blue", onClick: handleRecordCurve, pulse: isRecordingCurve });
+                  content = renderGrid(
+                      <>
+                          {renderTinyButton({ icon: GitCommitHorizontal, label: "Type", color: "gray", onClick: openLineTypePicker })}
+                          {renderTinyButton({ icon: X, label: "Cancel", color: "red", onClick: cancelLineCreation })}
+                      </>
+                  );
+                  break;
+              case 'COMBINATION':
+                  status = isRecordingCurve ? "REC" : curvePoints.length > 0 ? "Pause" : "Ready";
+                  tone = isRecordingCurve ? "orange" : "blue";
+                  primary = renderMainButton({ icon: isRecordingCurve ? Pause : Disc, label: isRecordingCurve ? "Pause" : (curvePoints.length > 0 ? "Cont" : "Record"), sub: `${curvePoints.length}`, color: isRecordingCurve ? "orange" : "blue", onClick: isRecordingCurve ? handleCombinationPause : handleCombinationRecord, pulse: isRecordingCurve });
+                  content = renderGrid(
+                      <>
+                          {curvePoints.length > 2 && renderTinyButton({ icon: Check, label: "Finish", color: "green", onClick: handleCombinationFinish })}
+                          {isCombinationPaused && renderTinyButton({ icon: AlignJustify, label: "Line", color: "gray", onClick: handleCombinationRecord })}
+                          {renderTinyButton({ icon: GitCommitHorizontal, label: "Type", color: "gray", onClick: openLineTypePicker })}
+                          {renderTinyButton({ icon: X, label: "Cancel", color: "red", onClick: cancelLineCreation })}
+                      </>
+                  );
+                  break;
+              case 'PIVOT':
+                  status = pivotCenter ? "Edge next" : "Center";
+                  tone = pivotCenter ? "orange" : "blue";
+                  primary = pivotCenter
+                      ? renderMainButton({ icon: CircleDashed, label: "Edge", color: pivotRadius ? "green" : "blue", onClick: handleSetRadius })
+                      : renderMainButton({ icon: Target, label: "Center", color: "blue", onClick: handleSetCenter });
+                  content = (
+                      <>
+                          {renderStepLine([{ label: 'C', done: Boolean(pivotCenter) }, { label: 'R', done: Boolean(pivotRadius) }])}
+                          {renderGrid(
+                              <>
+                                  {renderTinyButton({ icon: Target, label: "Center", color: pivotCenter ? "green" : "gray", onClick: handleSetCenter })}
+                                  {renderTinyButton({ icon: X, label: "Cancel", color: "red", onClick: cancelLineCreation })}
+                              </>
+                          )}
+                      </>
+                  );
+                  break;
+              default: break;
+          }
+          return renderShell({
+              status: title === 'STRAIGHT AB' ? status : title,
+              tone,
+              children: (
+                  <>
+                      {primary}
+                      {content}
+                  </>
+              )
+          });
+      }
+
+      if (hasGuidanceToEngage && steeringMode === 'MANUAL' && !isCreating) {
+          return renderDockWithFlyout(renderShell({
+              status: "Ready",
+              tone: "green",
+              children: (
+                  <>
+                      {renderMainButton({ icon: SteeringWheelIcon, label: "Auto", sub: autosteerReady ? "Go" : "RTK", color: "green", onClick: toggleSteering })}
+                      {renderGrid(
+                          <>
+                              {renderTinyButton({ icon: Save, label: "Save", color: "blue", onClick: openSaveLineModal, hidden: Boolean(activeLineId) })}
+                              {renderTinyButton({ icon: Route, label: "New", color: "gray", onClick: startStraightABCreation })}
+                              {renderTinyButton({ icon: FolderOpen, label: "Lines", color: "gray", onClick: openLinesLibrary })}
+                              {renderToolsToggle()}
+                          </>
+                      )}
+                  </>
+              )
+          }));
+      }
+
+      return renderDockWithFlyout(renderShell({
+          status: "Run",
+          tone: "blue",
+          children: (
+              <>
+                  {renderMainButton({ icon: Route, label: "AB", sub: "Line", color: "blue", onClick: startStraightABCreation })}
+                  {renderGrid(
+                      <>
+                          {renderTinyButton({ icon: GitCommitHorizontal, label: "Type", color: "gray", onClick: openLineTypePicker })}
+                          {renderTinyButton({ icon: FolderOpen, label: "Lines", color: "gray", onClick: openLinesLibrary })}
+                          {renderTinyButton({ icon: MapPin, label: "Bound", color: "orange", onClick: startBoundaryCreation })}
+                          {renderToolsToggle()}
+                      </>
+                  )}
+              </>
+          )
+      }));
   };
 
   const savedVehicleProfiles = vehicleProfiles || [];
@@ -5059,8 +5458,32 @@ const renderLinesPanel = () => {
     const allLines = activeField?.lines || [];
     const activeCatalogLines = allLines.filter(line => !line.archived);
     const archivedLines = allLines.filter(line => line.archived);
-    const lines = showArchivedLines ? allLines : activeCatalogLines;
-    const selectedLine = activeCatalogLines.find(line => line.id === activeLineId) || lines[0];
+    const baseLines = showArchivedLines ? allLines : activeCatalogLines;
+    const normalizeLineType = (type) => {
+        if (type === 'STRAIGHT_AB') return 'STRAIGHT';
+        if (type === 'A_PLUS') return 'A_PLUS';
+        if (type === 'CURVE') return 'CURVE';
+        if (type === 'PIVOT') return 'PIVOT';
+        if (type === 'COMBINATION') return 'COMBINATION';
+        return 'OTHER';
+    };
+    const lineTypeFilters = [
+        { id: 'ALL', label: 'All', icon: Layers },
+        { id: 'STRAIGHT', label: 'Straight', icon: GitCommitHorizontal },
+        { id: 'CURVE', label: 'Curve', icon: Spline },
+        { id: 'PIVOT', label: 'Pivot', icon: CircleDashed },
+        { id: 'A_PLUS', label: 'A+', icon: ArrowUpFromDot },
+        { id: 'COMBINATION', label: 'Combo', icon: AlignJustify }
+    ];
+    const getFilterCount = (filterId) => filterId === 'ALL'
+        ? baseLines.length
+        : baseLines.filter(line => normalizeLineType(line.type) === filterId).length;
+    const currentFilter = lineTypeFilters.some(filter => filter.id === lineCatalogFilter) ? lineCatalogFilter : 'ALL';
+    const visibleLineTypeFilters = lineTypeFilters.filter(filter => filter.id === 'ALL' || getFilterCount(filter.id) > 0 || filter.id === currentFilter);
+    const lines = currentFilter === 'ALL' ? baseLines : baseLines.filter(line => normalizeLineType(line.type) === currentFilter);
+    const selectedLine = lines.find(line => line.id === selectedCatalogLineId) || lines.find(line => line.id === activeLineId) || lines[0] || activeCatalogLines.find(line => line.id === activeLineId) || activeCatalogLines[0] || allLines[0];
+    const loadedLine = activeCatalogLines.find(line => line.id === activeLineId) || null;
+    const loadedLineLength = loadedLine ? getLineLengthMeters(loadedLine) : null;
     const activeLineLength = selectedLine ? getLineLengthMeters(selectedLine) : null;
     const panelBg = theme === 'dark' ? 'bg-slate-950' : 'bg-white';
     const surfaceBg = theme === 'dark' ? 'bg-slate-900/80' : 'bg-white';
@@ -5150,14 +5573,35 @@ const renderLinesPanel = () => {
                 </button>
             </div>
 
+            <div className={`shrink-0 px-5 lg:px-6 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-blue-950/20' : 'bg-blue-50/80'}`}>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0 flex items-center gap-3">
+                        <div className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${loadedLine ? 'bg-blue-600 text-white' : `${surfaceBg} ${t.textSub} border ${t.borderCard}`}`}>
+                            <Route className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0">
+                            <div className={`text-[10px] uppercase font-black tracking-widest ${t.textSub}`}>Active line</div>
+                            <div className={`text-base font-black truncate ${loadedLine ? t.textMain : t.textSub}`}>{loadedLine?.name || 'No line loaded'}</div>
+                        </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-black">
+                        <span className={`px-3 py-1.5 rounded-lg border ${loadedLine ? 'border-green-500/35 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`}`}>{loadedLine ? 'LOADED' : 'NO ACTIVE'}</span>
+                        <span className={`px-3 py-1.5 rounded-lg border ${t.borderCard} ${surfaceBg} ${t.textMain}`}>{loadedLine ? (loadedLine.type || 'LINE').replace(/_/g, ' ') : '--'}</span>
+                        <span className={`px-3 py-1.5 rounded-lg border ${t.borderCard} ${surfaceBg} ${t.textMain}`}>{loadedLineLength !== null ? `${loadedLineLength.toFixed(1)} m` : '--'}</span>
+                    </div>
+                </div>
+            </div>
+
             <div className="flex-1 min-h-0 flex overflow-hidden">
                     <aside className={`w-[28%] min-w-[260px] max-w-[340px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
-                        <div className={`shrink-0 p-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/55' : 'bg-white/70'}`}>
-                            <div className="flex items-start justify-between gap-3">
+                        <div className={`shrink-0 px-3 py-2.5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/55' : 'bg-white/70'}`}>
+                            <div className="flex items-center justify-between gap-3">
                                 <div className="min-w-0">
                                     <div className={`text-[10px] uppercase tracking-wider font-black ${t.textSub}`}>Catalog</div>
-                                    <div className={`text-base font-black ${t.textMain} truncate`}>Saved Lines</div>
-                                    <div className={`text-[11px] ${t.textSub}`}>{activeCatalogLines.length} active / {archivedLines.length} archived</div>
+                                    <div className="min-w-0 flex items-center gap-2">
+                                        <div className={`text-base font-black ${t.textMain} truncate`}>Saved Lines</div>
+                                        <span className="shrink-0 px-2 py-0.5 rounded-md bg-blue-600/10 text-blue-500 text-[11px] font-black">{activeCatalogLines.length}</span>
+                                    </div>
                                 </div>
                                 <button
                                     aria-label="Create new guidance line"
@@ -5165,54 +5609,80 @@ const renderLinesPanel = () => {
                                         setLinesPanelOpen(false);
                                         setLineModeModalOpen(true);
                                     }}
-                                    className="shrink-0 h-10 px-3 rounded-xl bg-blue-600 text-white font-black hover:bg-blue-500 transition-colors flex items-center gap-2 shadow-md shadow-blue-900/20"
+                                    className="shrink-0 h-9 px-3 rounded-lg bg-blue-600 text-white font-black hover:bg-blue-500 transition-colors flex items-center gap-1.5 shadow-sm shadow-blue-900/20"
                                 >
-                                    <Plus className="w-5 h-5" />
-                                    <span className="text-sm">New</span>
+                                    <Plus className="w-4 h-4" />
+                                    <span className="text-xs">New</span>
                                 </button>
                             </div>
 
-                            <div className="mt-3 grid grid-cols-3 gap-1.5">
-                                {[
-                                    ['Lines', activeCatalogLines.length, 'text-blue-500'],
-                                    ['Active', activeLineId ? 1 : 0, 'text-green-500'],
-                                    ['Archive', archivedLines.length, archivedLines.length ? 'text-yellow-500' : t.textMain]
-                                ].map(([label, value, tone]) => (
-                                    <div key={label} className={`rounded-lg border ${t.borderCard} ${mutedBg} px-2 py-2 min-w-0 text-center`}>
-                                        <div className={`text-lg font-black leading-none ${tone}`}>{value}</div>
-                                        <div className={`mt-1 text-[8px] uppercase font-black truncate ${t.textSub}`}>{label}</div>
-                                    </div>
-                                ))}
+                            <div className="mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-1">
+                                    {visibleLineTypeFilters.map(({ id, label, icon: Icon }) => {
+                                        const active = currentFilter === id;
+                                        const count = getFilterCount(id);
+                                        return (
+                                            <button
+                                                key={id}
+                                                type="button"
+                                                onClick={() => setLineCatalogFilter(id)}
+                                                className={`shrink-0 h-8 rounded-full border px-2.5 flex items-center gap-1.5 transition-all ${active ? 'bg-blue-600 text-white border-blue-500 shadow-sm' : `${t.borderCard} ${surfaceBg} ${t.textSub} hover:border-blue-400 hover:text-blue-500`}`}
+                                            >
+                                                <Icon className="w-3.5 h-3.5 shrink-0" />
+                                                <span className="text-[10px] font-black uppercase">{label}</span>
+                                                <span className={`text-[10px] font-black ${active ? 'text-white' : 'text-blue-500'}`}>{count}</span>
+                                            </button>
+                                        );
+                                    })}
                             </div>
 
-                            {archivedLines.length > 0 && (
-                                <button
-                                    onClick={() => setShowArchivedLines(prev => !prev)}
-                                    className={`mt-2 w-full h-8 rounded-lg border ${showArchivedLines ? 'border-yellow-500/50 bg-yellow-500/10 text-yellow-500' : `${t.borderCard} ${t.textMain}`} text-[11px] font-black hover:brightness-95`}
-                                >
-                                    {showArchivedLines ? 'Hide Archived Lines' : `Show Archived (${archivedLines.length})`}
-                                </button>
-                            )}
+                            <div className={`mt-1.5 flex items-center justify-between gap-2 text-[11px] ${t.textSub}`}>
+                                <div className="truncate">
+                                    {currentFilter === 'ALL'
+                                        ? `${activeCatalogLines.length} active${archivedLines.length ? ` / ${archivedLines.length} archived` : ''}`
+                                        : `${lines.length} ${visibleLineTypeFilters.find(filter => filter.id === currentFilter)?.label || 'filtered'} lines`}
+                                </div>
+                                {archivedLines.length > 0 && (
+                                    <button
+                                        onClick={() => setShowArchivedLines(prev => !prev)}
+                                        className={`shrink-0 px-2.5 py-1 rounded-md border ${showArchivedLines ? 'border-yellow-500/50 bg-yellow-500/10 text-yellow-500' : `${t.borderCard} ${t.textSub} hover:text-yellow-500`} font-black`}
+                                    >
+                                        {showArchivedLines ? 'Hide archive' : `Archive ${archivedLines.length}`}
+                                    </button>
+                                )}
+                            </div>
                         </div>
 
                         <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2.5">
                             {lines.length === 0 ? (
                                 <div className={`h-full min-h-[280px] flex flex-col items-center justify-center text-center ${t.textDim}`}>
                                     <Navigation className="w-14 h-14 mb-4 opacity-50" />
-                                    <p className={`text-lg font-black ${t.textMain}`}>No guidance line</p>
-                                    <p className="text-sm mt-2 max-w-[260px]">Create AB, A+, curve, pivot or combination line for this field.</p>
+                                    <p className={`text-lg font-black ${t.textMain}`}>{currentFilter === 'ALL' ? 'No guidance line' : 'No line in this type'}</p>
+                                    <p className="text-sm mt-2 max-w-[260px]">{currentFilter === 'ALL' ? 'Create AB, A+, curve, pivot or combination line for this field.' : 'Choose another type filter or create a new line.'}</p>
                                 </div>
                             ) : (
                                 lines.map((line, index) => {
                                     const Icon = getLineIconFor(line);
                                     const lengthMeters = getLineLengthMeters(line);
                                     const active = activeLineId === line.id;
+                                    const selected = selectedLine?.id === line.id;
                                     const archived = Boolean(line.archived);
                                     return (
-                                        <div key={line.id} className={`relative p-3 rounded-xl border transition-all ${active ? 'border-blue-500 bg-blue-500/10 shadow-sm ring-1 ring-blue-500/20' : archived ? 'border-yellow-500/35 bg-yellow-500/10' : `${t.borderCard} ${surfaceBg} hover:border-blue-400/70`}`}>
-                                            {active && <div className="absolute left-0 top-3 bottom-3 w-1 rounded-r bg-blue-600" />}
+                                        <div
+                                            key={line.id}
+                                            role="button"
+                                            tabIndex={0}
+                                            onClick={() => setSelectedCatalogLineId(line.id)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' || e.key === ' ') {
+                                                    e.preventDefault();
+                                                    setSelectedCatalogLineId(line.id);
+                                                }
+                                            }}
+                                            className={`relative p-3 rounded-xl border text-left transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${selected ? 'border-blue-500 bg-blue-500/10 shadow-sm ring-1 ring-blue-500/20' : active ? 'border-green-500/35 bg-green-500/10' : archived ? 'border-yellow-500/35 bg-yellow-500/10' : `${t.borderCard} ${surfaceBg} hover:border-blue-400/70`}`}
+                                        >
+                                            {selected && <div className="absolute left-0 top-3 bottom-3 w-1 rounded-r bg-blue-600" />}
                                             <div className="flex items-start gap-2.5 min-w-0">
-                                                <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : archived ? 'bg-yellow-500/12 text-yellow-500 border border-yellow-500/25' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-50'} text-blue-500 border ${t.borderCard}`}`}>
+                                                <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${selected ? 'bg-blue-600 text-white' : active ? 'bg-green-500/15 text-green-500 border border-green-500/25' : archived ? 'bg-yellow-500/12 text-yellow-500 border border-yellow-500/25' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-50'} text-blue-500 border ${t.borderCard}`}`}>
                                                     <Icon className="w-4 h-4" />
                                                 </div>
                                                 <div className="min-w-0 flex-1">
@@ -5224,7 +5694,8 @@ const renderLinesPanel = () => {
                                                         >
                                                             {line.name || `Line ${index + 1}`}
                                                         </div>
-                                                        {active && <span className="shrink-0 px-2 py-1 rounded-md bg-green-500/15 text-green-500 text-[9px] font-black uppercase">Active</span>}
+                                                        {active && <span className="shrink-0 px-2 py-1 rounded-md bg-green-500/15 text-green-500 text-[9px] font-black uppercase">Loaded</span>}
+                                                        {selected && !active && <span className="shrink-0 px-2 py-1 rounded-md bg-blue-500/15 text-blue-500 text-[9px] font-black uppercase">Selected</span>}
                                                         {archived && <span className="shrink-0 px-2 py-1 rounded-md bg-yellow-500/15 text-yellow-500 text-[9px] font-black uppercase">Archived</span>}
                                                     </div>
                                                     <div className={`mt-0.5 text-[11px] ${t.textSub}`}>{(line.type || 'LINE').replace(/_/g, ' ')} / {lengthMeters !== null ? `${lengthMeters.toFixed(1)} m` : '--'}</div>
@@ -5234,15 +5705,15 @@ const renderLinesPanel = () => {
                                                 <span className={`text-[11px] ${t.textSub}`}>{formatLineDate(line)}</span>
                                                 <div className="flex items-center gap-1.5">
                                                     {archived ? (
-                                                        <button onClick={() => handleRestoreLine(line)} className="px-3 py-2 rounded-lg text-xs font-black border border-yellow-500/40 text-yellow-500 hover:bg-yellow-500/10">
+                                                        <button onClick={(e) => { e.stopPropagation(); handleRestoreLine(line); }} className="px-3 py-2 rounded-lg text-xs font-black border border-yellow-500/40 text-yellow-500 hover:bg-yellow-500/10">
                                                             Restore
                                                         </button>
                                                     ) : (
                                                         <>
-                                                            <button aria-label={`Rename ${line.name}`} onClick={() => handleRenameLine(line)} className={`p-2 rounded-lg ${t.textSub} hover:bg-blue-500/10 hover:text-blue-500`}>
+                                                            <button aria-label={`Rename ${line.name}`} onClick={(e) => { e.stopPropagation(); handleRenameLine(line); }} className={`p-2 rounded-lg ${t.textSub} hover:bg-blue-500/10 hover:text-blue-500`}>
                                                                 <PenTool className="w-4 h-4" />
                                                             </button>
-                                                            <button onClick={() => handleLoadLine(line)} className={`px-3 py-2 rounded-lg text-xs font-black ${active ? 'bg-blue-600 text-white' : `border ${t.borderCard} ${t.textMain} hover:brightness-95`}`}>
+                                                            <button onClick={(e) => { e.stopPropagation(); handleLoadLine(line); }} className={`px-3 py-2 rounded-lg text-xs font-black ${active ? 'bg-blue-600 text-white' : `border ${t.borderCard} ${t.textMain} hover:brightness-95`}`}>
                                                                 {active ? 'Loaded' : 'Load'}
                                                             </button>
                                                         </>
@@ -5284,7 +5755,7 @@ const renderLinesPanel = () => {
                                             ].map(([label, value]) => (
                                                 <div key={label} className={`${mutedBg} border ${t.borderCard} rounded-lg p-3 min-w-0`}>
                                                     <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
-                                                    <div className={`mt-1 text-sm font-black ${t.textMain} truncate`}>{value}</div>
+                                                    <div className={`mt-1 text-[13px] leading-tight font-black ${t.textMain} break-words`}>{value}</div>
                                                 </div>
                                             ))}
                                         </div>
@@ -5530,6 +6001,333 @@ const renderLinesPanel = () => {
           </div>
       );
 
+      const BoundaryMapPreview = ({ boundaries = [] }) => {
+          const mapPoint = createPreviewMapper({ boundaries, lines: [] });
+          const gridStroke = theme === 'dark' ? '#334155' : '#cbd5e1';
+          const activeStroke = theme === 'dark' ? '#fbbf24' : '#f59e0b';
+          return (
+              <div className={`relative overflow-hidden rounded-xl border ${t.borderCard} ${mutedPanelBg} min-h-[320px] h-full`}>
+                  <svg viewBox="0 0 360 230" className="absolute inset-0 w-full h-full" role="img" aria-label="Boundary map">
+                      <defs>
+                          <pattern id="boundary-manager-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+                              <path d="M 24 0 L 0 0 0 24" fill="none" stroke={gridStroke} strokeWidth="0.7" opacity={theme === 'dark' ? '0.24' : '0.42'} />
+                          </pattern>
+                      </defs>
+                      <rect width="360" height="230" fill="url(#boundary-manager-grid)" />
+                      <rect width="360" height="230" fill={theme === 'dark' ? 'rgba(15,23,42,0.28)' : 'rgba(248,250,252,0.46)'} />
+                      {boundaries.map((boundary, index) => {
+                          const points = (boundary.points || boundary || []).filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+                          if (points.length < 2) return null;
+                          const previewPoints = points.map(mapPoint).map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+                          const active = index === activeBoundaryIdx;
+                          return (
+                              <polygon
+                                  key={`${boundary.name || 'boundary'}-${index}`}
+                                  points={previewPoints}
+                                  fill={active ? 'rgba(245,158,11,0.14)' : 'rgba(100,116,139,0.08)'}
+                                  stroke={active ? activeStroke : '#94a3b8'}
+                                  strokeWidth={active ? 3.2 : 2}
+                                  strokeDasharray={active ? 'none' : '8 7'}
+                              />
+                          );
+                      })}
+                  </svg>
+                  {boundaries.length === 0 && (
+                      <div className={`absolute inset-0 flex flex-col items-center justify-center text-center px-8 ${t.textDim}`}>
+                          <MapPin className="w-12 h-12 mb-3 opacity-55" />
+                          <div className={`text-lg font-black ${t.textMain}`}>No boundary recorded</div>
+                          <div className="mt-1 text-sm">Record a loop from the run screen to define field edges.</div>
+                      </div>
+                  )}
+              </div>
+          );
+      };
+
+      const renderBoundaryManager = () => {
+          const boundaries = activeField?.boundaries || [];
+          const activeIndex = boundaries.length > 0 ? Math.min(Math.max(activeBoundaryIdx || 0, 0), boundaries.length - 1) : -1;
+          const activeBoundary = activeIndex >= 0 ? boundaries[activeIndex] : null;
+          const activePoints = (activeBoundary?.points || activeBoundary || []).length;
+          const totalPoints = boundaries.reduce((total, boundary) => total + ((boundary.points || boundary || []).length || 0), 0);
+
+          return (
+              <div className={`w-full h-full flex flex-col ${panelBg}`}>
+                  <div className={`flex items-center justify-between gap-4 px-6 py-5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+                      <div className="min-w-0 flex items-center gap-3">
+                          <div className={`shrink-0 w-11 h-11 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
+                              <MapPin className="w-6 h-6 text-orange-500" />
+                          </div>
+                          <div className="min-w-0">
+                              <h2 className={`text-xl font-black ${t.textMain}`}>Boundary Manager</h2>
+                              <div className={`text-xs ${t.textSub} truncate`}>{activeField?.name || 'No field selected'} / {boundaries.length} saved loops</div>
+                          </div>
+                      </div>
+                      <button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 transition-all`}>
+                          <X className="w-5 h-5" />
+                      </button>
+                  </div>
+
+                  <div className={`shrink-0 px-5 lg:px-6 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-orange-950/18' : 'bg-orange-50/80'}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="min-w-0 flex items-center gap-3">
+                              <div className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${activeBoundary ? 'bg-orange-500 text-white' : `${softPanelBg} ${t.textSub} border ${t.borderCard}`}`}>
+                                  <MapPin className="w-5 h-5" />
+                              </div>
+                              <div className="min-w-0">
+                                  <div className={`text-[10px] uppercase font-black tracking-widest ${t.textSub}`}>Active boundary</div>
+                                  <div className={`text-base font-black truncate ${activeBoundary ? t.textMain : t.textSub}`}>{activeBoundary?.name || 'No boundary active'}</div>
+                              </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 text-xs font-black">
+                              <span className={`px-3 py-1.5 rounded-lg border ${activeBoundary ? 'border-orange-500/35 bg-orange-500/10 text-orange-500' : `${t.borderCard} ${t.textSub}`}`}>{activeBoundary ? `LOOP ${activeIndex + 1}` : 'NO ACTIVE'}</span>
+                              <span className={`px-3 py-1.5 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{activePoints || 0} pts</span>
+                              <span className={`px-3 py-1.5 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{activeField?.name || '--'}</span>
+                          </div>
+                      </div>
+                  </div>
+
+                  <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6">
+                      <div className="grid grid-cols-1 lg:grid-cols-[minmax(360px,0.95fr)_minmax(0,1.05fr)] gap-5 h-full min-h-[520px]">
+                          <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-4 flex flex-col min-h-0`}>
+                              <SectionTitle icon={MapPin} title="Boundary Map" actionLabel="Record" onAction={startBoundaryCreation} />
+                              <div className="grid grid-cols-3 gap-2 mb-4">
+                                  <StatCard icon={MapPin} label="Loops" value={boundaries.length} sub="Saved" tone="text-orange-500" />
+                                  <StatCard icon={Target} label="Active" value={activeIndex >= 0 ? activeIndex + 1 : '--'} sub={activeBoundary?.name || 'None'} tone="text-yellow-500" />
+                                  <StatCard icon={Route} label="Points" value={totalPoints} sub={`${activePoints} active`} tone="text-blue-500" />
+                              </div>
+                              <div className="min-h-0 flex-1">
+                                  <BoundaryMapPreview boundaries={boundaries} />
+                              </div>
+                          </section>
+
+                          <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} flex flex-col min-h-0 overflow-hidden`}>
+                              <div className={`shrink-0 p-4 border-b ${t.divider} flex items-center justify-between gap-3`}>
+                                  <div>
+                                      <div className={`text-[10px] uppercase font-black tracking-widest ${t.textSub}`}>Boundary list</div>
+                                      <div className={`text-sm font-bold ${t.textMain}`}>{activeField?.name || 'Select a field'}</div>
+                                  </div>
+                                  <button onClick={startBoundaryCreation} className="h-10 px-4 rounded-lg bg-orange-500 text-white font-black hover:bg-orange-400 flex items-center gap-2">
+                                      <Plus className="w-4 h-4" />
+                                      Record Boundary
+                                  </button>
+                              </div>
+                              <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
+                                  {boundaries.length > 0 ? boundaries.map((boundary, index) => {
+                                      const points = (boundary.points || boundary || []);
+                                      const active = index === activeBoundaryIdx;
+                                      return (
+                                          <div
+                                              key={`${boundary.name || 'boundary'}-${index}`}
+                                              role="button"
+                                              tabIndex={0}
+                                              onClick={() => actions.setActiveBoundaryIdx(index)}
+                                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); actions.setActiveBoundaryIdx(index); } }}
+                                              className={`w-full rounded-xl border p-4 text-left transition-all ${active ? 'border-orange-500 bg-orange-500/10 ring-2 ring-orange-500/15' : `${t.borderCard} ${mutedPanelBg} hover:border-orange-400`}`}
+                                          >
+                                              <div className="flex items-start justify-between gap-4">
+                                                  <div className="min-w-0 flex items-start gap-3">
+                                                      <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-orange-500 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-orange-500`}`}>
+                                                          <MapPin className="w-5 h-5" />
+                                                      </div>
+                                                      <div className="min-w-0">
+                                                          <div className={`font-black ${t.textMain} truncate`}>{boundary.name || `Boundary ${index + 1}`}</div>
+                                                          <div className={`mt-1 text-xs ${t.textSub}`}>{points.length} points / loop {index + 1}</div>
+                                                      </div>
+                                                  </div>
+                                                  <div className="shrink-0 flex items-center gap-2">
+                                                      {active && <span className="px-2 py-1 rounded-md bg-orange-500 text-white text-[10px] font-black uppercase">Active</span>}
+                                                      <span
+                                                          role="button"
+                                                          tabIndex={0}
+                                                          onClick={(e) => { e.stopPropagation(); confirmDelete('boundary', null, index); }}
+                                                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); confirmDelete('boundary', null, index); } }}
+                                                          className="p-2 rounded-lg text-red-500 hover:bg-red-500/10"
+                                                      >
+                                                          <Trash2 className="w-4 h-4" />
+                                                      </span>
+                                                  </div>
+                                              </div>
+                                          </div>
+                                      );
+                                  }) : <EmptyState label="No boundary saved. Record a boundary loop from the run screen." />}
+                              </div>
+                          </section>
+                      </div>
+                  </div>
+              </div>
+          );
+      };
+
+      const taskOptions = [
+          { type: 'Tillage', title: 'Tillage / Plowing', detail: 'Soil prep, ripping, leveling', icon: Tractor },
+          { type: 'Planting', title: 'Planting / Seeding', detail: 'Seed rows and pass tracking', icon: Sprout },
+          { type: 'Spraying', title: 'Spraying', detail: 'Coverage and section control', icon: Droplets },
+          { type: 'Harvesting', title: 'Harvesting', detail: 'Yield pass and area done', icon: Scissors }
+      ];
+
+      const renderTaskManager = () => {
+          const tasks = activeField?.tasks || [];
+          const activeTask = activeTaskId ? tasks.find(task => task.id === activeTaskId) : null;
+          const pendingTasks = tasks.filter(task => task.status !== 'Done' && task.id !== activeTaskId);
+          const doneTasks = tasks.filter(task => task.status === 'Done');
+
+          const renderTaskRow = (task) => {
+              const Icon = getTaskIcon(task);
+              const active = activeTaskId === task.id;
+              return (
+                  <div key={task.id} className={`rounded-xl border p-4 ${active ? 'border-green-500 bg-green-500/10 ring-2 ring-green-500/15' : `${t.borderCard} ${mutedPanelBg}`}`}>
+                      <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0 flex items-start gap-3">
+                              <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-green-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-green-500`}`}>
+                                  <Icon className="w-5 h-5" />
+                              </div>
+                              <div className="min-w-0">
+                                  <div className={`font-black ${t.textMain} truncate`}>{task.name}</div>
+                                  <div className={`mt-1 text-xs ${t.textSub}`}>{task.type} / {task.date} / {task.status}</div>
+                              </div>
+                          </div>
+                          <div className="shrink-0 flex items-center gap-2">
+                              {active ? (
+                                  <>
+                                      <button onClick={() => handleTaskAction(task, 'pause')} className="p-2 rounded-lg bg-orange-500/15 text-orange-500 hover:bg-orange-500/25" title="Pause task">
+                                          <Pause className="w-4 h-4" />
+                                      </button>
+                                      <button onClick={() => handleTaskAction(task, 'finish')} className="p-2 rounded-lg bg-green-500/15 text-green-500 hover:bg-green-500/25" title="Finish task">
+                                          <CheckSquare className="w-4 h-4" />
+                                      </button>
+                                  </>
+                              ) : (
+                                  <>
+                                      {task.status !== 'Done' && (
+                                          <button onClick={() => handleTaskAction(task, 'start')} className="p-2 rounded-lg bg-blue-500/15 text-blue-500 hover:bg-blue-500/25" title="Start task">
+                                              <PlayCircle className="w-4 h-4" />
+                                          </button>
+                                      )}
+                                      <button onClick={() => confirmDelete('task', task.id)} className="p-2 rounded-lg text-red-500 hover:bg-red-500/10" title="Delete task">
+                                          <Trash2 className="w-4 h-4" />
+                                      </button>
+                                  </>
+                              )}
+                          </div>
+                      </div>
+                  </div>
+              );
+          };
+
+          return (
+              <div className={`w-full h-full flex flex-col ${panelBg}`}>
+                  <div className={`flex items-center justify-between gap-4 px-6 py-5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+                      <div className="min-w-0 flex items-center gap-3">
+                          <div className={`shrink-0 w-11 h-11 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
+                              <FileText className="w-6 h-6 text-green-500" />
+                          </div>
+                          <div className="min-w-0">
+                              <h2 className={`text-xl font-black ${t.textMain}`}>Task Board</h2>
+                              <div className={`text-xs ${t.textSub} truncate`}>{activeField?.name || 'No field selected'} / {tasks.length} tasks</div>
+                          </div>
+                      </div>
+                      <button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 transition-all`}>
+                          <X className="w-5 h-5" />
+                      </button>
+                  </div>
+
+                  <div className={`shrink-0 px-5 lg:px-6 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-green-950/18' : 'bg-green-50/80'}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="min-w-0 flex items-center gap-3">
+                              <div className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${activeTask ? 'bg-green-600 text-white' : `${softPanelBg} ${t.textSub} border ${t.borderCard}`}`}>
+                                  <Activity className="w-5 h-5" />
+                              </div>
+                              <div className="min-w-0">
+                                  <div className={`text-[10px] uppercase font-black tracking-widest ${t.textSub}`}>Active task</div>
+                                  <div className={`text-base font-black truncate ${activeTask ? t.textMain : t.textSub}`}>{activeTask?.name || 'No task running'}</div>
+                              </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 text-xs font-black">
+                              <span className={`px-3 py-1.5 rounded-lg border ${activeTask ? 'border-green-500/35 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`}`}>{activeTask ? 'RUNNING' : 'NO ACTIVE'}</span>
+                              <span className={`px-3 py-1.5 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{pendingTasks.length} pending</span>
+                              <span className={`px-3 py-1.5 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{doneTasks.length} done</span>
+                          </div>
+                      </div>
+                  </div>
+
+                  {viewMode === 'CREATE_TASK' ? (
+                      <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6">
+                          <div className="max-w-5xl mx-auto">
+                              <div className={`mb-5 rounded-xl border ${t.borderCard} ${softPanelBg} p-4 flex flex-wrap items-center justify-between gap-3`}>
+                                  <div>
+                                      <div className={`text-[10px] uppercase font-black ${t.textSub}`}>New task target</div>
+                                      <div className={`font-black ${t.textMain}`}>{activeField?.name || 'Select field first'}</div>
+                                  </div>
+                                  <button onClick={() => actions.setViewMode('LIST')} className={`h-10 px-4 rounded-lg border ${t.borderCard} ${t.textMain} font-black hover:brightness-95`}>
+                                      Back to Tasks
+                                  </button>
+                              </div>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  {taskOptions.map(({ type, title, detail, icon: Icon }) => (
+                                      <button
+                                          key={type}
+                                          onClick={() => saveNewTask(type)}
+                                          className={`text-left rounded-xl border ${t.borderCard} ${softPanelBg} hover:border-green-500 hover:bg-green-500/5 transition-all p-5 flex items-start gap-4`}
+                                      >
+                                          <div className="shrink-0 w-12 h-12 rounded-xl bg-green-500/10 text-green-500 flex items-center justify-center">
+                                              <Icon className="w-6 h-6" />
+                                          </div>
+                                          <div className="min-w-0">
+                                              <div className={`font-black ${t.textMain}`}>{title}</div>
+                                              <div className={`mt-1 text-sm ${t.textSub}`}>{detail}</div>
+                                          </div>
+                                      </button>
+                                  ))}
+                              </div>
+                          </div>
+                      </div>
+                  ) : (
+                      <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6">
+                          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-5">
+                              <StatCard icon={Activity} label="Active" value={activeTask ? 1 : 0} sub={activeTask?.name || 'None'} tone="text-green-500" />
+                              <StatCard icon={FileText} label="Pending" value={pendingTasks.length} sub="Ready jobs" tone="text-blue-500" />
+                              <StatCard icon={CheckSquare} label="Done" value={doneTasks.length} sub="Completed" tone="text-slate-500" />
+                              <button onClick={startTaskCreation} className="rounded-xl bg-green-600 text-white font-black hover:bg-green-500 shadow-lg shadow-green-900/20 flex items-center justify-center gap-2 min-h-[92px]">
+                                  <Plus className="w-5 h-5" />
+                                  New Task
+                              </button>
+                          </div>
+
+                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                              <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} min-h-[260px] overflow-hidden`}>
+                                  <div className={`p-4 border-b ${t.divider}`}>
+                                      <SectionTitle icon={Activity} title="Running" />
+                                  </div>
+                                  <div className="p-4 space-y-3">
+                                      {activeTask ? renderTaskRow(activeTask) : <EmptyState label="No task running. Start one from Pending." />}
+                                  </div>
+                              </section>
+                              <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} min-h-[260px] overflow-hidden`}>
+                                  <div className={`p-4 border-b ${t.divider}`}>
+                                      <SectionTitle icon={PlayCircle} title="Pending" />
+                                  </div>
+                                  <div className="p-4 space-y-3">
+                                      {pendingTasks.length > 0 ? pendingTasks.map(renderTaskRow) : <EmptyState label="No pending task." />}
+                                  </div>
+                              </section>
+                              <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} min-h-[260px] overflow-hidden`}>
+                                  <div className={`p-4 border-b ${t.divider}`}>
+                                      <SectionTitle icon={CheckSquare} title="Completed" />
+                                  </div>
+                                  <div className="p-4 space-y-3">
+                                      {doneTasks.length > 0 ? doneTasks.map(renderTaskRow) : <EmptyState label="No completed task." />}
+                                  </div>
+                              </section>
+                          </div>
+                      </div>
+                  )}
+              </div>
+          );
+      };
+
+      if (fieldAssetTab === 'boundaries' && viewMode !== 'CREATE_FIELD') return renderBoundaryManager();
+      if (fieldAssetTab === 'tasks' && viewMode !== 'CREATE_FIELD') return renderTaskManager();
+
       let rightContent;
       if (viewMode === 'CREATE_FIELD') {
           const draftField = {
@@ -5695,24 +6493,16 @@ const renderLinesPanel = () => {
           const boundaries = activeField.boundaries || [];
           const lines = (activeField.lines || []).filter(line => !line.archived);
           const tasks = activeField.tasks || [];
-          const activeAssetTab = ['lines', 'boundaries', 'tasks'].includes(fieldAssetTab) ? fieldAssetTab : 'lines';
+          const activeAssetTab = 'lines';
           const assetTabs = [
-              { id: 'lines', label: 'Lines', count: lines.length, icon: Route },
-              { id: 'boundaries', label: 'Boundaries', count: boundaries.length, icon: MapPin },
-              { id: 'tasks', label: 'Tasks', count: tasks.length, icon: FileText }
+              { id: 'lines', label: 'Lines', count: lines.length, icon: Route }
           ];
           const activeAssetMeta = assetTabs.find(tab => tab.id === activeAssetTab) || assetTabs[0];
           const ActiveAssetIcon = activeAssetMeta.icon;
-          const activeAssetActionLabel = activeAssetTab === 'lines' ? 'New Line' : activeAssetTab === 'boundaries' ? 'Add Boundary' : 'New Task';
+          const activeAssetActionLabel = 'New Line';
           const handleAssetAction = () => {
-              if (activeAssetTab === 'lines') {
-                  setFieldManagerOpen(false);
-                  setLineModeModalOpen(true);
-              } else if (activeAssetTab === 'boundaries') {
-                  startBoundaryCreation();
-              } else {
-                  startTaskCreation();
-              }
+              setFieldManagerOpen(false);
+              setLineModeModalOpen(true);
           };
 
           rightContent = (
@@ -5753,10 +6543,10 @@ const renderLinesPanel = () => {
                                   <div className="flex items-center justify-between gap-3 mb-2">
                                       <div className="flex items-center gap-2 min-w-0">
                                           <ActiveAssetIcon className="w-4 h-4 text-blue-500 shrink-0" />
-                                          <h4 className={`font-black uppercase tracking-wider text-xs ${t.textSub} truncate`}>Field Assets</h4>
+                                          <h4 className={`font-black uppercase tracking-wider text-xs ${t.textSub} truncate`}>Guidance Lines</h4>
                                       </div>
                                   </div>
-                                  <div className={`grid grid-cols-3 gap-1.5 rounded-xl ${mutedPanelBg} p-1 border ${t.borderCard}`}>
+                                  <div className={`grid grid-cols-1 gap-1.5 rounded-xl ${mutedPanelBg} p-1 border ${t.borderCard}`}>
                                       {assetTabs.map(({ id, label, count, icon: Icon }) => (
                                           <button
                                               key={id}
@@ -6033,24 +6823,38 @@ const renderLinesPanel = () => {
             {/* LEFT RAIL */}
             <aside className={`w-[8%] min-w-[70px] flex-shrink-0 ${t.bgPanel} border-r ${t.border} flex flex-col items-center py-[2%] z-30 shadow-2xl`}>
                 <div className="mb-[15%]"><div className="w-10 h-10 lg:w-12 lg:h-12 bg-blue-600 rounded-xl flex items-center justify-center font-black text-xl lg:text-2xl italic shadow-blue-900/50 shadow-lg text-white">F</div></div>
-                <nav className="flex-1 w-full flex flex-col items-center gap-2 pt-4">
-                    <RailButton theme={t} icon={MapIcon} label="Run" active={!settingsOpen && !fieldManagerOpen && !linesPanelOpen} onClick={() => {setSettingsOpen(false); setFieldManagerOpen(false); setLinesPanelOpen(false); setDockMenuOpen(false); setUTurnPanelOpen(false);}} />
+                <nav className="flex-1 w-full flex flex-col items-center gap-2 pt-3">
+                    <RailButton theme={t} icon={MapIcon} label="Run" active={!settingsOpen && !fieldManagerOpen && !linesPanelOpen} onClick={openRunScreen} />
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
-                    <RailButton theme={t} icon={LayoutGrid} label="Field" active={fieldManagerOpen} onClick={() => {setFieldManagerOpen(true); setSettingsOpen(false); setLinesPanelOpen(false); setDockMenuOpen(false); setUTurnPanelOpen(false);}} />
+                    <RailButton theme={t} icon={LayoutGrid} label="Field" active={fieldManagerOpen && fieldAssetTab === 'lines'} onClick={() => openFieldAssetPanel('lines')} />
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
                     <RailButton
                         theme={t}
                         icon={Route}
                         label="Lines"
                         active={linesPanelOpen}
-                        onClick={() => {setLinesPanelOpen(true); setFieldManagerOpen(false); setSettingsOpen(false); setDockMenuOpen(false); setUTurnPanelOpen(false);}}
+                        onClick={openLinesCatalog}
+                    />
+                    <RailButton
+                        theme={t}
+                        icon={MapPin}
+                        label="Bound"
+                        active={fieldManagerOpen && fieldAssetTab === 'boundaries'}
+                        onClick={() => openFieldAssetPanel('boundaries')}
+                    />
+                    <RailButton
+                        theme={t}
+                        icon={FileText}
+                        label="Tasks"
+                        active={fieldManagerOpen && fieldAssetTab === 'tasks'}
+                        onClick={() => openFieldAssetPanel('tasks')}
                     />
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
-                    <RailButton theme={t} icon={Settings} label="System" active={settingsOpen} onClick={() => {setSettingsOpen(true); setFieldManagerOpen(false); setLinesPanelOpen(false); setDockMenuOpen(false); setUTurnPanelOpen(false);}} />
+                    <RailButton theme={t} icon={Settings} label="System" active={settingsOpen} onClick={openSystemPanel} />
                 </nav>
                 <button
                     type="button"
-                    onClick={() => {setSettingsTab('wifi'); setSettingsOpen(true); setFieldManagerOpen(false); setLinesPanelOpen(false); setDockMenuOpen(false); setUTurnPanelOpen(false);}}
+                    onClick={openWifiPanel}
                     className={`mb-4 flex flex-col items-center gap-1 rounded-xl px-2 py-1.5 active:scale-95 hover:brightness-95 ${settingsOpen && settingsTab === 'wifi' ? 'bg-blue-600/12' : ''}`}
                     title="WiFi / Network"
                     aria-label="Open WiFi and network settings"
@@ -6350,13 +7154,17 @@ const renderLinesPanel = () => {
                     </div>
 
                     <div className="min-w-0 h-full py-3 flex items-center justify-end">
-                        <button onClick={toggleSteering} className={`h-[74px] w-full max-w-[300px] rounded-xl flex items-center justify-between px-5 shadow-xl active:scale-95 border ${steeringMode==='AUTO'?'bg-green-600 border-green-400':`${theme==='dark'?'bg-slate-800 border-slate-600':'bg-gray-800 border-gray-600'}`}`}>
+                        <button
+                            onClick={toggleSteering}
+                            aria-label={`Autosteer ${autosteerPrimaryLabel}: ${autosteerSubLabel}`}
+                            className={`h-[74px] w-full max-w-[300px] rounded-xl flex items-center justify-between px-5 shadow-xl active:scale-95 border ${steeringMode==='AUTO'?'bg-green-600 border-green-400': autosteerReady ? 'bg-slate-800 border-green-500/55' : `${theme==='dark'?'bg-slate-800 border-slate-600':'bg-gray-800 border-gray-600'}`}`}
+                        >
                             <div className="flex flex-col items-start min-w-0">
-                                <span className={`text-xs font-black uppercase ${steeringMode==='AUTO'?'text-green-200':'text-slate-400'}`}>Autosteer</span>
-                                <span className="text-2xl font-black text-white truncate">{steeringMode==='AUTO'?'ENGAGED':'READY'}</span>
-                                <span className={`text-[10px] font-bold ${steeringMode==='AUTO'?'text-green-100':'text-slate-400'}`}>{rtkStatus === 'FIX' ? 'RTK fixed' : 'Waiting RTK'}</span>
+                                <span className={`text-xs font-black uppercase ${steeringMode==='AUTO'?'text-green-200': autosteerReady ? 'text-green-300' : 'text-slate-400'}`}>Autosteer</span>
+                                <span className="text-2xl font-black text-white truncate">{autosteerPrimaryLabel}</span>
+                                <span className={`text-[10px] font-bold ${steeringMode==='AUTO'?'text-green-100': autosteerReady ? 'text-green-200' : 'text-slate-400'}`}>{autosteerSubLabel}</span>
                             </div>
-                            <div className={`shrink-0 w-12 h-12 rounded-full flex items-center justify-center ${steeringMode==='AUTO'?'bg-white/20 text-white':'bg-black/20 text-slate-400'}`}>
+                            <div className={`shrink-0 w-12 h-12 rounded-full flex items-center justify-center ${steeringMode==='AUTO'?'bg-white/20 text-white': autosteerReady ? 'bg-green-500/15 text-green-300' : 'bg-black/20 text-slate-400'}`}>
                                 <SteeringWheelIcon className={`w-8 h-8 ${steeringMode==='AUTO'?'animate-spin-slow':''}`}/>
                             </div>
                         </button>
@@ -6391,7 +7199,7 @@ const renderLinesPanel = () => {
                               autoFocus
                           />
                           <div className="flex justify-end gap-3">
-                              <button onClick={() => { setLineNameModalOpen(false); resetLines(); setIsCreating(false); setDockMenuOpen(true); }} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Cancel</button>
+                              <button onClick={cancelSaveLineModal} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Cancel</button>
                               <button onClick={handleSaveLine} className="px-6 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500">Save</button>
                           </div>
                       </div>
@@ -6439,7 +7247,7 @@ const renderLinesPanel = () => {
                                 autoFocus
                             />
                             <div className="flex justify-end gap-3">
-                                <button onClick={() => {setBoundaryNameModalOpen(false); setDockMenuOpen(true); actions.setIsRecordingBoundary(false); actions.setTempBoundary([])}} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Cancel</button>
+                                <button onClick={() => {setBoundaryNameModalOpen(false); setDockMenuOpen(false); actions.setIsRecordingBoundary(false); actions.setTempBoundary([])}} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Cancel</button>
                                 <button onClick={handleSaveBoundary} className="px-6 py-2 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500">Save</button>
                             </div>
                         </div>
@@ -6569,7 +7377,7 @@ const renderLinesPanel = () => {
                     </div>
                 )}
                 {/* ACTION DOCK */}
-                <div className="absolute right-4 top-[150px] bottom-[128px] w-[96px] z-20 flex flex-col justify-center pointer-events-none">
+                <div className="absolute right-2 lg:right-4 top-[132px] bottom-[116px] w-[96px] z-20 flex flex-col justify-center pointer-events-none">
                     <div className="pointer-events-auto w-full flex flex-col items-end gap-2">
                         {renderActionDock()}
                     </div>
