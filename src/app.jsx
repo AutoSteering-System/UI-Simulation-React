@@ -75,6 +75,7 @@ const App = () => {
 
   // ACTION DOCK STATES
   const [isCreating, setIsCreating] = useState(false);
+  // false | 'line' | 'nudge' | 'tools'. The dock stays compact; panels overlay the map when requested.
   const [dockMenuOpen, setDockMenuOpen] = useState(false);
 
   // Driving & Physics
@@ -185,13 +186,17 @@ const App = () => {
   const [turnAssistActive, setTurnAssistActive] = useState(false);
   const [currentTime, setCurrentTime] = useState('');
   const setupOverlayOpen = menuOpen || settingsOpen || cameraPanelOpen || diagnosticsPanelOpen || linesPanelOpen || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || manualHeadingModalOpen || boundaryAlertOpen || deleteModalOpen || (fieldManagerOpen && !isRecordingBoundary);
+  const runDockSuppressed = setupOverlayOpen || rtkQualityOpen || eventHistoryOpen || productivityOpen || uTurnPanelOpen;
 
   useEffect(() => {
       if (!dockMenuOpen) return;
       const shouldCloseDockTools = isCreating
-          || isRecordingBoundary
-          || uTurnPanelOpen
-          || menuOpen
+           || isRecordingBoundary
+           || uTurnPanelOpen
+           || rtkQualityOpen
+           || eventHistoryOpen
+           || productivityOpen
+           || menuOpen
           || settingsOpen
           || fieldManagerOpen
           || linesPanelOpen
@@ -202,7 +207,7 @@ const App = () => {
           || boundaryAlertOpen
           || deleteModalOpen;
       if (shouldCloseDockTools) setDockMenuOpen(false);
-  }, [dockMenuOpen, isCreating, isRecordingBoundary, uTurnPanelOpen, menuOpen, settingsOpen, fieldManagerOpen, linesPanelOpen, lineModeModalOpen, lineNameModalOpen, boundaryNameModalOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen]);
+  }, [dockMenuOpen, isCreating, isRecordingBoundary, uTurnPanelOpen, rtkQualityOpen, eventHistoryOpen, productivityOpen, menuOpen, settingsOpen, fieldManagerOpen, linesPanelOpen, lineModeModalOpen, lineNameModalOpen, boundaryNameModalOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen]);
 
   // Store refs to guidance data for physics loop
   const guidanceRef = useRef({
@@ -509,6 +514,13 @@ const App = () => {
   // --- 2. INPUT ---
   useEffect(() => {
     const handleKeyDown = (e) => {
+        if (e.key === 'Escape' && dockMenuOpen) {
+            setDockMenuOpen(false);
+            return;
+        }
+        const focusedControl = e.target?.closest?.('input, textarea, select, [contenteditable="true"]');
+        const dockButtonActivation = e.target?.closest?.('[data-run-dock] button') && (e.key === ' ' || e.key === 'Enter');
+        if (focusedControl || dockButtonActivation) return;
         if (menuOpen || settingsOpen || cameraPanelOpen || diagnosticsPanelOpen || (fieldManagerOpen && !isRecordingBoundary) || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || linesPanelOpen || manualHeadingModalOpen || boundaryAlertOpen || deleteModalOpen) return;
         if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].indexOf(e.key) > -1) e.preventDefault();
         if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -521,7 +533,7 @@ const App = () => {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
-  }, [menuOpen, settingsOpen, cameraPanelOpen, diagnosticsPanelOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen]);
+  }, [dockMenuOpen, menuOpen, settingsOpen, cameraPanelOpen, diagnosticsPanelOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen]);
 
   // --- 3. PHYSICS ---
   useEffect(() => {
@@ -1075,6 +1087,7 @@ const App = () => {
   };
 
   const handleMapPointerDown = (e) => {
+      if (dockMenuOpen && !isCreating) setDockMenuOpen(false);
       setIsDraggingMap(false);
   };
   const handleMapPointerMove = (e) => {
@@ -1198,6 +1211,7 @@ const App = () => {
       actions.setPivotCenter(line.points.pivot?.center);
       actions.setPivotRadius(line.points.pivot?.radius);
       actions.setGuidanceLine(line.type);
+    actions.setShowGuidanceLines(true);
       if (line.isMulti !== undefined) actions.setIsMultiLineMode(line.isMulti);
       setLinesPanelOpen(false);
       setIsCreating(false);
@@ -1265,6 +1279,7 @@ const App = () => {
   const startStraightABCreation = () => {
       actions.setLineType('STRAIGHT_AB');
       resetLines();
+      actions.setShowGuidanceLines(true);
       setIsCreating(true);
       setDockMenuOpen(false);
       setLineModeModalOpen(false);
@@ -1308,6 +1323,7 @@ const App = () => {
           if (dist < 50) { showNotification(`Too short! Drive ${((50 - dist)/5).toFixed(1)}m more.`, "warning"); return; }
           actions.setPointB(nextPointB);
           actions.setGuidanceLine('STRAIGHT_AB');
+          actions.setShowGuidanceLines(true);
           const snappedHeading = normalizeHeadingValue(Math.atan2(nextPointB.x - pointA.x, pointA.y - nextPointB.y) * 180 / Math.PI);
           mapVisualHeadingRef.current = snappedHeading;
           setMapVisualHeading(snappedHeading);
@@ -1399,6 +1415,10 @@ const App = () => {
   const startBoundaryCreation = () => {
      setFieldManagerOpen(false);
      setDockMenuOpen(false); // Close menu
+     setRtkQualityOpen(false);
+     setEventHistoryOpen(false);
+     setProductivityOpen(false);
+     setUTurnPanelOpen(false);
      actions.setIsRecordingBoundary(true);
      physics.current.targetSpeed = 5;
      showNotification("Drive to record boundary...", "info");
@@ -1656,9 +1676,21 @@ const App = () => {
   const activeTaskRecord = activeTaskId ? fields.find(f => f.id === selectedFieldId)?.tasks?.find(task => task.id === activeTaskId) : null;
   const activeLineRecord = activeLineId ? (activeFieldRecord?.lines || fields.find(f => f.id === selectedFieldId)?.lines || []).filter(line => !line.archived).find(line => line.id === activeLineId) : null;
   const activeFieldAreaHa = parseFloat(String(activeFieldRecord?.area || '0').replace(/[^\d.]/g, '')) || 0;
-  const liveGuide = guidanceRef.current;
-  const hasGuidanceToEngage = Boolean(guidanceLine || activeLineRecord || liveGuide?.type);
+  const liveGuide = {
+      type: guidanceLine,
+      isMulti: isMultiLineMode,
+      width: implementSettings.width * PIXELS_PER_METER,
+      manualOffset,
+      points: {
+          a: pointA,
+          b: pointB,
+          aplus: { point: aPlusPoint, heading: aPlusHeading },
+          curve: curvePoints,
+          pivot: { center: pivotCenter, radius: pivotRadius }
+      }
+  };
   const liveGuidanceMetrics = getGuidanceMetrics(liveGuide, { ...worldPos, heading });
+  const hasGuidanceToEngage = Boolean((guidanceLine || activeLineRecord || liveGuide.type) && liveGuidanceMetrics.validLine);
   const getAxisHeadingError = (lineHeading, vehicleHeading) => {
       let diff = normalizeAngle(lineHeading - vehicleHeading);
       if (Math.abs(diff) > 90) diff = normalizeAngle(lineHeading + 180 - vehicleHeading);
@@ -1685,6 +1717,9 @@ const App = () => {
   };
   const straightABPreviewEnd = pointA ? { ...worldPos } : null;
   const liveRunStatus = (() => {
+      if (steeringMode === 'AUTO' && !hasGuidanceToEngage) {
+          return { steeringState: 'FAULT', steeringReason: 'Guidance geometry lost while engaged', overrideDetected: false, engageAllowed: false, recoveryAction: 'Return to manual' };
+      }
       if (steeringMode === 'AUTO' && rtkStatus !== 'FIX') {
           return { steeringState: 'FAULT', steeringReason: 'RTK lost while engaged', overrideDetected: false, engageAllowed: false, recoveryAction: 'Return to manual' };
       }
@@ -1709,21 +1744,125 @@ const App = () => {
       return { steeringState: 'READY', steeringReason: 'Ready to engage autosteer', overrideDetected: runStatus?.overrideDetected || false, engageAllowed: true, recoveryAction: 'Engage autosteer' };
   })();
   const currentRunStatus = { ...(runStatus || {}), ...liveRunStatus };
-  const autosteerReady = hasGuidanceToEngage && rtkStatus === 'FIX';
-  const autosteerPrimaryLabel = steeringMode === 'AUTO'
-      ? 'ENGAGED'
+  const autosteerReady = hasGuidanceToEngage
+      && rtkStatus === 'FIX'
+      && currentRunStatus.steeringState === 'READY'
+      && !currentRunStatus.overrideDetected;
+  const autosteerStateLabel = isRecordingBoundary
+      ? 'BOUNDARY'
+      : isCreating
+          ? 'CREATING'
+      : currentRunStatus.steeringState === 'FAULT'
+      ? 'FAULT'
+      : currentRunStatus.steeringState === 'PAUSED'
+          ? 'PAUSED'
+      : currentRunStatus.steeringState === 'ENGAGED'
+          ? 'ENGAGED'
+          : !hasGuidanceToEngage
+              ? 'NO LINE'
+              : currentRunStatus.overrideDetected || rtkStatus !== 'FIX' || currentRunStatus.engageAllowed === false
+                  ? 'BLOCKED'
+                  : 'READY';
+  const autosteerPrimaryLabel = isRecordingBoundary
+      ? 'RECORDING'
+      : isCreating
+          ? 'LINE SETUP'
+      : turnAssistActive
+          ? 'TURN ACTIVE'
+      : steeringMode === 'AUTO'
+      ? 'DISENGAGE'
       : !hasGuidanceToEngage
-          ? 'NO LINE'
+          ? 'SELECT LINE'
+          : currentRunStatus.overrideDetected
+              ? 'CLEAR OVERRIDE'
           : rtkStatus !== 'FIX'
-              ? 'WAIT RTK'
-              : 'READY';
-  const autosteerSubLabel = steeringMode === 'AUTO'
-      ? (rtkStatus === 'FIX' ? 'RTK fixed' : 'RTK lost')
+              ? 'CHECK RTK'
+              : currentRunStatus.engageAllowed === false
+                  ? 'VIEW ISSUE'
+                  : 'ENGAGE';
+  const autosteerSubLabel = isRecordingBoundary
+      ? `${tempBoundary.length} points · finish from the right controls`
+      : isCreating
+          ? 'Complete guidance from the right controls'
+      : currentRunStatus.steeringState === 'FAULT' || currentRunStatus.steeringState === 'PAUSED'
+          ? currentRunStatus.steeringReason
+      : steeringMode === 'AUTO'
+      ? 'Autosteer controlling active pass'
       : !hasGuidanceToEngage
-          ? 'Create or load line'
-          : rtkStatus === 'FIX'
-              ? 'Tap to engage'
-              : 'Waiting RTK';
+          ? 'Create or load guidance'
+          : currentRunStatus.overrideDetected
+              ? currentRunStatus.steeringReason
+          : autosteerReady
+              ? (activeLineRecord?.name || 'Guidance ready')
+              : (currentRunStatus.steeringReason || 'RTK FIX required');
+  const autosteerButtonTone = autosteerStateLabel === 'FAULT'
+      ? 'bg-red-700 border-red-400'
+      : autosteerStateLabel === 'PAUSED' || autosteerStateLabel === 'BOUNDARY'
+          ? 'bg-orange-500 border-orange-300'
+          : autosteerStateLabel === 'ENGAGED'
+              ? 'bg-green-600 border-green-400'
+              : autosteerReady || autosteerStateLabel === 'CREATING' || autosteerStateLabel === 'NO LINE'
+                  ? 'bg-blue-600 border-blue-400'
+                  : 'bg-slate-800 border-orange-500/70';
+  const autosteerAccentText = autosteerStateLabel === 'FAULT'
+      ? 'text-red-100'
+      : autosteerStateLabel === 'PAUSED' || autosteerStateLabel === 'BOUNDARY'
+          ? 'text-orange-50'
+          : autosteerStateLabel === 'ENGAGED'
+              ? 'text-green-100'
+              : autosteerReady || autosteerStateLabel === 'CREATING' || autosteerStateLabel === 'NO LINE'
+                  ? 'text-blue-100'
+                  : 'text-orange-300';
+  const autosteerIconTone = autosteerStateLabel === 'FAULT' || autosteerStateLabel === 'PAUSED' || autosteerStateLabel === 'BOUNDARY' || autosteerStateLabel === 'ENGAGED' || autosteerReady || autosteerStateLabel === 'CREATING' || autosteerStateLabel === 'NO LINE'
+      ? 'bg-white/20 text-white'
+      : 'bg-orange-500/15 text-orange-300';
+  const AutosteerStatusIcon = autosteerStateLabel === 'PAUSED'
+      ? Pause
+      : autosteerStateLabel === 'BOUNDARY'
+          ? MapPin
+          : autosteerStateLabel === 'CREATING'
+              ? Route
+              : SteeringWheelIcon;
+  const handleAutosteerPrimary = () => {
+      setDockMenuOpen(false);
+      if (isRecordingBoundary || isCreating) {
+          showNotification(isRecordingBoundary ? 'Finish or cancel boundary from the right controls' : 'Complete guidance setup from the right controls', 'info');
+          return;
+      }
+      if (turnAssistActive) {
+          showNotification('Complete or cancel the active turn before engaging autosteer', 'info');
+          return;
+      }
+      if (steeringMode === 'AUTO' || autosteerReady) {
+          toggleSteering();
+          return;
+      }
+      if (!hasGuidanceToEngage) {
+          setRtkQualityOpen(false);
+          setEventHistoryOpen(false);
+          setProductivityOpen(false);
+          setUTurnPanelOpen(false);
+          setDockMenuOpen('line');
+          showNotification('Select or create a guidance line', 'info');
+          return;
+      }
+      if (currentRunStatus.overrideDetected) {
+          clearOverrideState();
+          showNotification('Manual override cleared', 'info');
+          return;
+      }
+      if (currentRunStatus.engageAllowed === false && rtkStatus === 'FIX') {
+          setEventHistoryOpen(true);
+          setRtkQualityOpen(false);
+          setProductivityOpen(false);
+          showNotification(currentRunStatus.steeringReason || 'Autosteer is blocked', 'warning');
+          return;
+      }
+      setRtkQualityOpen(true);
+      setEventHistoryOpen(false);
+      setProductivityOpen(false);
+      showNotification('RTK FIX required before autosteer', 'warning');
+  };
   const currentRtkTelemetry = {
       ...(rtkTelemetry || {}),
       fixType: rtkStatus,
@@ -1871,7 +2010,7 @@ const App = () => {
           : (uTurnSettings?.nextPass === 'Skip' ? `S${Math.max(1, Number(uTurnSettings?.skipPasses || 1))}` : '+1');
 
       return (
-          <div className={`h-[62px] min-w-[310px] max-w-[460px] w-full rounded-xl border-2 px-3 flex items-center gap-3 justify-center shadow-sm ${getXteTone()}`}>
+          <div className={`h-[62px] min-w-[220px] xl:min-w-[310px] max-w-[460px] w-full rounded-xl border-2 px-2 xl:px-3 flex items-center gap-2 xl:gap-3 justify-center shadow-sm ${getXteTone()}`}>
               <div className="flex items-end gap-1.5 h-8">
                   {[-4, -3, -2, -1, 0, 1, 2, 3, 4].map((step) => {
                       const active = step === 0 || (direction === 'LEFT' && step < 0 && Math.abs(step) <= litBars) || (direction === 'RIGHT' && step > 0 && step <= litBars);
@@ -1888,9 +2027,9 @@ const App = () => {
                   <span className="text-3xl font-black leading-none">{abs.toFixed(abs >= 10 ? 0 : 1)}</span>
                   <span className="text-xs uppercase font-black tracking-wider opacity-80">cm {direction}</span>
               </div>
-              <div className={`hidden lg:grid grid-cols-3 gap-1.5 pl-2 border-l ${t.borderCard}`}>
+              <div className={`hidden xl:grid grid-cols-3 gap-1.5 pl-2 border-l ${t.borderCard}`}>
                   {[
-                      ['ERR', `${currentRunKpi.headingErrDeg.toFixed(1)}deg`],
+                      ['ERR', `${currentRunKpi.headingErrDeg.toFixed(1)}°`],
                       ['PASS', `${currentRunKpi.passIndex >= 0 ? '+' : ''}${currentRunKpi.passIndex}`],
                       ['NEXT', nextPassValue]
                   ].map(([label, value]) => (
@@ -1930,13 +2069,14 @@ const App = () => {
               type="button"
               aria-label={`Open RTK quality, ${currentRtkTelemetry.fixType}, rover ${currentGnssTelemetry.roverUsedSats} used of ${currentGnssTelemetry.roverVisibleSats} visible satellites`}
               onClick={() => { setRtkQualityOpen(prev => !prev); setEventHistoryOpen(false); setProductivityOpen(false); }}
-              className={`h-12 min-w-[148px] lg:min-w-[162px] px-3 rounded-xl border shadow-sm text-left ${getRtkQualityTone()} focus:outline-none focus:ring-2 focus:ring-blue-500 flex flex-col justify-center gap-1`}
+              disabled={isRecordingBoundary}
+              className={`h-12 min-w-[148px] xl:min-w-[162px] px-3 rounded-xl border shadow-sm text-left ${getRtkQualityTone()} focus:outline-none focus:ring-2 focus:ring-blue-500 flex flex-col justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed`}
           >
-              <div className="text-[10px] uppercase font-black opacity-85 leading-none">GNSS / RTK</div>
+              <div className="text-[10px] uppercase font-black opacity-80 leading-none">GNSS / RTK</div>
               <div className="flex items-center gap-1.5 min-w-0">
                   <Globe className="w-3.5 h-3.5" />
                   <span className="text-sm font-black">{currentRtkTelemetry.fixType}</span>
-                  <span className="text-sm font-black opacity-90">{currentGnssTelemetry.roverVisibleSats}/{currentGnssTelemetry.baseVisibleSats}</span>
+                  <span className="text-sm font-black opacity-90">{currentGnssTelemetry.roverUsedSats}/{currentGnssTelemetry.roverVisibleSats} SAT</span>
               </div>
           </button>
 
@@ -1944,7 +2084,8 @@ const App = () => {
               type="button"
               aria-label={`${activeAlarms.length} active alarms, open event history`}
               onClick={() => { setEventHistoryOpen(prev => !prev); setRtkQualityOpen(false); setProductivityOpen(false); }}
-              className={`h-12 min-w-[58px] px-3 rounded-xl border ${activeAlarms.length > 0 ? getSeverityTone(activeAlarms[0].severity) : `${theme === 'dark' ? 'bg-slate-900 border-slate-700 text-slate-300' : 'bg-white border-gray-300 text-slate-700'}`} flex flex-col items-center justify-center shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500`}
+              disabled={isRecordingBoundary}
+              className={`h-12 min-w-[58px] px-3 rounded-xl border ${activeAlarms.length > 0 ? getSeverityTone(activeAlarms[0].severity) : `${theme === 'dark' ? 'bg-slate-900 border-slate-700 text-slate-300' : 'bg-white border-gray-300 text-slate-700'}`} flex flex-col items-center justify-center shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed`}
           >
               <AlertTriangle className="w-4 h-4" />
               <span className="text-xs font-black">{activeAlarms.length}</span>
@@ -1964,7 +2105,7 @@ const App = () => {
       if (!pinned) return null;
       const isCritical = pinned.severity === 'critical';
       return (
-          <div className={`absolute left-[154px] right-[120px] top-3 z-40 rounded-xl border shadow-2xl px-4 py-3 flex items-center justify-between gap-4 ${isCritical ? 'border-red-500 bg-red-600 text-white' : 'border-yellow-500 bg-yellow-500 text-black'}`}>
+          <div className={`absolute left-[154px] right-[118px] xl:right-[128px] top-3 z-40 rounded-xl border shadow-2xl px-4 py-3 flex items-center justify-between gap-4 ${isCritical ? 'border-red-500 bg-red-600 text-white' : 'border-yellow-500 bg-yellow-500 text-black'}`}>
               <div className="min-w-0 flex items-center gap-3">
                   <AlertTriangle className="w-5 h-5 shrink-0" />
                   <div className="min-w-0">
@@ -3567,28 +3708,32 @@ const App = () => {
 
   const renderActionDock = () => {
       const isDarkDock = theme === 'dark';
-      const shellClass = `w-[96px] rounded-[22px] border ${isDarkDock ? 'border-slate-700/90 bg-slate-950/92 shadow-black/30' : 'border-slate-200 bg-white/96 shadow-slate-900/12'} shadow-xl backdrop-blur-md pointer-events-auto p-1.5 flex flex-col gap-1.5 select-none`;
-      const flyoutClass = `absolute right-[104px] top-1/2 -translate-y-1/2 w-[246px] max-w-[calc(100vw-134px)] max-h-[calc(100vh-260px)] overflow-y-auto rounded-[22px] border ${isDarkDock ? 'border-slate-700/90 bg-slate-950/94 shadow-black/35' : 'border-slate-200 bg-white/96 shadow-slate-900/14'} shadow-2xl backdrop-blur-md pointer-events-auto p-2 select-none`;
-      const buttonTone = {
-          blue: 'bg-blue-600 text-white border-blue-500 shadow-blue-900/20 hover:bg-blue-500',
-          green: 'bg-green-600 text-white border-green-500 shadow-green-900/20 hover:bg-green-500',
-          orange: 'bg-orange-500 text-white border-orange-400 shadow-orange-900/20 hover:bg-orange-400',
-          red: 'bg-red-500 text-white border-red-400 shadow-red-900/20 hover:bg-red-400',
-          gray: isDarkDock ? 'bg-slate-900 text-slate-200 border-slate-700 hover:bg-slate-800' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+      const dockSurface = isDarkDock
+          ? 'bg-slate-950/90 border-slate-700/90 shadow-black/40'
+          : 'bg-white/90 border-slate-200 shadow-slate-900/15';
+      const drawerSurface = isDarkDock
+          ? 'bg-slate-950/95 border-slate-700 shadow-black/40'
+          : 'bg-white/95 border-slate-200 shadow-slate-900/20';
+      const solidTone = {
+          blue: 'bg-blue-600 text-white shadow-md shadow-blue-900/20 hover:bg-blue-500',
+          green: 'bg-green-600 text-white shadow-md shadow-green-900/20 hover:bg-green-500',
+          orange: 'bg-orange-500 text-white shadow-md shadow-orange-900/20 hover:bg-orange-400',
+          red: 'bg-red-500 text-white shadow-md shadow-red-900/20 hover:bg-red-400',
+          gray: isDarkDock ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-800 text-white hover:bg-slate-700'
       };
-      const secondaryTone = {
-          blue: isDarkDock ? 'text-blue-300 bg-blue-500/12 border-blue-400/30' : 'text-blue-700 bg-blue-50 border-blue-200',
-          green: isDarkDock ? 'text-green-300 bg-green-500/12 border-green-400/30' : 'text-green-700 bg-green-50 border-green-200',
-          orange: isDarkDock ? 'text-orange-300 bg-orange-500/12 border-orange-400/30' : 'text-orange-700 bg-orange-50 border-orange-200',
-          red: isDarkDock ? 'text-red-300 bg-red-500/12 border-red-400/30' : 'text-red-700 bg-red-50 border-red-200',
-          gray: isDarkDock ? 'text-slate-200 bg-slate-900/88 border-slate-700 hover:bg-slate-800' : 'text-slate-700 bg-white border-slate-200 hover:bg-slate-50'
+      const ghostTone = {
+          blue: isDarkDock ? 'text-blue-300 hover:bg-blue-500/10' : 'text-blue-700 hover:bg-blue-500/10',
+          green: isDarkDock ? 'text-green-300 hover:bg-green-500/10' : 'text-green-700 hover:bg-green-500/10',
+          orange: isDarkDock ? 'text-orange-300 hover:bg-orange-500/10' : 'text-orange-700 hover:bg-orange-500/10',
+          red: isDarkDock ? 'text-red-300 hover:bg-red-500/10' : 'text-red-700 hover:bg-red-500/10',
+          gray: `${t.textDim} hover:bg-blue-500/5`
       };
       const statusTone = {
-          blue: isDarkDock ? 'bg-blue-500/14 text-blue-300' : 'bg-blue-50 text-blue-700',
-          green: isDarkDock ? 'bg-green-500/14 text-green-300' : 'bg-green-50 text-green-700',
-          orange: isDarkDock ? 'bg-orange-500/14 text-orange-300' : 'bg-orange-50 text-orange-700',
-          red: isDarkDock ? 'bg-red-500/14 text-red-300' : 'bg-red-50 text-red-700',
-          gray: isDarkDock ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'
+          blue: isDarkDock ? 'text-blue-300' : 'text-blue-700',
+          green: isDarkDock ? 'text-green-300' : 'text-green-700',
+          orange: isDarkDock ? 'text-orange-300' : 'text-orange-700',
+          red: isDarkDock ? 'text-red-300' : 'text-red-700',
+          gray: t.textDim
       };
       const dotTone = {
           blue: 'bg-blue-500',
@@ -3597,22 +3742,27 @@ const App = () => {
           red: 'bg-red-500',
           gray: isDarkDock ? 'bg-slate-500' : 'bg-slate-400'
       };
-      const stopDockPointer = (event) => {
-          event.stopPropagation();
-      };
+      const stopDockPointer = (event) => event.stopPropagation();
       const runDockAction = (handler) => (event) => {
           event.preventDefault();
           event.stopPropagation();
           handler?.(event);
       };
       const renderShell = ({ status, tone = 'gray', children }) => (
-          <div className={shellClass} onPointerDown={stopDockPointer} onPointerMove={stopDockPointer} onPointerUp={stopDockPointer} onClick={stopDockPointer}>
-              <div className={`h-6 rounded-full flex items-center justify-center gap-1.5 text-[8px] font-black uppercase tracking-wide ${statusTone[tone] || statusTone.gray}`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${dotTone[tone] || dotTone.gray}`} />
+          <section
+              aria-label={`${status} contextual controls`}
+              className={`pointer-events-auto w-[94px] xl:w-[104px] max-h-full overflow-y-auto rounded-2xl border ${dockSurface} backdrop-blur-xl p-2 flex flex-col items-center gap-2 select-none`}
+              onPointerDown={stopDockPointer}
+              onPointerMove={stopDockPointer}
+              onPointerUp={stopDockPointer}
+              onClick={stopDockPointer}
+          >
+              <div className={`w-full h-6 flex items-center justify-center gap-1.5 px-1 text-[10px] font-black uppercase tracking-wide ${statusTone[tone] || statusTone.gray}`}>
+                  <span className={`w-2 h-2 rounded-full ${dotTone[tone] || dotTone.gray}`} />
                   <span className="truncate">{status}</span>
               </div>
               {children}
-          </div>
+          </section>
       );
       const renderMainButton = ({ icon: Icon, label, sub, color = 'blue', onClick, pulse = false }) => (
           <button
@@ -3620,48 +3770,41 @@ const App = () => {
               onPointerDown={stopDockPointer}
               onPointerUp={stopDockPointer}
               onClick={runDockAction(onClick)}
-              title={sub ? `${label} ${sub}` : label}
-              className={`w-full h-[72px] rounded-[18px] border ${buttonTone[color] || buttonTone.gray} flex flex-col items-center justify-center gap-1 active:scale-[0.98] transition-all shadow-lg focus:outline-none focus:ring-2 focus:ring-blue-500/45 touch-manipulation ${pulse ? 'animate-pulse' : ''}`}
+              title={sub ? `${label}: ${sub}` : label}
+              aria-label={sub ? `${label}: ${sub}` : label}
+              className={`w-full min-h-[76px] rounded-xl ${solidTone[color] || solidTone.gray} flex flex-col items-center justify-center gap-1 px-1.5 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/50 touch-manipulation ${pulse ? 'ring-2 ring-white/50' : ''}`}
           >
               <Icon className="w-6 h-6 shrink-0" />
-              <span className="max-w-full px-1 text-[10px] font-black uppercase leading-none truncate">{label}</span>
-              {sub && <span className="max-w-full px-1 text-[8px] font-black uppercase leading-none opacity-80 truncate">{sub}</span>}
+              <span className="max-w-full px-1 text-[12px] font-black leading-none truncate">{label}</span>
+              {sub && <span className="max-w-full px-1 text-[10px] font-bold leading-none opacity-80 truncate">{sub}</span>}
           </button>
       );
-      const renderTinyButton = ({ icon: Icon, label, color = 'gray', onClick, hidden = false }) => {
+      const renderTinyButton = ({ icon: Icon, label, color = 'gray', onClick, hidden = false, active = false, disabled = false, ariaExpanded, ariaPressed }) => {
           if (hidden) return null;
           return (
               <button
                   type="button"
                   onPointerDown={stopDockPointer}
                   onPointerUp={stopDockPointer}
-                  onClick={runDockAction(onClick)}
+                  onClick={disabled ? undefined : runDockAction(onClick)}
                   title={label}
-                  className={`h-[42px] min-w-0 rounded-[15px] border ${secondaryTone[color] || secondaryTone.gray} flex items-center gap-1.5 px-2.5 active:scale-[0.98] transition-all shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/35 touch-manipulation`}
+                  aria-label={label}
+                  aria-expanded={ariaExpanded}
+                  aria-pressed={ariaPressed}
+                  disabled={disabled}
+                  className={`w-full min-h-[58px] rounded-xl ${active ? (isDarkDock ? 'bg-blue-500/20 border-blue-400/50' : 'bg-blue-50 border-blue-400') : (isDarkDock ? 'bg-slate-900/60' : 'bg-white/70')} ${ghostTone[color] || ghostTone.gray} border ${active ? '' : t.borderCard} flex flex-col items-center justify-center gap-1 px-1.5 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/40 touch-manipulation disabled:opacity-40 disabled:cursor-not-allowed`}
               >
-                  <Icon className="w-4 h-4 shrink-0" />
-                  <span className="min-w-0 flex-1 text-left text-[10px] font-black uppercase leading-none truncate">{label}</span>
+                  <Icon className="w-5 h-5 shrink-0" />
+                  <span className="max-w-full text-center text-[11px] xl:text-xs font-black leading-none truncate">{label}</span>
               </button>
           );
       };
-      const renderToolButton = ({ icon: Icon, label, color = 'gray', onClick }) => (
-          <button
-              type="button"
-              onPointerDown={stopDockPointer}
-              onPointerUp={stopDockPointer}
-              onClick={runDockAction(onClick)}
-              title={label}
-              className={`h-[60px] min-w-0 rounded-[16px] border ${secondaryTone[color] || secondaryTone.gray} flex flex-col items-center justify-center gap-1 px-1 active:scale-[0.98] transition-all shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/35 touch-manipulation`}
-          >
-              <Icon className="w-5 h-5 shrink-0" />
-              <span className="max-w-full text-center text-[9px] font-black uppercase leading-none truncate">{label}</span>
-          </button>
-      );
-      const renderGrid = (children) => <div className="flex flex-col gap-1.5">{children}</div>;
+      const renderGrid = (children) => <div className="w-full flex flex-col items-center gap-1.5">{children}</div>;
+      const renderDivider = () => <div className={`h-px w-2/3 ${t.divider}`} />;
       const renderStepLine = (steps) => (
-          <div className={`h-6 rounded-full border ${t.borderCard} ${isDarkDock ? 'bg-slate-900/80' : 'bg-slate-50'} flex items-center justify-center gap-2`}>
+          <div className={`w-full min-h-7 rounded-lg ${isDarkDock ? 'bg-slate-900/75' : 'bg-slate-100'} flex items-center justify-center gap-2 px-1`}>
               {steps.map((step, index) => (
-                  <div key={`${step.label}-${index}`} className={`flex items-center gap-1 text-[8px] font-black uppercase ${step.done ? 'text-blue-500' : t.textSub}`}>
+                  <div key={`${step.label}-${index}`} className={`flex items-center gap-1 text-[9px] font-black uppercase ${step.done ? 'text-blue-500' : t.textSub}`}>
                       <span className={`w-1.5 h-1.5 rounded-full ${step.done ? 'bg-blue-500' : isDarkDock ? 'bg-slate-700' : 'bg-slate-300'}`} />
                       {step.label}
                   </div>
@@ -3669,13 +3812,21 @@ const App = () => {
           </div>
       );
       const compactStatus = (value) => String(value || '').replace(/_/g, ' ');
+      const offsetCm = manualOffset / PIXELS_PER_METER * 100;
+      const activeGuideName = activeLineRecord?.name || (hasGuidanceToEngage ? compactStatus(guidanceLine || lineType) : 'No guidance line');
+      const guidanceBadge = autosteerReady
+          ? { label: 'READY', className: 'bg-blue-600 text-white' }
+          : currentRunStatus.overrideDetected
+              ? { label: 'OVERRIDE', className: 'bg-orange-500 text-white' }
+              : rtkStatus !== 'FIX'
+                  ? { label: rtkStatus, className: 'bg-orange-500 text-white' }
+                  : { label: 'BLOCKED', className: 'bg-orange-500 text-white' };
+      const toggleDockPanel = (panel) => setDockMenuOpen(open => open === panel ? false : panel);
       const openUTurnSetup = () => {
           setDockMenuOpen(false);
           setUTurnPanelOpen(true);
       };
-      const openLinesLibrary = () => {
-          openLinesCatalog();
-      };
+      const openLinesLibrary = () => openLinesCatalog();
       const openLineTypePicker = () => {
           setDockMenuOpen(false);
           setLinesPanelOpen(false);
@@ -3683,77 +3834,176 @@ const App = () => {
           setUTurnPanelOpen(false);
           setLineModeModalOpen(true);
       };
-      const toggleDockMenu = () => setDockMenuOpen(open => !open);
       const renderToolsToggle = () => renderTinyButton({
-          icon: dockMenuOpen ? X : MoreHorizontal,
-          label: dockMenuOpen ? "Close" : "Tools",
-          color: dockMenuOpen ? "blue" : "gray",
-          onClick: toggleDockMenu
+          icon: MoreHorizontal,
+          label: 'More',
+          color: dockMenuOpen === 'tools' ? 'blue' : 'gray',
+          active: dockMenuOpen === 'tools',
+          ariaExpanded: dockMenuOpen === 'tools',
+          onClick: () => toggleDockPanel('tools')
       });
-      const renderFlyout = () => (
-          <div className={flyoutClass} onPointerDown={stopDockPointer} onPointerMove={stopDockPointer} onPointerUp={stopDockPointer} onClick={stopDockPointer}>
-              <div className={`h-8 mb-1.5 px-2 rounded-[14px] flex items-center justify-between ${isDarkDock ? 'bg-slate-900/85 text-slate-200' : 'bg-slate-50 text-slate-700'}`}>
-                  <span className="text-[10px] font-black uppercase tracking-wide">Tools</span>
-                  <button
-                      type="button"
-                      onPointerDown={stopDockPointer}
-                      onPointerUp={stopDockPointer}
-                      onClick={runDockAction(() => setDockMenuOpen(false))}
-                      className={`w-7 h-7 rounded-lg border ${secondaryTone.gray} flex items-center justify-center active:scale-95 transition-all`}
-                      title="Close tools"
-                  >
+      const drawerTone = {
+          blue: isDarkDock ? 'border-blue-500/30 bg-blue-500/10 text-blue-300' : 'border-blue-200 bg-blue-50 text-blue-700',
+          orange: isDarkDock ? 'border-orange-500/30 bg-orange-500/10 text-orange-300' : 'border-orange-200 bg-orange-50 text-orange-700',
+          gray: isDarkDock ? 'border-slate-700 bg-slate-900/70 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-800'
+      };
+      const renderDrawerShell = ({ icon: Icon, title, subtitle, children }) => (
+          <section
+              className={`pointer-events-auto w-[288px] xl:w-[320px] max-h-full overflow-y-auto rounded-2xl border ${drawerSurface} backdrop-blur-xl shadow-2xl`}
+              onPointerDown={stopDockPointer}
+              onPointerMove={stopDockPointer}
+              onPointerUp={stopDockPointer}
+              onClick={stopDockPointer}
+          >
+              <div className={`sticky top-0 z-10 px-4 py-3 border-b ${t.divider} ${isDarkDock ? 'bg-slate-950/95' : 'bg-white/95'} backdrop-blur-xl flex items-center gap-3`}>
+                  <div className={`w-10 h-10 rounded-xl ${isDarkDock ? 'bg-blue-500/15 text-blue-300' : 'bg-blue-50 text-blue-600'} flex items-center justify-center`}>
+                      <Icon className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                      <div className={`text-sm font-black ${t.textMain}`}>{title}</div>
+                      <div className={`text-xs ${t.textSub} truncate`}>{subtitle}</div>
+                  </div>
+                  <button type="button" aria-label={`Close ${title}`} onClick={runDockAction(() => setDockMenuOpen(false))} className={`w-9 h-9 rounded-lg border ${t.borderCard} ${t.textMain} flex items-center justify-center hover:brightness-95`}>
                       <X className="w-4 h-4" />
                   </button>
               </div>
-              <div className="grid grid-cols-3 gap-1.5">
-                  {renderToolButton({ icon: CornerUpLeft, label: "U-Turn", color: turnAssistActive ? "green" : "gray", onClick: () => handleUTurn() })}
-                  {renderToolButton({ icon: Settings, label: "Plan", color: "gray", onClick: openUTurnSetup })}
-                  {renderToolButton({ icon: GitCommitHorizontal, label: "Type", color: "blue", onClick: openLineTypePicker })}
-                  {renderToolButton({ icon: FolderOpen, label: "Lines", color: "gray", onClick: openLinesLibrary })}
-                  {renderToolButton({ icon: MapPin, label: "Bound", color: "orange", onClick: startBoundaryCreation })}
-                  {renderToolButton({ icon: showGuidanceLines ? EyeOff : Eye, label: showGuidanceLines ? "Hide" : "Show", color: showGuidanceLines ? "blue" : "gray", onClick: () => actions.setShowGuidanceLines(!showGuidanceLines) })}
-                  {renderToolButton({ icon: sceneViewMode === '3D' ? MapIcon : Layers, label: sceneViewMode === '3D' ? "2D" : "3D", color: "gray", onClick: () => handleSceneViewChange(sceneViewMode === '3D' ? '2D' : '3D') })}
-                  {renderToolButton({ icon: Plus, label: "Zoom +", color: "gray", onClick: () => handleZoom('in') })}
-                  {renderToolButton({ icon: Minus, label: "Zoom -", color: "gray", onClick: () => handleZoom('out') })}
-                  {renderToolButton({ icon: Menu, label: "Menu", color: "gray", onClick: () => { setDockMenuOpen(false); setMenuOpen(true); } })}
+              <div className="p-4 space-y-3">{children}</div>
+          </section>
+      );
+      const renderDrawerAction = ({ icon: Icon, label, detail, onClick, tone = 'gray' }) => (
+          <button
+              type="button"
+              onClick={runDockAction(onClick)}
+              className={`w-full min-h-[58px] rounded-xl border ${drawerTone[tone] || drawerTone.gray} px-3 py-2.5 flex items-center gap-3 text-left active:scale-[0.99] transition focus:outline-none focus:ring-2 focus:ring-blue-500/40`}
+          >
+              <Icon className="w-5 h-5 shrink-0" />
+              <div className="min-w-0">
+                  <div className="text-[13px] font-black leading-tight">{label}</div>
+                  {detail && <div className={`mt-0.5 text-[11px] leading-tight ${t.textSub}`}>{detail}</div>}
+              </div>
+          </button>
+      );
+      const renderNudgeControls = () => (
+          <div className={`rounded-xl border ${t.borderCard} ${isDarkDock ? 'bg-slate-900/60' : 'bg-slate-50'} p-3`}>
+              <div className="flex items-center justify-between gap-3 mb-3">
+                  <div>
+                      <div className={`text-[11px] font-black uppercase ${t.textSub}`}>Guidance offset</div>
+                      <div className={`text-lg font-black ${Math.abs(offsetCm) > 0.05 ? 'text-blue-500' : t.textMain}`}>{offsetCm.toFixed(1)} cm</div>
+                  </div>
+                  <button type="button" onClick={runDockAction(() => actions.setManualOffset(0))} className={`h-9 px-3 rounded-lg border ${t.borderCard} ${t.textMain} text-xs font-black`}>Reset</button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                  <button type="button" onClick={runDockAction(() => handleTrim('left'))} className={`h-14 rounded-xl border ${t.borderCard} ${t.textMain} font-black flex items-center justify-center gap-2 hover:bg-blue-500/10`}>
+                      <CornerUpLeft className="w-5 h-5 text-blue-500" /> -1 cm
+                  </button>
+                  <button type="button" onClick={runDockAction(() => handleTrim('right'))} className={`h-14 rounded-xl border ${t.borderCard} ${t.textMain} font-black flex items-center justify-center gap-2 hover:bg-blue-500/10`}>
+                      +1 cm <CornerUpRight className="w-5 h-5 text-blue-500" />
+                  </button>
               </div>
           </div>
       );
-      const renderDockWithFlyout = (children) => (
-          <div className="relative pointer-events-auto" onPointerDown={stopDockPointer} onPointerMove={stopDockPointer} onPointerUp={stopDockPointer} onClick={stopDockPointer}>
-              {dockMenuOpen && renderFlyout()}
-              {children}
+      const renderLinePanel = () => renderDrawerShell({
+          icon: Route,
+          title: 'Guidance Line',
+          subtitle: activeGuideName,
+          children: (
+              <>
+                  <div className={`rounded-xl border ${hasGuidanceToEngage ? drawerTone.blue : drawerTone.gray} p-3`}>
+                      <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                              <div className="text-[11px] font-black uppercase opacity-75">{hasGuidanceToEngage ? 'Current line' : 'Guidance required'}</div>
+                              <div className="mt-1 text-base font-black truncate">{activeGuideName}</div>
+                              <div className="mt-1 text-xs font-bold opacity-75">{hasGuidanceToEngage ? `${compactStatus(lineType)} / ${isMultiLineMode ? 'Parallel passes' : 'Single line'}` : 'Select a saved line or create a new one'}</div>
+                          </div>
+                          {hasGuidanceToEngage && <span className={`shrink-0 px-2 py-1 rounded-lg text-[10px] font-black ${guidanceBadge.className}`}>{guidanceBadge.label}</span>}
+                      </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                      {renderDrawerAction({ icon: FolderOpen, label: 'Line Library', detail: 'Load saved guidance', onClick: openLinesLibrary })}
+                      {renderDrawerAction({ icon: GitCommitHorizontal, label: 'New Line', detail: 'Choose line type', tone: 'blue', onClick: openLineTypePicker })}
+                  </div>
+                  {renderDrawerAction({ icon: Route, label: 'Create Straight AB', detail: 'Set point A, drive, then set point B', tone: 'blue', onClick: startStraightABCreation })}
+                  {!activeLineId && hasGuidanceToEngage && renderDrawerAction({ icon: Save, label: 'Save Current Line', detail: 'Store this guidance line in the active field', onClick: openSaveLineModal })}
+              </>
+          )
+      });
+      const renderNudgePanel = () => renderDrawerShell({
+          icon: ArrowLeftRight,
+          title: 'Nudge Guidance',
+          subtitle: activeGuideName,
+          children: (
+              <>
+                  <div className={`rounded-xl border ${drawerTone.blue} p-3`}>
+                      <div className="text-[11px] font-black uppercase opacity-75">Active guidance</div>
+                      <div className="mt-1 text-base font-black truncate">{activeGuideName}</div>
+                      <div className="mt-1 text-xs font-bold opacity-75">Move the active pass without changing the saved line</div>
+                  </div>
+                  {renderNudgeControls()}
+              </>
+          )
+      });
+      const renderToolsPanel = () => renderDrawerShell({
+          icon: MoreHorizontal,
+          title: 'Map & Run Tools',
+          subtitle: 'Secondary controls stay out of the main canvas',
+          children: (
+                  <>
+                  <div className={`text-[11px] font-black uppercase ${t.textSub}`}>Map presentation</div>
+                  {renderDrawerAction({ icon: showGuidanceLines ? EyeOff : Eye, label: showGuidanceLines ? 'Hide Lines' : 'Show Lines', onClick: () => actions.setShowGuidanceLines(!showGuidanceLines) })}
+                  <div className="grid grid-cols-2 gap-2">
+                      {renderDrawerAction({ icon: Plus, label: 'Zoom In', onClick: () => handleZoom('in') })}
+                      {renderDrawerAction({ icon: Minus, label: 'Zoom Out', onClick: () => handleZoom('out') })}
+                  </div>
+                  {renderDrawerAction({ icon: Crosshair, label: 'Center Vehicle', detail: 'Return the map to the live vehicle position', onClick: handleRecenter })}
+                  <div className={`pt-1 text-[11px] font-black uppercase ${t.textSub}`}>Run setup</div>
+                  <div className="grid grid-cols-2 gap-2">
+                      {renderDrawerAction({ icon: MapPin, label: 'Record Boundary', detail: 'Drive the field edge', tone: 'orange', onClick: startBoundaryCreation })}
+                      {renderDrawerAction({ icon: Settings, label: 'U-Turn Plan', detail: 'Pattern and next pass', onClick: openUTurnSetup })}
+                  </div>
+              </>
+          )
+      });
+      const renderContextDrawer = () => {
+          if (dockMenuOpen === 'line') return renderLinePanel();
+          if (dockMenuOpen === 'nudge') return renderNudgePanel();
+          if (dockMenuOpen === 'tools') return renderToolsPanel();
+          return null;
+      };
+      const renderDockLayout = (dock) => (
+          <div className="h-full max-h-full flex items-start gap-2 pointer-events-none">
+              {renderContextDrawer()}
+              {dock}
           </div>
       );
 
       if (isRecordingBoundary) {
-          return renderShell({
-              status: "Bound",
-              tone: "orange",
+          return renderDockLayout(renderShell({
+              status: 'Boundary',
+              tone: 'orange',
               children: (
                   <>
-                      {renderMainButton({ icon: Square, label: "Finish", sub: `${tempBoundary.length} pts`, color: "green", onClick: finishBoundaryRecording })}
-                      {renderTinyButton({ icon: X, label: "Cancel", color: "red", onClick: cancelBoundaryRecording })}
+                      {renderMainButton({ icon: Square, label: 'Finish', sub: `${tempBoundary.length} pts`, color: 'green', onClick: finishBoundaryRecording })}
+                      {renderDivider()}
+                      {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: cancelBoundaryRecording })}
                   </>
               )
-          });
+          }));
       }
 
       if (uTurnPanelOpen) return null;
 
       if (steeringMode === 'AUTO') {
-          return renderDockWithFlyout(renderShell({
-              status: "Auto",
-              tone: "green",
+          return renderDockLayout(renderShell({
+              status: autosteerStateLabel,
+              tone: autosteerStateLabel === 'FAULT' ? 'red' : autosteerStateLabel === 'PAUSED' ? 'orange' : 'green',
               children: (
                   <>
-                      {renderMainButton({ icon: Pause, label: "Pause", color: "orange", onClick: toggleSteering })}
+                      {renderMainButton({ icon: ArrowLeftRight, label: 'Nudge', sub: `${offsetCm.toFixed(0)} cm`, color: 'blue', onClick: () => toggleDockPanel('nudge') })}
+                      {renderDivider()}
                       {renderGrid(
                           <>
-                              {renderTinyButton({ icon: CornerUpLeft, label: "L 1cm", color: "green", onClick: () => handleTrim('left') })}
-                              {renderTinyButton({ icon: CornerUpRight, label: "R 1cm", color: "green", onClick: () => handleTrim('right') })}
-                              {renderTinyButton({ icon: CornerUpLeft, label: "U-Turn", color: turnAssistActive ? "green" : "gray", onClick: () => handleUTurn() })}
-                              {renderToolsToggle()}
+                              {renderTinyButton({ icon: CornerUpLeft, label: '-1 cm', color: 'blue', onClick: () => handleTrim('left') })}
+                              {renderTinyButton({ icon: CornerUpRight, label: '+1 cm', color: 'blue', onClick: () => handleTrim('right') })}
                           </>
                       )}
                   </>
@@ -3763,65 +4013,66 @@ const App = () => {
 
       if (isCreating) {
           let title = compactStatus(lineType);
-          let status = "Create";
+          let status = 'Create';
           let primary = null;
           let content = null;
-          let tone = "blue";
+          let tone = 'blue';
           switch (lineType) {
-              case 'STRAIGHT_AB':
-                  let abLabel = "Set A"; let abColor = "blue";
-                  if (pointA && !pointB) { abLabel = "Set B"; abColor = "red"; } else if (pointA && pointB) { abLabel = "Set A"; abColor = "green"; }
-
+              case 'STRAIGHT_AB': {
+                  let abLabel = 'Set A';
+                  let abColor = 'blue';
+                  if (pointA && !pointB) { abLabel = 'Set B'; abColor = 'blue'; }
+                  else if (pointA && pointB) { abLabel = 'Set A'; abColor = 'green'; }
                   const handleCancelAB = () => {
                       if (pointA && !pointB) {
                           actions.setPointA(null);
-                          showNotification("Reset to Set A", "info");
+                          showNotification('Reset to Set A', 'info');
                       } else {
                           cancelLineCreation();
                       }
                   };
-
-                  status = pointA ? "B next" : "A next";
-                  tone = pointA ? "orange" : "blue";
+                  status = pointA ? 'Set B' : 'Set A';
+                  tone = pointA ? 'orange' : 'blue';
                   primary = renderMainButton({ icon: Target, label: abLabel, color: abColor, onClick: handleABButtonClick });
                   content = (
                       <>
                           {renderStepLine([{ label: 'A', done: Boolean(pointA) }, { label: 'B', done: Boolean(pointB) }])}
                           {renderGrid(
                               <>
-                                  {renderTinyButton({ icon: GitCommitHorizontal, label: "Type", color: "gray", onClick: openLineTypePicker })}
-                                  {renderTinyButton({ icon: X, label: pointA && !pointB ? "Reset" : "Cancel", color: "red", onClick: handleCancelAB })}
+                                  {renderTinyButton({ icon: GitCommitHorizontal, label: 'Type', onClick: openLineTypePicker })}
+                                  {renderTinyButton({ icon: X, label: pointA && !pointB ? 'Reset' : 'Cancel', color: 'red', onClick: handleCancelAB })}
                               </>
                           )}
                       </>
                   );
                   break;
+              }
               case 'A_PLUS':
-                  title = "A+";
+                  title = 'A+';
                   if (!aPlusPoint) {
-                      status = "A next";
-                      primary = renderMainButton({ icon: Target, label: "Set A", color: "blue", onClick: handleSetAPlus_PointA });
+                      status = 'Set A';
+                      primary = renderMainButton({ icon: Target, label: 'Set A', color: 'blue', onClick: handleSetAPlus_PointA });
                       content = renderGrid(
                           <>
-                              {renderTinyButton({ icon: GitCommitHorizontal, label: "Type", color: "gray", onClick: openLineTypePicker })}
-                              {renderTinyButton({ icon: X, label: "Cancel", color: "red", onClick: cancelLineCreation })}
+                              {renderTinyButton({ icon: GitCommitHorizontal, label: 'Type', onClick: openLineTypePicker })}
+                              {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: cancelLineCreation })}
                           </>
                       );
                   } else {
-                      status = aPlusHeading !== null ? "Ready" : "Head";
-                      tone = aPlusHeading !== null ? "green" : "orange";
+                      status = aPlusHeading !== null ? 'Ready' : 'Heading';
+                      tone = aPlusHeading !== null ? 'green' : 'orange';
                       primary = aPlusHeading !== null
-                          ? renderMainButton({ icon: Check, label: "OK", sub: `${aPlusHeading.toFixed(0)} deg`, color: "green", onClick: handleConfirmAPlus })
-                          : renderMainButton({ icon: Compass, label: "Head", sub: `${heading.toFixed(0)} deg`, color: "blue", onClick: handleSetAPlus_HeadingCurrent });
+                          ? renderMainButton({ icon: Check, label: 'Confirm', sub: `${aPlusHeading.toFixed(0)}°`, color: 'green', onClick: handleConfirmAPlus })
+                          : renderMainButton({ icon: Compass, label: 'Set heading', sub: `${heading.toFixed(0)}°`, color: 'blue', onClick: handleSetAPlus_HeadingCurrent });
                       content = (
                           <>
                               {renderStepLine([{ label: 'A', done: Boolean(aPlusPoint) }, { label: 'H', done: aPlusHeading !== null }])}
                               {renderGrid(
                                   <>
-                                      {renderTinyButton({ icon: Keyboard, label: "Input", color: "gray", onClick: () => { setManualHeadingModalOpen(true); setTempManualHeading(heading.toFixed(1)); } })}
-                                      {renderTinyButton({ icon: RotateCcw, label: "Reset", color: "orange", onClick: () => { actions.setAPlusPoint({ ...worldPos }); actions.setAPlusHeading(null); showNotification("Point A Reset to Current Position", "info"); } })}
-                                      {renderTinyButton({ icon: GitCommitHorizontal, label: "Type", color: "gray", onClick: openLineTypePicker })}
-                                      {renderTinyButton({ icon: X, label: "Cancel", color: "red", onClick: () => { actions.setAPlusPoint(null); actions.setAPlusHeading(null); } })}
+                                      {renderTinyButton({ icon: Keyboard, label: 'Input', onClick: () => { setManualHeadingModalOpen(true); setTempManualHeading(heading.toFixed(1)); } })}
+                                      {renderTinyButton({ icon: RotateCcw, label: 'Reset', color: 'orange', onClick: () => { actions.setAPlusPoint({ ...worldPos }); actions.setAPlusHeading(null); showNotification('Point A Reset to Current Position', 'info'); } })}
+                                      {renderTinyButton({ icon: GitCommitHorizontal, label: 'Type', onClick: openLineTypePicker })}
+                                      {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: () => { actions.setAPlusPoint(null); actions.setAPlusHeading(null); } })}
                                   </>
                               )}
                           </>
@@ -3829,73 +4080,74 @@ const App = () => {
                   }
                   break;
               case 'CURVE':
-                  status = isRecordingCurve ? "REC" : "Ready";
-                  tone = isRecordingCurve ? "red" : "blue";
-                  primary = renderMainButton({ icon: isRecordingCurve ? Disc : Spline, label: isRecordingCurve ? "Stop" : "Record", sub: `${curvePoints.length}`, color: isRecordingCurve ? "red" : "blue", onClick: handleRecordCurve, pulse: isRecordingCurve });
+                  status = isRecordingCurve ? 'REC' : 'Ready';
+                  tone = isRecordingCurve ? 'red' : 'blue';
+                  primary = renderMainButton({ icon: isRecordingCurve ? Disc : Spline, label: isRecordingCurve ? 'Stop' : 'Record', sub: `${curvePoints.length}`, color: isRecordingCurve ? 'red' : 'blue', onClick: handleRecordCurve, pulse: isRecordingCurve });
                   content = renderGrid(
                       <>
-                          {renderTinyButton({ icon: GitCommitHorizontal, label: "Type", color: "gray", onClick: openLineTypePicker })}
-                          {renderTinyButton({ icon: X, label: "Cancel", color: "red", onClick: cancelLineCreation })}
+                          {renderTinyButton({ icon: GitCommitHorizontal, label: 'Type', onClick: openLineTypePicker })}
+                          {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: cancelLineCreation })}
                       </>
                   );
                   break;
               case 'COMBINATION':
-                  status = isRecordingCurve ? "REC" : curvePoints.length > 0 ? "Pause" : "Ready";
-                  tone = isRecordingCurve ? "orange" : "blue";
-                  primary = renderMainButton({ icon: isRecordingCurve ? Pause : Disc, label: isRecordingCurve ? "Pause" : (curvePoints.length > 0 ? "Cont" : "Record"), sub: `${curvePoints.length}`, color: isRecordingCurve ? "orange" : "blue", onClick: isRecordingCurve ? handleCombinationPause : handleCombinationRecord, pulse: isRecordingCurve });
+                  status = isRecordingCurve ? 'REC' : curvePoints.length > 0 ? 'Pause' : 'Ready';
+                  tone = isRecordingCurve ? 'orange' : 'blue';
+                  primary = renderMainButton({ icon: isRecordingCurve ? Pause : Disc, label: isRecordingCurve ? 'Pause' : (curvePoints.length > 0 ? 'Continue' : 'Record'), sub: `${curvePoints.length}`, color: isRecordingCurve ? 'orange' : 'blue', onClick: isRecordingCurve ? handleCombinationPause : handleCombinationRecord, pulse: isRecordingCurve });
                   content = renderGrid(
                       <>
-                          {curvePoints.length > 2 && renderTinyButton({ icon: Check, label: "Finish", color: "green", onClick: handleCombinationFinish })}
-                          {isCombinationPaused && renderTinyButton({ icon: AlignJustify, label: "Line", color: "gray", onClick: handleCombinationRecord })}
-                          {renderTinyButton({ icon: GitCommitHorizontal, label: "Type", color: "gray", onClick: openLineTypePicker })}
-                          {renderTinyButton({ icon: X, label: "Cancel", color: "red", onClick: cancelLineCreation })}
+                          {curvePoints.length > 2 && renderTinyButton({ icon: Check, label: 'Finish', color: 'green', onClick: handleCombinationFinish })}
+                          {isCombinationPaused && renderTinyButton({ icon: AlignJustify, label: 'Line', onClick: handleCombinationRecord })}
+                          {renderTinyButton({ icon: GitCommitHorizontal, label: 'Type', onClick: openLineTypePicker })}
+                          {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: cancelLineCreation })}
                       </>
                   );
                   break;
               case 'PIVOT':
-                  status = pivotCenter ? "Edge next" : "Center";
-                  tone = pivotCenter ? "orange" : "blue";
+                  status = pivotCenter ? 'Set edge' : 'Center';
+                  tone = pivotCenter ? 'orange' : 'blue';
                   primary = pivotCenter
-                      ? renderMainButton({ icon: CircleDashed, label: "Edge", color: pivotRadius ? "green" : "blue", onClick: handleSetRadius })
-                      : renderMainButton({ icon: Target, label: "Center", color: "blue", onClick: handleSetCenter });
+                      ? renderMainButton({ icon: CircleDashed, label: 'Set edge', color: pivotRadius ? 'green' : 'blue', onClick: handleSetRadius })
+                      : renderMainButton({ icon: Target, label: 'Set center', color: 'blue', onClick: handleSetCenter });
                   content = (
                       <>
                           {renderStepLine([{ label: 'C', done: Boolean(pivotCenter) }, { label: 'R', done: Boolean(pivotRadius) }])}
                           {renderGrid(
                               <>
-                                  {renderTinyButton({ icon: Target, label: "Center", color: pivotCenter ? "green" : "gray", onClick: handleSetCenter })}
-                                  {renderTinyButton({ icon: X, label: "Cancel", color: "red", onClick: cancelLineCreation })}
+                                  {renderTinyButton({ icon: Target, label: 'Center', color: pivotCenter ? 'green' : 'gray', onClick: handleSetCenter })}
+                                  {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: cancelLineCreation })}
                               </>
                           )}
                       </>
                   );
                   break;
-              default: break;
+              default:
+                  break;
           }
-          return renderShell({
+          return renderDockLayout(renderShell({
               status: title === 'STRAIGHT AB' ? status : title,
               tone,
               children: (
                   <>
                       {primary}
+                      {renderDivider()}
                       {content}
                   </>
               )
-          });
+          }));
       }
 
-      if (hasGuidanceToEngage && steeringMode === 'MANUAL' && !isCreating) {
-          return renderDockWithFlyout(renderShell({
-              status: "Ready",
-              tone: "green",
+      if (hasGuidanceToEngage && steeringMode === 'MANUAL') {
+          return renderDockLayout(renderShell({
+              status: autosteerStateLabel === 'PAUSED' ? 'Paused' : autosteerReady ? 'Ready' : 'Blocked',
+              tone: autosteerReady ? 'blue' : 'orange',
               children: (
                   <>
-                      {renderMainButton({ icon: SteeringWheelIcon, label: "Auto", sub: autosteerReady ? "Go" : "RTK", color: "green", onClick: toggleSteering })}
+                      {renderMainButton({ icon: Route, label: 'Line', sub: activeLineRecord?.name || compactStatus(lineType), color: 'gray', onClick: () => toggleDockPanel('line') })}
+                      {renderDivider()}
                       {renderGrid(
                           <>
-                              {renderTinyButton({ icon: Save, label: "Save", color: "blue", onClick: openSaveLineModal, hidden: Boolean(activeLineId) })}
-                              {renderTinyButton({ icon: Route, label: "New", color: "gray", onClick: startStraightABCreation })}
-                              {renderTinyButton({ icon: FolderOpen, label: "Lines", color: "gray", onClick: openLinesLibrary })}
+                              {renderTinyButton({ icon: ArrowLeftRight, label: 'Nudge', color: dockMenuOpen === 'nudge' ? 'blue' : 'gray', active: dockMenuOpen === 'nudge', ariaExpanded: dockMenuOpen === 'nudge', onClick: () => toggleDockPanel('nudge') })}
                               {renderToolsToggle()}
                           </>
                       )}
@@ -3904,17 +4156,15 @@ const App = () => {
           }));
       }
 
-      return renderDockWithFlyout(renderShell({
-          status: "Run",
-          tone: "blue",
+      return renderDockLayout(renderShell({
+          status: 'Guidance',
+          tone: 'blue',
           children: (
               <>
-                  {renderMainButton({ icon: Route, label: "AB", sub: "Line", color: "blue", onClick: startStraightABCreation })}
+                  {renderMainButton({ icon: Route, label: 'Guidance', sub: 'Browse / create', color: 'gray', onClick: () => toggleDockPanel('line') })}
+                  {renderDivider()}
                   {renderGrid(
                       <>
-                          {renderTinyButton({ icon: GitCommitHorizontal, label: "Type", color: "gray", onClick: openLineTypePicker })}
-                          {renderTinyButton({ icon: FolderOpen, label: "Lines", color: "gray", onClick: openLinesLibrary })}
-                          {renderTinyButton({ icon: MapPin, label: "Bound", color: "orange", onClick: startBoundaryCreation })}
                           {renderToolsToggle()}
                       </>
                   )}
@@ -5516,9 +5766,9 @@ const renderLinesPanel = () => {
         const maxX = Math.max(...xs);
         const minY = Math.min(...ys);
         const maxY = Math.max(...ys);
-        const width = 380;
-        const height = 210;
-        const pad = 34;
+        const width = 320;
+        const height = 128;
+        const pad = 22;
         const scale = Math.min((width - pad * 2) / Math.max(maxX - minX, 1), (height - pad * 2) / Math.max(maxY - minY, 1));
         const midX = (minX + maxX) / 2;
         const midY = (minY + maxY) / 2;
@@ -5530,8 +5780,8 @@ const renderLinesPanel = () => {
         const gridStroke = theme === 'dark' ? '#334155' : '#cbd5e1';
 
         return (
-            <div className={`rounded-xl border ${t.borderCard} ${mutedBg} overflow-hidden`}>
-                <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-[210px] block" aria-label="Guidance line preview">
+            <div className={`rounded-lg border ${t.borderCard} ${mutedBg} overflow-hidden`}>
+                <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-[128px] block" aria-label="Guidance line preview">
                     <defs>
                         <pattern id={`line-grid-${line?.id || 'empty'}`} width="24" height="24" patternUnits="userSpaceOnUse">
                             <path d="M 24 0 L 0 0 0 24" fill="none" stroke={gridStroke} strokeWidth="0.7" opacity={theme === 'dark' ? '0.28' : '0.42'} />
@@ -5543,11 +5793,11 @@ const renderLinesPanel = () => {
                         points={preview.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
                         fill="none"
                         stroke="#2563eb"
-                        strokeWidth="5"
+                        strokeWidth="4"
                         strokeLinecap="round"
                     />
-                    {preview[0] && <circle cx={preview[0].x} cy={preview[0].y} r="8" fill="#2563eb" stroke="white" strokeWidth="2" />}
-                    {preview[preview.length - 1] && <circle cx={preview[preview.length - 1].x} cy={preview[preview.length - 1].y} r="8" fill="#f97316" stroke="white" strokeWidth="2" />}
+                    {preview[0] && <circle cx={preview[0].x} cy={preview[0].y} r="6" fill="#2563eb" stroke="white" strokeWidth="2" />}
+                    {preview[preview.length - 1] && <circle cx={preview[preview.length - 1].x} cy={preview[preview.length - 1].y} r="6" fill="#f97316" stroke="white" strokeWidth="2" />}
                 </svg>
             </div>
         );
@@ -5555,13 +5805,13 @@ const renderLinesPanel = () => {
 
     return (
         <div className={`w-full h-full flex flex-col ${panelBg}`}>
-            <div className={`flex items-center justify-between gap-4 px-6 py-5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+            <div className={`flex items-center justify-between gap-3 px-4 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
                 <div className="min-w-0 flex items-center gap-3">
-                    <div className={`shrink-0 w-11 h-11 rounded-xl border ${t.borderCard} ${surfaceBg} flex items-center justify-center`}>
-                        <Route className="w-6 h-6 text-blue-500" />
+                    <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${surfaceBg} flex items-center justify-center`}>
+                        <Route className="w-5 h-5 text-blue-500" />
                     </div>
                     <div className="min-w-0">
-                        <h2 className={`text-xl font-black ${t.textMain}`}>Guidance Lines</h2>
+                        <h2 className={`text-lg font-black ${t.textMain}`}>Guidance Lines</h2>
                         <div className={`text-xs ${t.textSub} truncate`}>{activeField?.name || 'No field selected'} / {activeCatalogLines.length} active lines</div>
                     </div>
                 </div>
@@ -5573,34 +5823,34 @@ const renderLinesPanel = () => {
                 </button>
             </div>
 
-            <div className={`shrink-0 px-5 lg:px-6 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-blue-950/20' : 'bg-blue-50/80'}`}>
+            <div className={`shrink-0 px-4 py-2 border-b ${t.divider} ${theme === 'dark' ? 'bg-blue-950/14' : 'bg-blue-50/65'}`}>
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0 flex items-center gap-3">
-                        <div className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${loadedLine ? 'bg-blue-600 text-white' : `${surfaceBg} ${t.textSub} border ${t.borderCard}`}`}>
-                            <Route className="w-5 h-5" />
+                    <div className="min-w-0 flex items-center gap-2.5">
+                        <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${loadedLine ? 'bg-blue-600 text-white' : `${surfaceBg} ${t.textSub} border ${t.borderCard}`}`}>
+                            <Route className="w-4 h-4" />
                         </div>
                         <div className="min-w-0">
-                            <div className={`text-[10px] uppercase font-black tracking-widest ${t.textSub}`}>Active line</div>
-                            <div className={`text-base font-black truncate ${loadedLine ? t.textMain : t.textSub}`}>{loadedLine?.name || 'No line loaded'}</div>
+                            <div className={`text-[9px] uppercase font-black tracking-widest ${t.textSub}`}>Active line</div>
+                            <div className={`text-sm font-black truncate ${loadedLine ? t.textMain : t.textSub}`}>{loadedLine?.name || 'No line loaded'}</div>
                         </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 text-xs font-black">
-                        <span className={`px-3 py-1.5 rounded-lg border ${loadedLine ? 'border-green-500/35 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`}`}>{loadedLine ? 'LOADED' : 'NO ACTIVE'}</span>
-                        <span className={`px-3 py-1.5 rounded-lg border ${t.borderCard} ${surfaceBg} ${t.textMain}`}>{loadedLine ? (loadedLine.type || 'LINE').replace(/_/g, ' ') : '--'}</span>
-                        <span className={`px-3 py-1.5 rounded-lg border ${t.borderCard} ${surfaceBg} ${t.textMain}`}>{loadedLineLength !== null ? `${loadedLineLength.toFixed(1)} m` : '--'}</span>
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-black">
+                        <span className={`px-2.5 py-1 rounded-lg border ${loadedLine ? 'border-green-500/35 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`}`}>{loadedLine ? 'LOADED' : 'NO ACTIVE'}</span>
+                        <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${surfaceBg} ${t.textMain}`}>{loadedLine ? (loadedLine.type || 'LINE').replace(/_/g, ' ') : '--'}</span>
+                        <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${surfaceBg} ${t.textMain}`}>{loadedLineLength !== null ? `${loadedLineLength.toFixed(1)} m` : '--'}</span>
                     </div>
                 </div>
             </div>
 
             <div className="flex-1 min-h-0 flex overflow-hidden">
-                    <aside className={`w-[28%] min-w-[260px] max-w-[340px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
-                        <div className={`shrink-0 px-3 py-2.5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/55' : 'bg-white/70'}`}>
-                            <div className="flex items-center justify-between gap-3">
+                    <aside className={`w-[30%] min-w-[240px] max-w-[300px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
+                        <div className={`shrink-0 px-3 py-2 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/55' : 'bg-white/70'}`}>
+                            <div className="flex items-center justify-between gap-2">
                                 <div className="min-w-0">
-                                    <div className={`text-[10px] uppercase tracking-wider font-black ${t.textSub}`}>Catalog</div>
+                                    <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Catalog</div>
                                     <div className="min-w-0 flex items-center gap-2">
-                                        <div className={`text-base font-black ${t.textMain} truncate`}>Saved Lines</div>
-                                        <span className="shrink-0 px-2 py-0.5 rounded-md bg-blue-600/10 text-blue-500 text-[11px] font-black">{activeCatalogLines.length}</span>
+                                        <div className={`text-sm font-black ${t.textMain} truncate`}>Saved Lines</div>
+                                        <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-blue-600/10 text-blue-500 text-[10px] font-black">{activeCatalogLines.length}</span>
                                     </div>
                                 </div>
                                 <button
@@ -5609,14 +5859,14 @@ const renderLinesPanel = () => {
                                         setLinesPanelOpen(false);
                                         setLineModeModalOpen(true);
                                     }}
-                                    className="shrink-0 h-9 px-3 rounded-lg bg-blue-600 text-white font-black hover:bg-blue-500 transition-colors flex items-center gap-1.5 shadow-sm shadow-blue-900/20"
+                                    className="shrink-0 h-8 px-2.5 rounded-lg bg-blue-600 text-white font-black hover:bg-blue-500 transition-colors flex items-center gap-1.5 shadow-sm shadow-blue-900/20"
                                 >
-                                    <Plus className="w-4 h-4" />
-                                    <span className="text-xs">New</span>
+                                    <Plus className="w-3.5 h-3.5" />
+                                    <span className="text-[11px]">New</span>
                                 </button>
                             </div>
 
-                            <div className="mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-1">
+                            <div className="mt-2 flex items-center gap-1.5 overflow-x-auto pb-1">
                                     {visibleLineTypeFilters.map(({ id, label, icon: Icon }) => {
                                         const active = currentFilter === id;
                                         const count = getFilterCount(id);
@@ -5625,17 +5875,17 @@ const renderLinesPanel = () => {
                                                 key={id}
                                                 type="button"
                                                 onClick={() => setLineCatalogFilter(id)}
-                                                className={`shrink-0 h-8 rounded-full border px-2.5 flex items-center gap-1.5 transition-all ${active ? 'bg-blue-600 text-white border-blue-500 shadow-sm' : `${t.borderCard} ${surfaceBg} ${t.textSub} hover:border-blue-400 hover:text-blue-500`}`}
+                                                className={`shrink-0 h-7 rounded-full border px-2 flex items-center gap-1.5 transition-all ${active ? 'bg-blue-600 text-white border-blue-500 shadow-sm' : `${t.borderCard} ${surfaceBg} ${t.textSub} hover:border-blue-400 hover:text-blue-500`}`}
                                             >
                                                 <Icon className="w-3.5 h-3.5 shrink-0" />
-                                                <span className="text-[10px] font-black uppercase">{label}</span>
+                                                <span className="text-[9px] font-black uppercase">{label}</span>
                                                 <span className={`text-[10px] font-black ${active ? 'text-white' : 'text-blue-500'}`}>{count}</span>
                                             </button>
                                         );
                                     })}
                             </div>
 
-                            <div className={`mt-1.5 flex items-center justify-between gap-2 text-[11px] ${t.textSub}`}>
+                            <div className={`mt-1 flex items-center justify-between gap-2 text-[10px] ${t.textSub}`}>
                                 <div className="truncate">
                                     {currentFilter === 'ALL'
                                         ? `${activeCatalogLines.length} active${archivedLines.length ? ` / ${archivedLines.length} archived` : ''}`
@@ -5644,7 +5894,7 @@ const renderLinesPanel = () => {
                                 {archivedLines.length > 0 && (
                                     <button
                                         onClick={() => setShowArchivedLines(prev => !prev)}
-                                        className={`shrink-0 px-2.5 py-1 rounded-md border ${showArchivedLines ? 'border-yellow-500/50 bg-yellow-500/10 text-yellow-500' : `${t.borderCard} ${t.textSub} hover:text-yellow-500`} font-black`}
+                                        className={`shrink-0 px-2 py-0.5 rounded-md border ${showArchivedLines ? 'border-yellow-500/50 bg-yellow-500/10 text-yellow-500' : `${t.borderCard} ${t.textSub} hover:text-yellow-500`} font-black`}
                                     >
                                         {showArchivedLines ? 'Hide archive' : `Archive ${archivedLines.length}`}
                                     </button>
@@ -5652,7 +5902,7 @@ const renderLinesPanel = () => {
                             </div>
                         </div>
 
-                        <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2.5">
+                        <div className="flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2">
                             {lines.length === 0 ? (
                                 <div className={`h-full min-h-[280px] flex flex-col items-center justify-center text-center ${t.textDim}`}>
                                     <Navigation className="w-14 h-14 mb-4 opacity-50" />
@@ -5678,31 +5928,31 @@ const renderLinesPanel = () => {
                                                     setSelectedCatalogLineId(line.id);
                                                 }
                                             }}
-                                            className={`relative p-3 rounded-xl border text-left transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${selected ? 'border-blue-500 bg-blue-500/10 shadow-sm ring-1 ring-blue-500/20' : active ? 'border-green-500/35 bg-green-500/10' : archived ? 'border-yellow-500/35 bg-yellow-500/10' : `${t.borderCard} ${surfaceBg} hover:border-blue-400/70`}`}
+                                            className={`relative p-2.5 rounded-xl border text-left transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${selected ? 'border-blue-500 bg-blue-500/10 shadow-sm ring-1 ring-blue-500/20' : active ? 'border-green-500/35 bg-green-500/10' : archived ? 'border-yellow-500/35 bg-yellow-500/10' : `${t.borderCard} ${surfaceBg} hover:border-blue-400/70`}`}
                                         >
-                                            {selected && <div className="absolute left-0 top-3 bottom-3 w-1 rounded-r bg-blue-600" />}
-                                            <div className="flex items-start gap-2.5 min-w-0">
-                                                <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${selected ? 'bg-blue-600 text-white' : active ? 'bg-green-500/15 text-green-500 border border-green-500/25' : archived ? 'bg-yellow-500/12 text-yellow-500 border border-yellow-500/25' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-50'} text-blue-500 border ${t.borderCard}`}`}>
+                                            {selected && <div className="absolute left-0 top-2.5 bottom-2.5 w-1 rounded-r bg-blue-600" />}
+                                            <div className="flex items-start gap-2 min-w-0">
+                                                <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${selected ? 'bg-blue-600 text-white' : active ? 'bg-green-500/15 text-green-500 border border-green-500/25' : archived ? 'bg-yellow-500/12 text-yellow-500 border border-yellow-500/25' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-50'} text-blue-500 border ${t.borderCard}`}`}>
                                                     <Icon className="w-4 h-4" />
                                                 </div>
                                                 <div className="min-w-0 flex-1">
                                                     <div className="flex items-start justify-between gap-2">
                                                         <div
-                                                            className={`font-black leading-tight ${archived ? t.textSub : t.textMain}`}
+                                                            className={`text-sm font-black leading-tight ${archived ? t.textSub : t.textMain}`}
                                                             title={line.name || `Line ${index + 1}`}
                                                             style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
                                                         >
                                                             {line.name || `Line ${index + 1}`}
                                                         </div>
-                                                        {active && <span className="shrink-0 px-2 py-1 rounded-md bg-green-500/15 text-green-500 text-[9px] font-black uppercase">Loaded</span>}
-                                                        {selected && !active && <span className="shrink-0 px-2 py-1 rounded-md bg-blue-500/15 text-blue-500 text-[9px] font-black uppercase">Selected</span>}
-                                                        {archived && <span className="shrink-0 px-2 py-1 rounded-md bg-yellow-500/15 text-yellow-500 text-[9px] font-black uppercase">Archived</span>}
+                                                        {active && <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-green-500/15 text-green-500 text-[8px] font-black uppercase">Loaded</span>}
+                                                        {selected && !active && <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-blue-500/15 text-blue-500 text-[8px] font-black uppercase">Selected</span>}
+                                                        {archived && <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-yellow-500/15 text-yellow-500 text-[8px] font-black uppercase">Archived</span>}
                                                     </div>
-                                                    <div className={`mt-0.5 text-[11px] ${t.textSub}`}>{(line.type || 'LINE').replace(/_/g, ' ')} / {lengthMeters !== null ? `${lengthMeters.toFixed(1)} m` : '--'}</div>
+                                                    <div className={`mt-0.5 text-[10px] ${t.textSub}`}>{(line.type || 'LINE').replace(/_/g, ' ')} / {lengthMeters !== null ? `${lengthMeters.toFixed(1)} m` : '--'}</div>
                                                 </div>
                                             </div>
-                                            <div className="mt-3 flex items-center justify-between gap-2">
-                                                <span className={`text-[11px] ${t.textSub}`}>{formatLineDate(line)}</span>
+                                            <div className="mt-2 flex items-center justify-between gap-2">
+                                                <span className={`text-[10px] ${t.textSub}`}>{formatLineDate(line)}</span>
                                                 <div className="flex items-center gap-1.5">
                                                     {archived ? (
                                                         <button onClick={(e) => { e.stopPropagation(); handleRestoreLine(line); }} className="px-3 py-2 rounded-lg text-xs font-black border border-yellow-500/40 text-yellow-500 hover:bg-yellow-500/10">
@@ -5710,10 +5960,10 @@ const renderLinesPanel = () => {
                                                         </button>
                                                     ) : (
                                                         <>
-                                                            <button aria-label={`Rename ${line.name}`} onClick={(e) => { e.stopPropagation(); handleRenameLine(line); }} className={`p-2 rounded-lg ${t.textSub} hover:bg-blue-500/10 hover:text-blue-500`}>
-                                                                <PenTool className="w-4 h-4" />
+                                                            <button aria-label={`Rename ${line.name}`} onClick={(e) => { e.stopPropagation(); handleRenameLine(line); }} className={`p-1.5 rounded-lg ${t.textSub} hover:bg-blue-500/10 hover:text-blue-500`}>
+                                                                <PenTool className="w-3.5 h-3.5" />
                                                             </button>
-                                                            <button onClick={(e) => { e.stopPropagation(); handleLoadLine(line); }} className={`px-3 py-2 rounded-lg text-xs font-black ${active ? 'bg-blue-600 text-white' : `border ${t.borderCard} ${t.textMain} hover:brightness-95`}`}>
+                                                            <button onClick={(e) => { e.stopPropagation(); handleLoadLine(line); }} className={`px-2.5 py-1.5 rounded-lg text-[11px] font-black ${active ? 'bg-blue-600 text-white' : `border ${t.borderCard} ${t.textMain} hover:brightness-95`}`}>
                                                                 {active ? 'Loaded' : 'Load'}
                                                             </button>
                                                         </>
@@ -5727,46 +5977,46 @@ const renderLinesPanel = () => {
                         </div>
                     </aside>
 
-                    <div className={`flex-1 min-w-0 min-h-0 p-5 lg:p-6 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
+                    <div className={`flex-1 min-w-0 min-h-0 p-3 lg:p-4 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
                     <section className={`${surfaceBg} border ${t.borderCard} rounded-xl min-w-0 min-h-0 h-full overflow-hidden flex flex-col`}>
                         {selectedLine ? (
                             <>
-                                <div className={`shrink-0 p-5 border-b ${t.divider} flex items-start justify-between gap-4`}>
+                                <div className={`shrink-0 px-4 py-3 border-b ${t.divider} flex items-start justify-between gap-3`}>
                                     <div className="min-w-0">
-                                        <div className={`text-[10px] uppercase tracking-wider font-black ${t.textSub}`}>Selected line</div>
-                                        <h3 className={`text-2xl font-black ${t.textMain} truncate`}>{selectedLine.name}</h3>
-                                        <div className={`mt-1 text-sm ${t.textSub}`}>{(selectedLine.type || 'LINE').replace(/_/g, ' ')} / {selectedLine.isMulti ? 'Parallel lines enabled' : 'Single path'}</div>
+                                        <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Selected line</div>
+                                        <h3 className={`text-lg font-black ${t.textMain} truncate`}>{selectedLine.name}</h3>
+                                        <div className={`mt-0.5 text-xs ${t.textSub}`}>{(selectedLine.type || 'LINE').replace(/_/g, ' ')} / {selectedLine.isMulti ? 'Parallel lines enabled' : 'Single path'}</div>
                                     </div>
                                     <div className="shrink-0 flex items-center gap-2">
-                                        {selectedLine.archived && <span className="px-3 py-1.5 rounded-lg bg-yellow-500/15 text-yellow-500 text-xs font-black uppercase">Archived</span>}
-                                        {activeLineId === selectedLine.id && <span className="px-3 py-1.5 rounded-lg bg-green-500/15 text-green-500 text-xs font-black uppercase">Active</span>}
+                                        {selectedLine.archived && <span className="px-2 py-1 rounded-lg bg-yellow-500/15 text-yellow-500 text-[10px] font-black uppercase">Archived</span>}
+                                        {activeLineId === selectedLine.id && <span className="px-2 py-1 rounded-lg bg-green-500/15 text-green-500 text-[10px] font-black uppercase">Active</span>}
                                     </div>
                                 </div>
 
-                                <div className="flex-1 min-h-0 p-4 lg:p-5 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(240px,0.68fr)] xl:grid-cols-[minmax(0,1.08fr)_minmax(280px,0.72fr)] gap-4 lg:gap-5 overflow-hidden">
-                                    <div className="min-w-0 min-h-0 flex flex-col gap-4">
+                                <div className="flex-1 min-h-0 p-3 lg:p-4 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.58fr)] xl:grid-cols-[minmax(0,1.05fr)_minmax(250px,0.62fr)] gap-3 lg:gap-4 overflow-hidden">
+                                    <div className="min-w-0 min-h-0 flex flex-col gap-3">
                                         {renderLinePreview(selectedLine)}
-                                        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+                                        <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
                                             {[
                                                 ['Type', (selectedLine.type || 'LINE').replace(/_/g, ' ')],
                                                 ['Length', activeLineLength !== null ? `${activeLineLength.toFixed(1)} m` : '--'],
                                                 ['Created', formatLineDate(selectedLine)],
                                                 ['Quality', selectedLine.archived ? 'Archived' : (selectedLine.quality || 'Good')]
                                             ].map(([label, value]) => (
-                                                <div key={label} className={`${mutedBg} border ${t.borderCard} rounded-lg p-3 min-w-0`}>
+                                                <div key={label} className={`${mutedBg} border ${t.borderCard} rounded-lg p-2.5 min-w-0`}>
                                                     <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
-                                                    <div className={`mt-1 text-[13px] leading-tight font-black ${t.textMain} break-words`}>{value}</div>
+                                                    <div className={`mt-1 text-xs leading-tight font-black ${t.textMain} break-words`}>{value}</div>
                                                 </div>
                                             ))}
                                         </div>
                                     </div>
 
-                                    <div className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${mutedBg} p-3 lg:p-4 flex flex-col overflow-y-auto`}>
-                                        <div className="flex items-center gap-2 mb-3">
-                                            <Settings className="w-4 h-4 text-blue-500 shrink-0" />
-                                            <h4 className={`font-black uppercase tracking-wider text-xs ${t.textSub}`}>Line Setup</h4>
+                                    <div className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${mutedBg} p-2.5 lg:p-3 flex flex-col overflow-y-auto`}>
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <Settings className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                                            <h4 className={`font-black uppercase tracking-wider text-[11px] ${t.textSub}`}>Line Setup</h4>
                                         </div>
-                                        <div className="space-y-2.5">
+                                        <div className="space-y-2">
                                             {[
                                                 ['Field', activeField?.name || 'No field'],
                                                 ['Mode', (selectedLine.type || 'LINE').replace(/_/g, ' ')],
@@ -5774,46 +6024,46 @@ const renderLinesPanel = () => {
                                                 ['Path', selectedLine.isMulti ? 'Parallel guidance' : 'Single guidance'],
                                                 ['Lock', activeLineId === selectedLine.id ? 'Lane locked on engage' : 'Unlocked']
                                             ].map(([label, value]) => (
-                                                <div key={label} className={`${surfaceBg} border ${t.borderCard} rounded-lg p-2.5 min-w-0`}>
+                                                <div key={label} className={`${surfaceBg} border ${t.borderCard} rounded-lg p-2 min-w-0`}>
                                                     <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
-                                                    <div className={`mt-1 text-[13px] font-black ${value === 'Loaded' ? 'text-green-500' : t.textMain} truncate`}>{value}</div>
+                                                    <div className={`mt-0.5 text-xs font-black ${value === 'Loaded' ? 'text-green-500' : t.textMain} truncate`}>{value}</div>
                                                 </div>
                                             ))}
                                         </div>
                                     </div>
                                 </div>
 
-                                <div className={`shrink-0 px-5 py-4 border-t ${t.divider} flex flex-wrap justify-between gap-3 ${theme === 'dark' ? 'bg-slate-950/50' : 'bg-white/70'}`}>
+                                <div className={`shrink-0 px-4 py-3 border-t ${t.divider} flex flex-wrap justify-between gap-2 ${theme === 'dark' ? 'bg-slate-950/50' : 'bg-white/70'}`}>
                                     <div className="flex flex-wrap items-center gap-2">
-                                        <button onClick={() => confirmDelete('line', selectedLine.id)} className="px-4 py-3 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold flex items-center gap-2">
-                                            <Trash2 className="w-5 h-5" />
+                                        <button onClick={() => confirmDelete('line', selectedLine.id)} className="px-3 py-2 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold flex items-center gap-2">
+                                            <Trash2 className="w-4 h-4" />
                                             Delete
                                         </button>
                                         {!selectedLine.archived && (
-                                            <button onClick={() => handleArchiveLine(selectedLine)} className={`px-4 py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 font-bold flex items-center gap-2`}>
-                                                <EyeOff className="w-5 h-5" />
+                                            <button onClick={() => handleArchiveLine(selectedLine)} className={`px-3 py-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 font-bold flex items-center gap-2`}>
+                                                <EyeOff className="w-4 h-4" />
                                                 Archive
                                             </button>
                                         )}
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2 justify-end">
                                         {selectedLine.archived ? (
-                                            <button onClick={() => handleRestoreLine(selectedLine)} className="px-7 py-3 rounded-lg bg-yellow-500 text-black font-black hover:bg-yellow-400 shadow-lg shadow-yellow-900/10 flex items-center gap-2">
-                                                <CheckCircle2 className="w-5 h-5" />
+                                            <button onClick={() => handleRestoreLine(selectedLine)} className="px-5 py-2 rounded-lg bg-yellow-500 text-black font-black hover:bg-yellow-400 shadow-lg shadow-yellow-900/10 flex items-center gap-2">
+                                                <CheckCircle2 className="w-4 h-4" />
                                                 Restore
                                             </button>
                                         ) : (
                                             <>
-                                                <button onClick={() => handleRenameLine(selectedLine)} className={`px-4 py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 font-bold flex items-center gap-2`}>
-                                                    <PenTool className="w-5 h-5" />
+                                                <button onClick={() => handleRenameLine(selectedLine)} className={`px-3 py-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 font-bold flex items-center gap-2`}>
+                                                    <PenTool className="w-4 h-4" />
                                                     Rename
                                                 </button>
-                                                <button onClick={() => handleDuplicateLine(selectedLine)} className={`px-4 py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 font-bold flex items-center gap-2`}>
-                                                    <Copy className="w-5 h-5" />
+                                                <button onClick={() => handleDuplicateLine(selectedLine)} className={`px-3 py-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 font-bold flex items-center gap-2`}>
+                                                    <Copy className="w-4 h-4" />
                                                     Duplicate
                                                 </button>
-                                                <button onClick={() => handleLoadLine(selectedLine)} className="px-7 py-3 rounded-lg bg-blue-600 text-white font-black hover:bg-blue-500 shadow-lg shadow-blue-900/20 flex items-center gap-2">
-                                                    <CheckCircle2 className="w-5 h-5" />
+                                                <button onClick={() => handleLoadLine(selectedLine)} className="px-5 py-2 rounded-lg bg-blue-600 text-white font-black hover:bg-blue-500 shadow-lg shadow-blue-900/20 flex items-center gap-2">
+                                                    <CheckCircle2 className="w-4 h-4" />
                                                     {activeLineId === selectedLine.id ? 'Reload Line' : 'Load Line'}
                                                 </button>
                                             </>
@@ -5867,11 +6117,28 @@ const renderLinesPanel = () => {
           return pts.filter(Boolean);
       };
 
+      const getBoundaryPoints = (boundary) => {
+          if (Array.isArray(boundary?.points)) return boundary.points;
+          if (Array.isArray(boundary)) return boundary;
+          return [];
+      };
+
       const createPreviewMapper = (field, draftBoundaries = []) => {
           const boundaries = draftBoundaries.length > 0 ? draftBoundaries : (field?.boundaries || []);
           const linePoints = (field?.lines || []).flatMap(getLinePoints);
-          const boundaryPoints = boundaries.flatMap(b => b?.points || b || []);
-          const sourcePoints = [...boundaryPoints, ...linePoints].filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+          const boundaryPoints = boundaries.flatMap(getBoundaryPoints).filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+          const finiteLinePoints = linePoints.filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+          const getSpan = (points) => {
+              if (!points.length) return { x: 0, y: 0 };
+              const xs = points.map(p => p.x);
+              const ys = points.map(p => p.y);
+              return { x: Math.max(...xs) - Math.min(...xs), y: Math.max(...ys) - Math.min(...ys) };
+          };
+          const boundarySpan = getSpan(boundaryPoints);
+          const hasUsableBoundary = boundaryPoints.length >= 3 && Math.max(boundarySpan.x, boundarySpan.y) > 2;
+          const sourcePoints = hasUsableBoundary
+              ? boundaryPoints
+              : (finiteLinePoints.length > 1 ? finiteLinePoints : boundaryPoints);
           const fallback = [{ x: -220, y: -130 }, { x: 230, y: 145 }];
           const points = sourcePoints.length > 0 ? sourcePoints : fallback;
           const xs = points.map(p => p.x);
@@ -5897,13 +6164,19 @@ const renderLinesPanel = () => {
       const MiniFieldPreview = ({ field, draftBoundaries = [] }) => {
           const boundaries = draftBoundaries.length > 0 ? draftBoundaries : (field?.boundaries || []);
           const lines = field?.lines || [];
+          const boundaryShapes = boundaries.map((boundary, index) => ({
+              boundary,
+              index,
+              points: getBoundaryPoints(boundary).filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y))
+          })).filter(item => item.points.length >= 2);
           const mapPoint = createPreviewMapper(field, draftBoundaries);
           const fieldId = field?.id || 'draft';
-          const hasBoundaries = boundaries.length > 0;
-          const defaultBoundary = '70,62 224,43 306,92 286,174 132,194 54,142';
+          const hasRenderableBoundary = boundaryShapes.length > 0;
+          const defaultBoundary = '62,58 226,42 306,90 286,172 132,194 50,140';
           const gridStroke = theme === 'dark' ? '#334155' : '#cbd5e1';
-          const boundaryFill = theme === 'dark' ? 'rgba(37,99,235,0.14)' : 'rgba(37,99,235,0.09)';
-          const boundaryStroke = theme === 'dark' ? '#60a5fa' : '#2563eb';
+          const boundaryFill = theme === 'dark' ? 'rgba(249,115,22,0.16)' : 'rgba(249,115,22,0.10)';
+          const boundaryStroke = theme === 'dark' ? '#fb923c' : '#f97316';
+          const inactiveBoundaryStroke = theme === 'dark' ? '#fbbf24' : '#f59e0b';
 
           return (
               <div className={`relative overflow-hidden rounded-xl border ${t.borderCard} ${mutedPanelBg} h-full min-h-[230px]`}>
@@ -5915,19 +6188,31 @@ const renderLinesPanel = () => {
                       </defs>
                       <rect width="360" height="230" fill={`url(#field-grid-${fieldId})`} />
                       <rect width="360" height="230" fill={theme === 'dark' ? 'rgba(15,23,42,0.34)' : 'rgba(248,250,252,0.42)'} />
-                      {hasBoundaries ? (
-                          boundaries.map((boundary, index) => {
-                              const points = (boundary.points || boundary || []).filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
-                              if (points.length < 2) return null;
+                      {hasRenderableBoundary ? (
+                          boundaryShapes.map(({ boundary, index, points }) => {
                               const previewPoints = points.map(mapPoint).map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+                              const active = index === activeBoundaryIdx;
+                              if (points.length === 2) {
+                                  return (
+                                      <polyline
+                                          key={`${boundary.name || 'boundary'}-${index}`}
+                                          points={previewPoints}
+                                          fill="none"
+                                          stroke={active ? boundaryStroke : inactiveBoundaryStroke}
+                                          strokeWidth={active ? 3 : 2}
+                                          strokeDasharray="8 6"
+                                          strokeLinecap="round"
+                                      />
+                                  );
+                              }
                               return (
                                   <polygon
                                       key={`${boundary.name || 'boundary'}-${index}`}
                                       points={previewPoints}
-                                      fill={index === activeBoundaryIdx ? boundaryFill : 'rgba(100,116,139,0.08)'}
-                                      stroke={index === activeBoundaryIdx ? boundaryStroke : '#94a3b8'}
-                                      strokeWidth={index === activeBoundaryIdx ? 3 : 2}
-                                      strokeDasharray={index === activeBoundaryIdx ? 'none' : '7 6'}
+                                      fill={active ? boundaryFill : 'rgba(245,158,11,0.07)'}
+                                      stroke={active ? boundaryStroke : inactiveBoundaryStroke}
+                                      strokeWidth={active ? 3 : 2}
+                                      strokeDasharray={active ? 'none' : '7 6'}
                                   />
                               );
                           })
@@ -5949,6 +6234,17 @@ const renderLinesPanel = () => {
                                       strokeLinecap="round"
                                       strokeOpacity={activeLineId === line.id ? 0.95 : 0.62}
                                   />
+                                  {index === 0 && previewPoints.map((point, pointIndex) => (
+                                      <circle
+                                          key={`${line.id || index}-point-${pointIndex}`}
+                                          cx={point.x}
+                                          cy={point.y}
+                                          r={pointIndex === 0 ? 4 : 3.5}
+                                          fill={pointIndex === 0 ? '#2563eb' : '#38bdf8'}
+                                          stroke="white"
+                                          strokeWidth="1.5"
+                                      />
+                                  ))}
                                   {index === 0 && (
                                       <foreignObject x="154" y="96" width="52" height="38">
                                           <div className="h-full w-full flex items-center justify-center text-blue-500">
@@ -6016,7 +6312,7 @@ const renderLinesPanel = () => {
                       <rect width="360" height="230" fill="url(#boundary-manager-grid)" />
                       <rect width="360" height="230" fill={theme === 'dark' ? 'rgba(15,23,42,0.28)' : 'rgba(248,250,252,0.46)'} />
                       {boundaries.map((boundary, index) => {
-                          const points = (boundary.points || boundary || []).filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+                          const points = getBoundaryPoints(boundary).filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
                           if (points.length < 2) return null;
                           const previewPoints = points.map(mapPoint).map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
                           const active = index === activeBoundaryIdx;
@@ -6048,7 +6344,7 @@ const renderLinesPanel = () => {
           const activeIndex = boundaries.length > 0 ? Math.min(Math.max(activeBoundaryIdx || 0, 0), boundaries.length - 1) : -1;
           const activeBoundary = activeIndex >= 0 ? boundaries[activeIndex] : null;
           const activePoints = (activeBoundary?.points || activeBoundary || []).length;
-          const totalPoints = boundaries.reduce((total, boundary) => total + ((boundary.points || boundary || []).length || 0), 0);
+          const totalPoints = boundaries.reduce((total, boundary) => total + getBoundaryPoints(boundary).length, 0);
 
           return (
               <div className={`w-full h-full flex flex-col ${panelBg}`}>
@@ -6113,7 +6409,7 @@ const renderLinesPanel = () => {
                               </div>
                               <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
                                   {boundaries.length > 0 ? boundaries.map((boundary, index) => {
-                                      const points = (boundary.points || boundary || []);
+                                      const points = getBoundaryPoints(boundary);
                                       const active = index === activeBoundaryIdx;
                                       return (
                                           <div
@@ -6325,9 +6621,6 @@ const renderLinesPanel = () => {
           );
       };
 
-      if (fieldAssetTab === 'boundaries' && viewMode !== 'CREATE_FIELD') return renderBoundaryManager();
-      if (fieldAssetTab === 'tasks' && viewMode !== 'CREATE_FIELD') return renderTaskManager();
-
       let rightContent;
       if (viewMode === 'CREATE_FIELD') {
           const draftField = {
@@ -6493,31 +6786,59 @@ const renderLinesPanel = () => {
           const boundaries = activeField.boundaries || [];
           const lines = (activeField.lines || []).filter(line => !line.archived);
           const tasks = activeField.tasks || [];
-          const activeAssetTab = 'lines';
           const assetTabs = [
-              { id: 'lines', label: 'Lines', count: lines.length, icon: Route }
+              { id: 'lines', label: 'Lines', title: 'Guidance Lines', count: lines.length, icon: Route, actionLabel: 'New Line', tone: 'blue' },
+              { id: 'boundaries', label: 'Bounds', title: 'Boundaries', count: boundaries.length, icon: MapPin, actionLabel: 'Record Boundary', tone: 'orange' },
+              { id: 'tasks', label: 'Tasks', title: 'Tasks', count: tasks.length, icon: FileText, actionLabel: 'New Task', tone: 'green' }
           ];
+          const activeAssetTab = assetTabs.some(tab => tab.id === fieldAssetTab) ? fieldAssetTab : 'lines';
           const activeAssetMeta = assetTabs.find(tab => tab.id === activeAssetTab) || assetTabs[0];
           const ActiveAssetIcon = activeAssetMeta.icon;
-          const activeAssetActionLabel = 'New Line';
+          const activeAssetIconClass = activeAssetMeta.tone === 'orange'
+              ? 'text-orange-500'
+              : activeAssetMeta.tone === 'green'
+                  ? 'text-green-500'
+                  : 'text-blue-500';
+          const activeAssetActionLabel = activeAssetMeta.actionLabel;
+          const activeAssetActionClass = activeAssetMeta.tone === 'orange'
+              ? 'bg-orange-500 hover:bg-orange-400 shadow-orange-900/20'
+              : activeAssetMeta.tone === 'green'
+                  ? 'bg-green-600 hover:bg-green-500 shadow-green-900/20'
+                  : 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20';
+          const getAssetTabClass = (id, tone) => {
+              if (activeAssetTab !== id) {
+                  return `${t.textSub} border-transparent hover:bg-blue-500/10`;
+              }
+              if (tone === 'orange') return 'bg-orange-500 text-white border-orange-400 shadow-sm';
+              if (tone === 'green') return 'bg-green-600 text-white border-green-500 shadow-sm';
+              return 'bg-blue-600 text-white border-blue-500 shadow-sm';
+          };
           const handleAssetAction = () => {
+              if (activeAssetTab === 'boundaries') {
+                  startBoundaryCreation();
+                  return;
+              }
+              if (activeAssetTab === 'tasks') {
+                  startTaskCreation();
+                  return;
+              }
               setFieldManagerOpen(false);
               setLineModeModalOpen(true);
           };
 
           rightContent = (
               <div className="flex-1 min-h-0 flex flex-col">
-                  <div className={`px-5 lg:px-6 py-4 border-b ${t.divider} flex items-center justify-between gap-4 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
+                  <div className={`px-4 lg:px-5 py-3 border-b ${t.divider} flex items-center justify-between gap-4 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
                       <div className="min-w-0 flex items-center gap-3">
-                          <div className={`shrink-0 w-11 h-11 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
-                              <MapIcon className="w-6 h-6 text-blue-500" />
+                          <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
+                              <MapIcon className="w-5 h-5 text-blue-500" />
                           </div>
                           <div className="min-w-0">
                               <div className="flex items-center gap-2 min-w-0">
-                                  <h3 className={`text-xl font-black ${t.textMain} truncate`}>{activeField.name}</h3>
+                                  <h3 className={`text-lg font-black ${t.textMain} truncate`}>{activeField.name}</h3>
                                   {isLoadedActiveField && <span className="shrink-0 px-2 py-1 rounded-md bg-green-500/15 text-green-500 text-[10px] font-black uppercase">Loaded</span>}
                               </div>
-                              <div className={`mt-1 flex flex-wrap items-center gap-2 text-xs ${t.textSub}`}>
+                              <div className={`mt-0.5 flex flex-wrap items-center gap-2 text-xs ${t.textSub}`}>
                                   <span>{activeField.area}</span>
                                   <span className={t.textDim}>/</span>
                                   <span>Last used {activeField.lastUsed || '--'}</span>
@@ -6529,9 +6850,9 @@ const renderLinesPanel = () => {
                       </button>
                   </div>
 
-                  <div className="flex-1 min-h-0 overflow-hidden p-5 lg:p-6 flex flex-col">
-                      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(260px,1.02fr)_minmax(280px,0.98fr)] xl:grid-cols-[minmax(0,1.08fr)_minmax(360px,0.92fr)] gap-4 xl:gap-5 overflow-hidden">
-                          <section className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${softPanelBg} p-4 flex flex-col`}>
+                  <div className="flex-1 min-h-0 overflow-hidden p-4 lg:p-5 flex flex-col">
+                      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(230px,0.92fr)_minmax(340px,1.08fr)] xl:grid-cols-[minmax(0,0.95fr)_minmax(380px,1.05fr)] gap-4 overflow-hidden">
+                          <section className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${softPanelBg} p-3 flex flex-col`}>
                               <SectionTitle icon={MapIcon} title="Field Map" />
                               <div className="min-h-0 flex-1">
                                   <MiniFieldPreview field={activeField} />
@@ -6540,24 +6861,23 @@ const renderLinesPanel = () => {
 
                           <section className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${softPanelBg} flex flex-col overflow-hidden`}>
                               <div className={`shrink-0 p-3 border-b ${t.divider}`}>
-                                  <div className="flex items-center justify-between gap-3 mb-2">
+                                  <div className="flex items-center justify-between gap-3">
                                       <div className="flex items-center gap-2 min-w-0">
-                                          <ActiveAssetIcon className="w-4 h-4 text-blue-500 shrink-0" />
-                                          <h4 className={`font-black uppercase tracking-wider text-xs ${t.textSub} truncate`}>Guidance Lines</h4>
+                                          <ActiveAssetIcon className={`w-4 h-4 ${activeAssetIconClass} shrink-0`} />
+                                          <h4 className={`font-black uppercase tracking-wider text-xs ${t.textSub} truncate`}>{activeAssetMeta.title}</h4>
                                       </div>
+                                      <span className={`shrink-0 h-6 px-2 rounded-md ${mutedPanelBg} border ${t.borderCard} ${t.textMain} text-xs font-black flex items-center`}>{activeAssetMeta.count}</span>
                                   </div>
-                                  <div className={`grid grid-cols-1 gap-1.5 rounded-xl ${mutedPanelBg} p-1 border ${t.borderCard}`}>
-                                      {assetTabs.map(({ id, label, count, icon: Icon }) => (
+                                  <div className={`mt-2.5 grid grid-cols-3 gap-1 rounded-lg ${mutedPanelBg} p-1 border ${t.borderCard}`}>
+                                      {assetTabs.map(({ id, label, count, icon: Icon, tone }) => (
                                           <button
                                               key={id}
                                               onClick={() => setFieldAssetTab(id)}
-                                              className={`min-w-0 rounded-lg px-2 py-1.5 text-left transition-all border ${activeAssetTab === id ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/20' : `${theme === 'dark' ? 'bg-slate-900/70 border-slate-700' : 'bg-white border-gray-200'} ${t.textSub} hover:border-blue-400 hover:bg-blue-500/10`}`}
+                                              className={`min-w-0 h-9 rounded-md px-2 transition-all border flex items-center justify-center gap-1.5 ${getAssetTabClass(id, tone)}`}
                                           >
-                                              <div className="flex items-center justify-between gap-1">
-                                                  <Icon className="w-3.5 h-3.5 shrink-0" />
-                                                  <span className="text-sm font-black">{count}</span>
-                                              </div>
-                                              <div className="mt-0.5 text-[9px] uppercase font-black truncate">{label}</div>
+                                              <Icon className="w-3.5 h-3.5 shrink-0" />
+                                              <span className="text-[10px] uppercase font-black truncate">{label}</span>
+                                              <span className="text-[10px] font-black">{count}</span>
                                           </button>
                                       ))}
                                   </div>
@@ -6610,19 +6930,19 @@ const renderLinesPanel = () => {
                                                   tabIndex={0}
                                                   onClick={() => actions.setActiveBoundaryIdx(index)}
                                                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); actions.setActiveBoundaryIdx(index); } }}
-                                                  className={`w-full flex items-center justify-between gap-3 p-3 rounded-lg border text-left transition-all ${activeBoundaryIdx === index ? t.selectedItem : `${t.borderCard} ${mutedPanelBg} hover:brightness-95`}`}
+                                                  className={`w-full flex items-center justify-between gap-3 p-3 rounded-lg border text-left transition-all ${activeBoundaryIdx === index ? 'border-orange-500 bg-orange-500/10 shadow-sm ring-1 ring-orange-500/20' : `${t.borderCard} ${mutedPanelBg} hover:brightness-95`}`}
                                               >
                                                   <div className="flex items-center gap-3 min-w-0">
-                                                      <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${activeBoundaryIdx === index ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} ${t.textSub}`}`}>
+                                                      <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${activeBoundaryIdx === index ? 'bg-orange-500 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-orange-500`}`}>
                                                           <MapPin className="w-4 h-4" />
                                                       </div>
                                                       <div className="min-w-0">
                                                           <div className={`font-bold ${t.textMain} truncate`}>{boundary.name || `Boundary ${index + 1}`}</div>
-                                                          <div className={`text-xs ${t.textSub}`}>{(boundary.points || boundary || []).length} points</div>
+                                                          <div className={`text-xs ${t.textSub}`}>{getBoundaryPoints(boundary).length} points</div>
                                                       </div>
                                                   </div>
                                                   <div className="shrink-0 flex items-center gap-2">
-                                                      {activeBoundaryIdx === index && <span className="hidden sm:inline px-2 py-1 rounded-md bg-blue-600 text-white text-[10px] font-black uppercase">Active</span>}
+                                                      {activeBoundaryIdx === index && <span className="hidden sm:inline px-2 py-1 rounded-md bg-orange-500 text-white text-[10px] font-black uppercase">Active</span>}
                                                       <button
                                                           onClick={(e) => { e.stopPropagation(); confirmDelete('boundary', null, index); }}
                                                           className="p-2 rounded-lg text-red-500 hover:bg-red-500/10"
@@ -6681,8 +7001,8 @@ const renderLinesPanel = () => {
                                   )}
                               </div>
                               <div className={`shrink-0 p-3 border-t ${t.divider} ${theme === 'dark' ? 'bg-slate-950/40' : 'bg-white/70'}`}>
-                                  <button onClick={handleAssetAction} className="w-full h-11 rounded-xl bg-blue-600 text-white font-black hover:bg-blue-500 active:scale-[0.99] transition-all shadow-lg shadow-blue-900/20 flex items-center justify-center gap-2">
-                                      <Plus className="w-5 h-5" />
+                                  <button onClick={handleAssetAction} className={`w-full h-10 rounded-lg text-white font-black active:scale-[0.99] transition-all shadow-lg ${activeAssetActionClass} flex items-center justify-center gap-2`}>
+                                      <Plus className="w-4 h-4" />
                                       {activeAssetActionLabel}
                                   </button>
                               </div>
@@ -6690,18 +7010,18 @@ const renderLinesPanel = () => {
                       </div>
                   </div>
 
-                  <div className={`px-5 lg:px-6 py-4 border-t ${t.divider} flex flex-wrap items-center justify-between gap-3 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
-                      <button onClick={handleDeleteField} className="px-5 py-3 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold flex items-center gap-2">
-                          <Trash2 className="w-5 h-5" />
+                  <div className={`px-5 py-3 border-t ${t.divider} flex flex-wrap items-center justify-between gap-3 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
+                      <button onClick={handleDeleteField} className="px-4 py-2.5 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold flex items-center gap-2">
+                          <Trash2 className="w-4 h-4" />
                           Delete Field
                       </button>
                       <div className="flex flex-wrap items-center gap-3">
-                          <button onClick={() => showNotification('Field sync queued', 'info')} className={`px-5 py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 font-bold flex items-center gap-2`}>
-                              <Globe className="w-5 h-5 text-blue-500" />
+                          <button onClick={() => showNotification('Field sync queued', 'info')} className={`px-4 py-2.5 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 font-bold flex items-center gap-2`}>
+                              <Globe className="w-4 h-4 text-blue-500" />
                               Sync
                           </button>
-                          <button onClick={handleLoadField} className="px-7 py-3 rounded-lg bg-green-600 text-white font-black hover:bg-green-500 shadow-lg shadow-green-900/20 flex items-center gap-2">
-                              <CheckCircle2 className="w-5 h-5" />
+                          <button onClick={handleLoadField} className="px-6 py-2.5 rounded-lg bg-green-600 text-white font-black hover:bg-green-500 shadow-lg shadow-green-900/20 flex items-center gap-2">
+                              <CheckCircle2 className="w-4 h-4" />
                               {isLoadedActiveField ? 'Reload Field' : 'Load Field'}
                           </button>
                       </div>
@@ -6718,13 +7038,13 @@ const renderLinesPanel = () => {
 
       return (
           <div className={`w-full h-full flex flex-col ${panelBg}`}>
-              <div className={`flex items-center justify-between gap-4 px-6 py-5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+              <div className={`flex items-center justify-between gap-4 px-5 py-4 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
                   <div className="min-w-0 flex items-center gap-3">
-                      <div className={`shrink-0 w-11 h-11 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
-                          <FolderOpen className="w-6 h-6 text-blue-500" />
+                      <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
+                          <FolderOpen className="w-5 h-5 text-blue-500" />
                       </div>
                       <div className="min-w-0">
-                          <h2 className={`text-xl font-black ${t.textMain}`}>Field Library</h2>
+                          <h2 className={`text-lg font-black ${t.textMain}`}>Field Library</h2>
                           <div className={`text-xs ${t.textSub} truncate`}>{fields.length} saved fields / {loadedField ? `${loadedField.name} loaded` : 'No field loaded'}</div>
                       </div>
                   </div>
@@ -6734,32 +7054,36 @@ const renderLinesPanel = () => {
               </div>
 
               <div className="flex-1 min-h-0 flex overflow-hidden">
-                      <aside className={`w-[28%] min-w-[260px] max-w-[340px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
-                          <div className="p-4 border-b border-transparent">
-                              <div className="grid grid-cols-3 gap-2 mb-4">
-                                  <div className={`${mutedPanelBg} border ${t.borderCard} rounded-lg p-3`}>
-                                      <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Fields</div>
-                                      <div className={`text-2xl font-black ${t.textMain}`}>{fields.length}</div>
+                      <aside className={`w-[25%] min-w-[228px] max-w-[286px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
+                          <div className={`shrink-0 px-4 py-3 border-b ${t.divider}`}>
+                              <div className="flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                      <div className={`text-[9px] font-black uppercase tracking-wider ${t.textSub}`}>Library</div>
+                                      <div className={`text-base font-black ${t.textMain}`}>Fields</div>
                                   </div>
-                                  <div className={`${mutedPanelBg} border ${t.borderCard} rounded-lg p-3`}>
-                                      <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Loaded</div>
-                                      <div className={`text-2xl font-black ${loadedField ? 'text-green-500' : t.textMain}`}>{loadedField ? 1 : 0}</div>
-                                  </div>
-                                  <div className={`${mutedPanelBg} border ${t.borderCard} rounded-lg p-3`}>
-                                      <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Lines</div>
-                                      <div className={`text-2xl font-black ${t.textMain}`}>{fields.reduce((total, f) => total + (f.lines || []).filter(line => !line.archived).length, 0)}</div>
-                                  </div>
+                                  <button
+                                      onClick={startFieldCreation}
+                                      className="shrink-0 h-9 px-3 bg-blue-600 text-white rounded-lg font-black flex justify-center items-center gap-1.5 hover:bg-blue-500 shadow-md shadow-blue-900/20"
+                                  >
+                                      <Plus className="w-4 h-4" />
+                                      <span className="text-xs">New</span>
+                                  </button>
                               </div>
-                              <button
-                                  onClick={startFieldCreation}
-                                  className="w-full py-3 bg-blue-600 text-white rounded-lg font-black flex justify-center items-center gap-2 hover:bg-blue-500 shadow-lg shadow-blue-900/20"
-                              >
-                                  <Plus className="w-5 h-5" />
-                                  New Field
-                              </button>
+                              <div className={`mt-3 h-10 rounded-lg border flex items-center px-2 ${theme === 'dark' ? 'bg-blue-500/10 border-blue-500/20' : 'bg-blue-50 border-blue-200'}`}>
+                                  {[
+                                      ['Fields', fields.length],
+                                      ['Loaded', loadedField ? 1 : 0],
+                                      ['Lines', fields.reduce((total, f) => total + (f.lines || []).filter(line => !line.archived).length, 0)]
+                                  ].map(([label, value], index) => (
+                                      <div key={label} className={`min-w-0 flex-1 flex items-center justify-center gap-1.5 ${index > 0 ? `${theme === 'dark' ? 'border-l border-blue-500/20' : 'border-l border-blue-200'}` : ''}`}>
+                                          <span className={`text-sm font-black leading-none ${theme === 'dark' ? 'text-blue-300' : 'text-blue-700'}`}>{value}</span>
+                                          <span className={`text-[8px] font-black uppercase truncate ${theme === 'dark' ? 'text-blue-200/70' : 'text-blue-700/70'}`}>{label}</span>
+                                      </div>
+                                  ))}
+                              </div>
                           </div>
 
-                          <div className="flex-1 min-h-0 overflow-y-auto p-4 pt-0 space-y-3">
+                          <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2">
                               {fields.map(f => {
                                   const selected = selectedFieldId === f.id;
                                   const loaded = loadedField?.id === f.id;
@@ -6771,43 +7095,44 @@ const renderLinesPanel = () => {
                                           key={f.id}
                                           onClick={() => { actions.setSelectedFieldId(f.id); actions.setViewMode('LIST'); }}
                                           title={f.name}
-                                          className={`w-full text-left p-4 rounded-xl border transition-all ${selected ? t.selectedItem : `${softPanelBg} ${t.borderCard} hover:brightness-95`}`}
+                                          className={`relative w-full text-left p-3 rounded-lg border transition-all ${selected ? `${t.selectedItem} shadow-sm` : `${softPanelBg} ${t.borderCard} hover:brightness-95`}`}
                                       >
-                                          <div className="flex items-center justify-between gap-3">
-                                              <div className={`shrink-0 w-11 h-11 rounded-xl flex items-center justify-center ${selected ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textSub}`}`}>
-                                                  <MapIcon className="w-5 h-5" />
+                                          {selected && <span className="absolute left-0 top-3 bottom-3 w-1 rounded-r bg-blue-600" />}
+                                          <div className="flex items-start justify-between gap-3">
+                                              <div className="min-w-0 flex items-center gap-3">
+                                                  <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${selected ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textSub}`}`}>
+                                                      <MapIcon className="w-4 h-4" />
+                                                  </div>
+                                                  <div className="min-w-0">
+                                                      <div
+                                                          className={`font-black ${t.textMain} leading-tight`}
+                                                          style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                                                      >
+                                                          {f.name}
+                                                      </div>
+                                                      <div className={`mt-0.5 text-xs ${t.textSub}`}>{f.area || '--'} / {f.lastUsed || '--'}</div>
+                                                  </div>
                                               </div>
                                               {loaded ? <CheckCircle2 className="shrink-0 w-5 h-5 text-green-500" /> : selected ? <Check className="shrink-0 w-5 h-5 text-blue-500" /> : null}
                                           </div>
-                                          <div className="mt-3 min-w-0">
-                                              <div
-                                                  className={`font-black ${t.textMain} leading-tight`}
-                                                  style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
-                                              >
-                                                  {f.name}
-                                              </div>
-                                              <div className={`text-xs ${t.textSub}`}>{f.area || '--'} / {f.lastUsed || '--'}</div>
-                                          </div>
-                                          <div className="mt-4 grid grid-cols-3 gap-2">
-                                              <div className={`rounded-lg ${mutedPanelBg} border ${t.borderCard} px-2 py-2 text-center`}>
-                                                  <div className={`text-sm font-black ${t.textMain}`}>{fieldBoundaries.length}</div>
-                                                  <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>Bounds</div>
-                                              </div>
-                                              <div className={`rounded-lg ${mutedPanelBg} border ${t.borderCard} px-2 py-2 text-center`}>
-                                                  <div className={`text-sm font-black ${t.textMain}`}>{fieldLines.length}</div>
-                                                  <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>Lines</div>
-                                              </div>
-                                              <div className={`rounded-lg ${mutedPanelBg} border ${t.borderCard} px-2 py-2 text-center`}>
-                                                  <div className={`text-sm font-black ${t.textMain}`}>{fieldTasks.length}</div>
-                                                  <div className={`text-[9px] uppercase font-bold ${t.textSub}`}>Tasks</div>
-                                              </div>
+                                          <div className="mt-2.5 flex items-center gap-1.5 min-w-0">
+                                              {[
+                                                  ['B', fieldBoundaries.length],
+                                                  ['L', fieldLines.length],
+                                                  ['T', fieldTasks.length]
+                                              ].map(([label, value]) => (
+                                                  <span key={label} className={`min-w-0 flex-1 rounded-md ${mutedPanelBg} border ${t.borderCard} px-1.5 py-1 text-center`}>
+                                                      <span className={`text-xs font-black ${t.textMain}`}>{value}</span>
+                                                      <span className={`ml-1 text-[8px] uppercase font-black ${t.textSub}`}>{label}</span>
+                                                  </span>
+                                              ))}
                                           </div>
                                       </button>
                                   );
                               })}
                           </div>
                       </aside>
-                      <div className={`flex-1 min-w-0 min-h-0 p-5 lg:p-6 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
+                      <div className={`flex-1 min-w-0 min-h-0 p-4 lg:p-5 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
                       <section className={`${softPanelBg} border ${t.borderCard} rounded-xl flex flex-col min-h-0 h-full overflow-hidden`}>
                           {rightContent}
                       </section>
@@ -6819,10 +7144,10 @@ const renderLinesPanel = () => {
 
   return (
     <div className="w-full h-screen bg-neutral-900 flex items-center justify-center p-4 overflow-hidden">
-        <div className={`relative ${t.deviceFrame} shadow-2xl overflow-hidden flex border-[12px] rounded-2xl ring-4 ring-black/50 transition-colors duration-500`} style={{ width: '100%', maxWidth: '1280px', aspectRatio: '16/10', maxHeight: '100%' }}>
+        <div className={`relative ${t.deviceFrame} shadow-2xl overflow-hidden flex border-[12px] rounded-2xl ring-4 ring-black/50 transition-colors duration-500`} style={{ width: '100%', maxWidth: '1280px', height: 'min(800px, calc(100vh - 32px))', maxHeight: '100%' }}>
             {/* LEFT RAIL */}
-            <aside className={`w-[8%] min-w-[70px] flex-shrink-0 ${t.bgPanel} border-r ${t.border} flex flex-col items-center py-[2%] z-30 shadow-2xl`}>
-                <div className="mb-[15%]"><div className="w-10 h-10 lg:w-12 lg:h-12 bg-blue-600 rounded-xl flex items-center justify-center font-black text-xl lg:text-2xl italic shadow-blue-900/50 shadow-lg text-white">F</div></div>
+            <aside className={`w-[8.5%] min-w-[82px] flex-shrink-0 ${t.bgPanel} border-r ${t.border} flex flex-col items-center py-[2%] z-30 shadow-2xl`}>
+                <div className="mb-[15%]"><div className="w-10 h-10 xl:w-12 xl:h-12 bg-blue-600 rounded-xl flex items-center justify-center font-black text-xl xl:text-2xl italic shadow-blue-900/50 shadow-lg text-white">F</div></div>
                 <nav className="flex-1 w-full flex flex-col items-center gap-2 pt-3">
                     <RailButton theme={t} icon={MapIcon} label="Run" active={!settingsOpen && !fieldManagerOpen && !linesPanelOpen} onClick={openRunScreen} />
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
@@ -6835,6 +7160,7 @@ const renderLinesPanel = () => {
                         active={linesPanelOpen}
                         onClick={openLinesCatalog}
                     />
+                    <div className={`h-px w-1/2 ${t.divider}`}></div>
                     <RailButton
                         theme={t}
                         icon={MapPin}
@@ -6842,6 +7168,7 @@ const renderLinesPanel = () => {
                         active={fieldManagerOpen && fieldAssetTab === 'boundaries'}
                         onClick={() => openFieldAssetPanel('boundaries')}
                     />
+                    <div className={`h-px w-1/2 ${t.divider}`}></div>
                     <RailButton
                         theme={t}
                         icon={FileText}
@@ -7068,10 +7395,10 @@ const renderLinesPanel = () => {
                     {(dragOffset.x !== 0 || dragOffset.y !== 0) && (
                         <button
                             onClick={handleRecenter}
-                            className={`absolute bottom-32 right-[120px] p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain} shadow-lg flex items-center gap-2 z-20`}
+                            className={`absolute bottom-32 right-[118px] xl:right-[128px] p-2 ${t.bgCard} backdrop-blur border ${t.borderCard} rounded-lg ${t.textMain} shadow-lg flex items-center gap-2 z-20`}
                         >
                             <Crosshair className="w-6 h-6 text-blue-500" />
-                            <span className="text-xs font-bold hidden lg:inline">Re-center</span>
+                            <span className="text-xs font-bold hidden xl:inline">Re-center</span>
                         </button>
                     )}
 
@@ -7080,20 +7407,20 @@ const renderLinesPanel = () => {
                 </div>
 
                 {/* ... rest of the app ... */}
-                <header className={`h-[72px] min-h-[72px] ${t.bgHeader} backdrop-blur-md grid grid-cols-[minmax(190px,1fr)_minmax(280px,430px)_minmax(250px,auto)] items-center gap-2 lg:gap-4 px-3 lg:px-[3%] z-20 border-b ${t.border}`}>
+                <header className={`h-[72px] min-h-[72px] ${t.bgHeader} backdrop-blur-md grid grid-cols-[minmax(140px,1fr)_minmax(210px,430px)_minmax(190px,auto)] items-center gap-2 xl:gap-4 px-3 xl:px-[3%] z-20 border-b ${t.border}`}>
                     <div className="min-w-0 flex items-center gap-3">
                         <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-100'} flex items-center justify-center`}>
                             <MapIcon className="w-5 h-5 text-blue-500" />
                         </div>
                         <div className="min-w-0">
-                            <div className={`flex items-center gap-2 text-[10px] lg:text-xs ${t.textSub} uppercase tracking-wider font-black`}>
+                            <div className={`flex items-center gap-2 text-[10px] xl:text-xs ${t.textSub} uppercase tracking-wider font-black`}>
                                 <Layers className="w-3 h-3 shrink-0" />
                                 <span className="truncate">Run / {activeTaskRecord?.name || 'No Task'} / {Number(implementSettings.width || 0).toFixed(1)} m</span>
                             </div>
-                            <div className="min-w-0 flex items-center gap-1.5 lg:gap-2">
-                                <span className={`${t.textMain} font-black text-xs lg:text-base truncate`}>{activeFieldRecord?.name || 'No Field Loaded'}</span>
+                            <div className="min-w-0 flex items-center gap-1.5 xl:gap-2">
+                                <span className={`${t.textMain} font-black text-xs xl:text-base truncate`}>{activeFieldRecord?.name || 'No Field Loaded'}</span>
                                 <span className={`${t.textDim} shrink-0`}>/</span>
-                                <span className="text-blue-500 font-black text-xs lg:text-base truncate">{activeLineRecord?.name || getGuidanceModeLabel()}</span>
+                                <span className="text-blue-500 font-black text-xs xl:text-base truncate">{activeLineRecord?.name || getGuidanceModeLabel()}</span>
                             </div>
                         </div>
                     </div>
@@ -7111,21 +7438,22 @@ const renderLinesPanel = () => {
                 {renderProductivityPanel()}
 
                 {/* BOTTOM BAR */}
-                <div className={`absolute bottom-0 left-0 right-0 h-[98px] min-h-[92px] ${t.bgBottom} backdrop-blur-xl border-t ${t.border} grid grid-cols-[minmax(290px,1fr)_minmax(340px,420px)_minmax(260px,1fr)] items-center gap-3 lg:gap-4 px-3 lg:px-[3%] z-30`}>
-                    <div className="min-w-0 h-full py-3 grid grid-cols-[88px_104px_92px] gap-2.5 justify-start">
+                <div className={`absolute bottom-0 left-0 right-0 h-[98px] min-h-[92px] ${t.bgBottom} backdrop-blur-xl border-t ${t.border} grid grid-cols-[minmax(170px,0.75fr)_minmax(260px,1.2fr)_minmax(200px,0.9fr)] xl:grid-cols-[minmax(304px,0.95fr)_minmax(260px,1.15fr)_minmax(220px,0.9fr)] items-center gap-2 xl:gap-4 px-2 xl:px-[3%] z-30`}>
+                    <div className="min-w-0 h-full py-3 grid grid-cols-2 xl:grid-cols-[88px_104px_92px] gap-2 xl:gap-2.5 justify-start">
                         <button onClick={handleUTurn} className={`h-[74px] w-full px-2 rounded-xl border ${turnAssistActive ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'}`} flex flex-col items-center justify-center active:scale-95`}>
                             <CornerUpLeft className={`w-7 h-7 ${turnAssistActive ? 'text-blue-500' : t.textDim}`}/>
                             <span className={`text-[11px] font-black ${turnAssistActive ? 'text-blue-500' : t.textSub}`}>U-TURN</span>
                         </button>
                         <button onClick={() => setIsRecording(!isRecording)} className={`h-[74px] w-full px-2 rounded-xl border flex flex-col items-center justify-center ${isRecording?'bg-red-900/20 border-red-500 text-red-500':`${theme==='dark'?'bg-slate-900 border-slate-700':'bg-gray-100 border-gray-300'} ${t.textDim}`}`}>
-                            <div className={`w-4 h-4 rounded-full ${isRecording?'bg-red-500 animate-pulse':'bg-slate-500'}`}/>
+                            <div className={`w-4 h-4 rounded-full ${isRecording?'bg-red-500 motion-safe:animate-pulse':'bg-slate-500'}`}/>
                             <span className="text-[11px] font-black tracking-widest">{isRecording?'REC':'COVERAGE'}</span>
                         </button>
                         <button
                             type="button"
                             aria-label={`Productivity summary: ${workedArea.toFixed(2)} hectares done`}
                             onClick={() => { setProductivityOpen(prev => !prev); setRtkQualityOpen(false); setEventHistoryOpen(false); }}
-                            className={`hidden lg:flex h-[74px] w-full px-2 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex-col items-center justify-center focus:outline-none focus:ring-2 focus:ring-blue-500`}
+                            disabled={isRecordingBoundary}
+                            className={`hidden xl:flex h-[74px] w-full px-2 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex-col items-center justify-center focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
                             <span className={`text-[10px] font-black uppercase ${t.textSub}`}>Area</span>
                             <span className={`text-2xl font-black leading-none ${t.textMain}`}>{workedArea.toFixed(2)}</span>
@@ -7142,12 +7470,12 @@ const renderLinesPanel = () => {
                             </div>
                             <div className={`min-w-0 h-[52px] border-x ${t.borderCard} flex flex-col items-center justify-center`}>
                                 <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Steer Cmd</div>
-                                <div className={`text-xl font-black ${Math.abs(steeringAngle) > 1 ? 'text-blue-500' : t.textMain}`}>{steeringAngle.toFixed(1)}deg</div>
+                                <div className={`text-xl font-black ${Math.abs(steeringAngle) > 1 ? 'text-blue-500' : t.textMain}`}>{steeringAngle.toFixed(1)}°</div>
                                 <div className={`text-[11px] ${t.textSub} uppercase font-black`}>{steeringMode}</div>
                             </div>
                             <div className="min-w-0 flex flex-col items-center justify-center">
                                 <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Heading</div>
-                                <div className={`text-xl font-black ${t.textMain}`}>{heading.toFixed(1)}deg</div>
+                                <div className={`text-xl font-black ${t.textMain}`}>{heading.toFixed(1)}°</div>
                                 <div className={`text-[11px] ${t.textSub} uppercase font-black`}>{getCardinalShortDirection(heading)}</div>
                             </div>
                         </div>
@@ -7155,17 +7483,18 @@ const renderLinesPanel = () => {
 
                     <div className="min-w-0 h-full py-3 flex items-center justify-end">
                         <button
-                            onClick={toggleSteering}
-                            aria-label={`Autosteer ${autosteerPrimaryLabel}: ${autosteerSubLabel}`}
-                            className={`h-[74px] w-full max-w-[300px] rounded-xl flex items-center justify-between px-5 shadow-xl active:scale-95 border ${steeringMode==='AUTO'?'bg-green-600 border-green-400': autosteerReady ? 'bg-slate-800 border-green-500/55' : `${theme==='dark'?'bg-slate-800 border-slate-600':'bg-gray-800 border-gray-600'}`}`}
+                            type="button"
+                            onClick={handleAutosteerPrimary}
+                            aria-label={`Autosteer ${autosteerStateLabel}. ${autosteerPrimaryLabel}. ${autosteerSubLabel}`}
+                            className={`h-[74px] w-full max-w-[300px] rounded-xl flex items-center justify-between px-4 xl:px-5 shadow-xl active:scale-95 border transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 ${autosteerButtonTone}`}
                         >
                             <div className="flex flex-col items-start min-w-0">
-                                <span className={`text-xs font-black uppercase ${steeringMode==='AUTO'?'text-green-200': autosteerReady ? 'text-green-300' : 'text-slate-400'}`}>Autosteer</span>
-                                <span className="text-2xl font-black text-white truncate">{autosteerPrimaryLabel}</span>
-                                <span className={`text-[10px] font-bold ${steeringMode==='AUTO'?'text-green-100': autosteerReady ? 'text-green-200' : 'text-slate-400'}`}>{autosteerSubLabel}</span>
+                                <span className={`text-[11px] font-black uppercase tracking-wide ${autosteerAccentText}`}>Autosteer / {autosteerStateLabel}</span>
+                                <span className="text-xl xl:text-2xl font-black text-white truncate">{autosteerPrimaryLabel}</span>
+                                <span className={`max-w-[190px] text-[10px] font-bold truncate ${autosteerStateLabel === 'BLOCKED' ? 'text-slate-300' : 'text-white/90'}`}>{autosteerSubLabel}</span>
                             </div>
-                            <div className={`shrink-0 w-12 h-12 rounded-full flex items-center justify-center ${steeringMode==='AUTO'?'bg-white/20 text-white': autosteerReady ? 'bg-green-500/15 text-green-300' : 'bg-black/20 text-slate-400'}`}>
-                                <SteeringWheelIcon className={`w-8 h-8 ${steeringMode==='AUTO'?'animate-spin-slow':''}`}/>
+                            <div className={`shrink-0 w-11 h-11 xl:w-12 xl:h-12 rounded-full flex items-center justify-center ${autosteerIconTone}`}>
+                                <AutosteerStatusIcon className="w-8 h-8"/>
                             </div>
                         </button>
                     </div>
@@ -7376,12 +7705,15 @@ const renderLinesPanel = () => {
                         </div>
                     </div>
                 )}
-                {/* ACTION DOCK */}
-                <div className="absolute right-2 lg:right-4 top-[132px] bottom-[116px] w-[96px] z-20 flex flex-col justify-center pointer-events-none">
-                    <div className="pointer-events-auto w-full flex flex-col items-end gap-2">
+                {(!runDockSuppressed || isRecordingBoundary) && (
+                    <aside
+                        data-run-dock
+                        aria-label="Contextual run controls"
+                        className="absolute right-3 top-[84px] bottom-[112px] z-[35] pointer-events-none flex items-start"
+                    >
                         {renderActionDock()}
-                    </div>
-                </div>
+                    </aside>
+                )}
             </main>
         </div>
     </div>
