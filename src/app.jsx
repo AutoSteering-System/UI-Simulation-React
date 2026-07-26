@@ -168,6 +168,10 @@ const App = () => {
   const [diagnosticsPanelOpen, setDiagnosticsPanelOpen] = useState(false);
   const [isCombinationPaused, setIsCombinationPaused] = useState(false);
   const [vehicleProfileSearch, setVehicleProfileSearch] = useState('');
+  const [vehicleSetupStep, setVehicleSetupStep] = useState('information');
+  const [vehicleGeometryGroup, setVehicleGeometryGroup] = useState('chassis');
+  const [vehicleMeasureFocus, setVehicleMeasureFocus] = useState('wheelbase');
+  const settingsContentScrollRef = useRef(null);
   const [implementProfileSearch, setImplementProfileSearch] = useState('');
   const [rtkQualityOpen, setRtkQualityOpen] = useState(false);
   const [eventHistoryOpen, setEventHistoryOpen] = useState(false);
@@ -4881,8 +4885,43 @@ const App = () => {
       actions.setVehicleSettings(prev => ({ ...prev, [key]: value }));
   };
 
+  const vehicleSetupStepIds = ['information', 'geometry', 'summary'];
+  const goToVehicleStep = (index) => {
+      const bounded = Math.max(0, Math.min(vehicleSetupStepIds.length - 1, index));
+      setVehicleSetupStep(vehicleSetupStepIds[bounded]);
+      requestAnimationFrame(() => {
+          settingsContentScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+  };
+
   const applyVehicleProfile = (profile) => {
-      actions.setVehicleSettings(prev => ({ ...prev, ...profile, profileId: profile.id }));
+      const fallbackPower = profile.id === 'articulated' ? 420 : profile.id === 'self-propelled' ? 280 : 125;
+      actions.setVehicleSettings(prev => ({
+          ...prev,
+          ...profile,
+          profileId: profile.id,
+          label: profile.label || profile.type || prev.label,
+          brand: profile.brand || 'Generic',
+          model: profile.model || profile.label || profile.type || 'Vehicle',
+          controlType: profile.controlType || (profile.steeringType === 'Articulated' || profile.id === 'self-propelled' ? 'CAN Hydraulic' : 'Electronic Steering Wheel'),
+          horsepower: Number(profile.horsepower || fallbackPower),
+          purchaseDate: profile.purchaseDate || prev.purchaseDate || '',
+          frontOverhang: Number(profile.frontOverhang ?? prev.frontOverhang ?? 1.35),
+          rearOverhang: Number(profile.rearOverhang ?? prev.rearOverhang ?? 1.05),
+          overallHeight: Number(profile.overallHeight ?? prev.overallHeight ?? 3.1),
+          antennaToRearAxle: Number(profile.antennaToRearAxle ?? Math.max(0.5, Number(profile.wheelbase || prev.wheelbase || 2.5) * 0.46)),
+          gnssReceiverModel: profile.gnssReceiverModel || prev.gnssReceiverModel || 'AG-372',
+          gnssLayout: 'Dual antenna horizontal',
+          gnssAntennaCount: 2,
+          gnssBaseline: Number(profile.gnssBaseline ?? prev.gnssBaseline ?? 1.2),
+          gnssPrimarySide: profile.gnssPrimarySide || prev.gnssPrimarySide || 'Left / ANT A',
+          gnssMountPosition: profile.gnssMountPosition || prev.gnssMountPosition || 'Cab roof crossbar',
+          gnssHeadingOffset: Number(profile.gnssHeadingOffset ?? prev.gnssHeadingOffset ?? 0),
+          gnssRollOffset: Number(profile.gnssRollOffset ?? prev.gnssRollOffset ?? 0),
+          gnssPitchOffset: Number(profile.gnssPitchOffset ?? prev.gnssPitchOffset ?? 0),
+          hitchOffset: Number(profile.hitchOffset ?? prev.hitchOffset ?? 0),
+          hitchHeight: Number(profile.hitchHeight ?? prev.hitchHeight ?? 0.65)
+      }));
       showNotification(`${profile.label} vehicle profile applied`, 'success');
   };
 
@@ -5046,6 +5085,764 @@ const App = () => {
           </div>
       </div>
   );
+
+  const VehicleLibrarySidebar = () => (
+      <aside className={`flex min-h-0 flex-col border-r ${t.border} ${theme === 'dark' ? 'bg-slate-950/45' : 'bg-slate-50/80'}`}>
+          <div className={`border-b ${t.border} p-3`}>
+              <div className="flex items-center justify-between gap-2">
+                  <div>
+                      <div className={`text-[9px] font-black uppercase tracking-wider ${t.textSub}`}>Vehicle library</div>
+                      <div className={`text-sm font-black ${t.textMain}`}>Saved machines</div>
+                  </div>
+                  <span className="rounded-full bg-blue-500/10 px-2 py-1 text-[9px] font-black text-blue-500">{savedVehicleProfiles.length}</span>
+              </div>
+              <div className="relative mt-3">
+                  <Search className={`absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ${t.textDim}`} />
+                  <input
+                      value={vehicleProfileSearch}
+                      onChange={(event) => setVehicleProfileSearch(event.target.value)}
+                      placeholder="Search vehicle"
+                      className={`w-full rounded-lg border ${t.borderCard} ${t.bgInput} py-2.5 pl-8 pr-3 text-[11px] ${t.textMain} outline-none focus:border-blue-500`}
+                  />
+              </div>
+          </div>
+
+          <div className="flex-1 space-y-2 overflow-y-auto p-3">
+              {filteredVehicleProfiles.map((profile) => {
+                  const active = vehicleSettings.profileId === profile.id;
+                  return (
+                      <button
+                          key={profile.id}
+                          type="button"
+                          onClick={() => applyVehicleProfile(profile)}
+                          className={`group relative flex w-full min-w-0 items-center gap-2.5 rounded-xl border p-2.5 text-left transition-colors ${active ? 'border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/15' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/55' : 'bg-white'} hover:border-blue-500/50`}`}
+                      >
+                          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-blue-50'} text-blue-500`}`}>
+                              <Tractor className="h-[18px] w-[18px]" />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                              <span className={`block truncate text-[11px] font-black ${t.textMain}`}>{profile.label}</span>
+                              <span className={`block truncate text-[9px] ${t.textSub}`}>{profile.brand || 'Generic'} · {profile.model || profile.type}</span>
+                          </span>
+                          {profile.custom ? (
+                              <span
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-label={`Delete ${profile.label}`}
+                                  onClick={(event) => deleteVehicleProfile(profile, event)}
+                                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') deleteVehicleProfile(profile, event); }}
+                                  className="rounded-md p-1 text-red-500 opacity-60 hover:bg-red-500/10 group-hover:opacity-100"
+                              >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                              </span>
+                          ) : active ? <CheckCircle2 className="h-4 w-4 shrink-0 text-blue-500" /> : null}
+                      </button>
+                  );
+              })}
+              {filteredVehicleProfiles.length === 0 && (
+                  <div className={`rounded-xl border border-dashed ${t.borderCard} p-4 text-center text-[11px] ${t.textDim}`}>No matching vehicle.</div>
+              )}
+          </div>
+
+          <div className={`border-t ${t.border} p-3`}>
+              <button
+                  type="button"
+                  onClick={() => showNotification('Quick import is ready for a vehicle profile file', 'info')}
+                  className={`flex w-full items-center justify-center gap-2 rounded-lg border ${t.borderCard} px-3 py-2.5 text-[10px] font-black ${t.textSub} hover:border-blue-500 hover:text-blue-500`}
+              >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  Import profile
+              </button>
+          </div>
+      </aside>
+  );
+
+  const VehicleParameterInput = ({ field, label, value, unit = 'm', hint }) => {
+      const active = vehicleMeasureFocus === field;
+      return (
+          <label
+              className={`block rounded-xl border p-3 transition-colors cursor-text ${active ? 'border-blue-500 bg-blue-500/8 ring-1 ring-blue-500/20' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/60' : 'bg-white'}`}`}
+              onClick={() => setVehicleMeasureFocus(field)}
+          >
+              <span className={`block text-[10px] font-black uppercase tracking-wide ${active ? 'text-blue-500' : t.textSub}`}>{label}</span>
+              <span className="mt-1.5 flex items-center gap-2">
+                  <input
+                      type="number"
+                      step={unit === '°' ? '0.1' : '0.01'}
+                      value={Number.isFinite(Number(value)) ? Math.round(Number(value) * 1000) / 1000 : 0}
+                      onFocus={() => setVehicleMeasureFocus(field)}
+                      onChange={(event) => handleVehicleChange(field, parseFloat(event.target.value) || 0)}
+                      className={`min-w-0 flex-1 bg-transparent text-lg font-black outline-none ${t.textMain}`}
+                  />
+                  <span className={`text-xs font-black uppercase ${t.textDim}`}>{unit}</span>
+              </span>
+              {hint && <span className={`mt-1 block text-[10px] leading-snug ${t.textDim}`}>{hint}</span>}
+          </label>
+      );
+  };
+
+  const GnssAxisField = ({ field, axis, label, value, color, hint, unit = 'm' }) => {
+      const active = vehicleMeasureFocus === field;
+      const normalizedValue = Number.isFinite(Number(value)) ? Math.round(Number(value) * 1000) / 1000 : 0;
+      return (
+          <label
+              className={`flex min-w-0 cursor-text items-center gap-3 border-b ${t.border} px-3 py-2.5 last:border-b-0 transition-colors ${active ? 'bg-blue-500/5' : ''}`}
+              style={active ? { boxShadow: `inset 3px 0 0 ${color}` } : undefined}
+              onClick={() => setVehicleMeasureFocus(field)}
+          >
+              <span
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-black text-white shadow-sm"
+                  style={{ backgroundColor: color }}
+              >
+                  {axis}
+              </span>
+              <span className="min-w-0 flex-1">
+                  <span className={`block text-[10px] font-black uppercase tracking-wide ${t.textMain}`}>{label}</span>
+                  <span className={`block truncate text-[9px] ${t.textDim}`}>{hint}</span>
+              </span>
+              <span className={`flex w-[88px] shrink-0 items-center rounded-lg border ${active ? 'border-blue-500/40' : t.borderCard} ${t.bgInput} px-2.5`}>
+                  <input
+                      type="number"
+                      step={unit === '°' ? '0.1' : '0.01'}
+                      value={normalizedValue}
+                      onFocus={() => setVehicleMeasureFocus(field)}
+                      onChange={(event) => handleVehicleChange(field, parseFloat(event.target.value) || 0)}
+                      className={`h-9 min-w-0 flex-1 bg-transparent text-right text-sm font-black outline-none ${t.textMain}`}
+                  />
+                  <span className={`ml-1 text-[9px] font-black uppercase ${t.textDim}`}>{unit}</span>
+              </span>
+          </label>
+      );
+  };
+
+  const GnssAngleField = ({ field, axis, label, value, color }) => {
+      const active = vehicleMeasureFocus === field;
+      return (
+          <label
+              className={`min-w-0 cursor-text rounded-xl border p-2.5 transition-colors ${active ? 'bg-blue-500/5' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white'}`}`}
+              style={active ? { borderColor: color, boxShadow: `0 0 0 1px ${color}22` } : undefined}
+              onClick={() => setVehicleMeasureFocus(field)}
+          >
+              <span className="flex items-center gap-1.5">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-md text-[8px] font-black text-white" style={{ backgroundColor: color }}>{axis}</span>
+                  <span className={`truncate text-[9px] font-black uppercase ${t.textSub}`}>{label}</span>
+              </span>
+              <span className="mt-2 flex items-end gap-1">
+                  <input
+                      type="number"
+                      step="0.1"
+                      value={Number.isFinite(Number(value)) ? Math.round(Number(value) * 10) / 10 : 0}
+                      onFocus={() => setVehicleMeasureFocus(field)}
+                      onChange={(event) => handleVehicleChange(field, parseFloat(event.target.value) || 0)}
+                      className={`min-w-0 flex-1 bg-transparent text-lg font-black leading-none outline-none ${t.textMain}`}
+                  />
+                  <span className={`text-[10px] font-black ${t.textDim}`}>°</span>
+              </span>
+          </label>
+      );
+  };
+
+  const GnssMountingDiagram = () => {
+      const xColor = '#2563eb';
+      const yColor = '#8b5cf6';
+      const zColor = '#16a34a';
+      const baselineColor = '#f59e0b';
+      const yawColor = '#f97316';
+      const rollColor = '#06b6d4';
+      const pitchColor = '#ec4899';
+      const gridColor = theme === 'dark' ? '#1e293b' : '#e2e8f0';
+      const bodyFill = theme === 'dark' ? '#172554' : '#dbeafe';
+      const bodyStroke = theme === 'dark' ? '#60a5fa' : '#2563eb';
+      const wheelFill = theme === 'dark' ? '#475569' : '#334155';
+      const labelColor = theme === 'dark' ? '#cbd5e1' : '#334155';
+      const panelFill = theme === 'dark' ? '#020617' : '#f8fafc';
+      const xValue = Number(vehicleSettings.antennaToRearAxle || 0);
+      const yValue = Number(vehicleSettings.antennaOffset || 0);
+      const zValue = Number(vehicleSettings.antennaHeight || 0);
+      const baselineValue = Math.max(0.2, Number(vehicleSettings.gnssBaseline || 1.2));
+      const pairCenterX = 160 + Math.max(-42, Math.min(42, yValue * 34));
+      const pairCenterY = 151 - Math.max(18, Math.min(102, xValue * 52));
+      const baselinePixels = Math.max(58, Math.min(112, baselineValue * 62));
+      const antennaAX = pairCenterX - baselinePixels / 2;
+      const antennaBX = pairCenterX + baselinePixels / 2;
+      const receiverZ = 101 - Math.max(48, Math.min(78, zValue * 20));
+      const focusInfo = {
+          antennaToRearAxle: { label: 'Fore-aft X', value: `${xValue.toFixed(2)} m`, color: xColor },
+          antennaOffset: { label: 'Lateral Y', value: `${yValue.toFixed(2)} m`, color: yColor },
+          antennaHeight: { label: 'Height Z', value: `${zValue.toFixed(2)} m`, color: zColor },
+          gnssBaseline: { label: 'Antenna baseline B', value: `${baselineValue.toFixed(2)} m`, color: baselineColor },
+          gnssHeadingOffset: { label: 'Heading / yaw', value: `${Number(vehicleSettings.gnssHeadingOffset || 0).toFixed(1)}°`, color: yawColor },
+          gnssRollOffset: { label: 'Roll', value: `${Number(vehicleSettings.gnssRollOffset || 0).toFixed(1)}°`, color: rollColor },
+          gnssPitchOffset: { label: 'Pitch', value: `${Number(vehicleSettings.gnssPitchOffset || 0).toFixed(1)}°`, color: pitchColor }
+      };
+      const selected = focusInfo[vehicleMeasureFocus] || focusInfo.gnssBaseline;
+      const lineStyle = (field, color) => ({
+          stroke: color,
+          strokeWidth: vehicleMeasureFocus === field ? 3.5 : 2,
+          opacity: vehicleMeasureFocus === field ? 1 : 0.45
+      });
+
+      return (
+          <div className={`overflow-hidden rounded-2xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'}`}>
+              <div className={`flex items-center justify-between gap-3 border-b ${t.border} px-4 py-3`}>
+                  <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                          <div className={`text-[9px] font-black uppercase tracking-wider ${t.textSub}`}>Dual-antenna heading system</div>
+                          <span className="rounded-md bg-amber-500/12 px-1.5 py-0.5 text-[8px] font-black uppercase text-amber-500">2 ANT · Horizontal</span>
+                      </div>
+                      <div className={`truncate text-sm font-black ${t.textMain}`}>2 × {vehicleSettings.gnssReceiverModel || 'GNSS receiver'} · {vehicleSettings.gnssMountPosition || 'Cab roof crossbar'}</div>
+                  </div>
+                  <span className="shrink-0 rounded-lg px-2.5 py-1.5 text-right" style={{ backgroundColor: `${selected.color}14` }}>
+                      <span className="block text-[8px] font-black uppercase" style={{ color: selected.color }}>{selected.label}</span>
+                      <span className={`block text-xs font-black ${t.textMain}`}>{selected.value}</span>
+                  </span>
+              </div>
+
+              <div className="grid grid-cols-[minmax(0,1.25fr)_minmax(190px,0.75fr)] gap-2.5 p-3">
+                  <div className={`overflow-hidden rounded-xl border ${t.borderCard}`} style={{ backgroundColor: panelFill }}>
+                      <div className={`flex items-center justify-between border-b ${t.border} px-3 py-2`}>
+                          <span className={`text-[9px] font-black uppercase ${t.textSub}`}>Top view · Pair center X / Y</span>
+                          <span className={`text-[8px] font-bold ${t.textDim}`}>Heading is perpendicular to baseline</span>
+                      </div>
+                      <svg viewBox="0 0 320 205" className="h-[250px] w-full" role="img" aria-label="Top view of horizontal dual GNSS antennas A and B">
+                          <defs>
+                              <pattern id="gnss-grid-top" width="20" height="20" patternUnits="userSpaceOnUse">
+                                  <path d="M20 0H0V20" fill="none" stroke={gridColor} strokeWidth="1" />
+                              </pattern>
+                              <marker id="gnss-arrow-x" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse"><path d="M0 0L6 3L0 6Z" fill={xColor} /></marker>
+                              <marker id="gnss-arrow-y" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse"><path d="M0 0L6 3L0 6Z" fill={yColor} /></marker>
+                              <marker id="gnss-arrow-baseline" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse"><path d="M0 0L6 3L0 6Z" fill={baselineColor} /></marker>
+                          </defs>
+                          <rect width="320" height="205" fill="url(#gnss-grid-top)" />
+                          <line x1="160" y1="12" x2="160" y2="190" stroke={gridColor} strokeDasharray="5 4" />
+                          <rect x="83" y="32" width="28" height="48" rx="9" fill={wheelFill} />
+                          <rect x="209" y="32" width="28" height="48" rx="9" fill={wheelFill} />
+                          <rect x="77" y="128" width="35" height="56" rx="10" fill={wheelFill} />
+                          <rect x="208" y="128" width="35" height="56" rx="10" fill={wheelFill} />
+                          <path d="M132 25H188L198 77V159L184 180H136L122 159V77L132 25Z" fill={bodyFill} stroke={bodyStroke} strokeWidth="2" />
+                          <rect x="131" y="75" width="58" height="59" rx="9" fill={theme === 'dark' ? '#0f2744' : '#eff6ff'} stroke={bodyStroke} strokeWidth="1.5" />
+                          <line x1="70" y1="151" x2="250" y2="151" stroke={theme === 'dark' ? '#94a3b8' : '#64748b'} strokeWidth="2" />
+                          <text x="74" y="166" fontSize="8" fontWeight="800" fill={labelColor}>REAR AXLE DATUM</text>
+
+                          <line x1="264" y1="151" x2="264" y2={pairCenterY} {...lineStyle('antennaToRearAxle', xColor)} markerStart="url(#gnss-arrow-x)" markerEnd="url(#gnss-arrow-x)" />
+                          <rect x="270" y={(151 + pairCenterY) / 2 - 10} width="44" height="20" rx="6" fill={theme === 'dark' ? '#0f172a' : '#ffffff'} stroke={xColor} />
+                          <text x="292" y={(151 + pairCenterY) / 2 + 4} textAnchor="middle" fontSize="9" fontWeight="900" fill={xColor}>X {xValue.toFixed(2)}</text>
+
+                          <line x1="160" y1={pairCenterY + 21} x2={pairCenterX} y2={pairCenterY + 21} {...lineStyle('antennaOffset', yColor)} markerEnd="url(#gnss-arrow-y)" />
+                          <text x={Math.max(35, Math.min(285, (160 + pairCenterX) / 2))} y={pairCenterY + 34} textAnchor="middle" fontSize="9" fontWeight="900" fill={yColor}>Y {yValue.toFixed(2)}</text>
+
+                          <line x1={antennaAX} y1={pairCenterY} x2={antennaBX} y2={pairCenterY} {...lineStyle('gnssBaseline', baselineColor)} markerStart="url(#gnss-arrow-baseline)" markerEnd="url(#gnss-arrow-baseline)" />
+                          <rect x={pairCenterX - 29} y={pairCenterY - 32} width="58" height="18" rx="6" fill={theme === 'dark' ? '#0f172a' : '#ffffff'} stroke={baselineColor} />
+                          <text x={pairCenterX} y={pairCenterY - 20} textAnchor="middle" fontSize="8.5" fontWeight="900" fill={baselineColor}>B {baselineValue.toFixed(2)} m</text>
+
+                          <circle cx={antennaAX} cy={pairCenterY} r="10" fill={theme === 'dark' ? '#020617' : '#ffffff'} stroke={baselineColor} strokeWidth="3" />
+                          <circle cx={antennaAX} cy={pairCenterY} r="3" fill={baselineColor} />
+                          <circle cx={antennaBX} cy={pairCenterY} r="10" fill={theme === 'dark' ? '#020617' : '#ffffff'} stroke={baselineColor} strokeWidth="3" />
+                          <circle cx={antennaBX} cy={pairCenterY} r="3" fill={baselineColor} />
+                          <text x={antennaAX} y={pairCenterY + 15} textAnchor="middle" fontSize="7.5" fontWeight="900" fill={labelColor}>ANT A</text>
+                          <text x={antennaBX} y={pairCenterY + 15} textAnchor="middle" fontSize="7.5" fontWeight="900" fill={labelColor}>ANT B</text>
+                          <circle cx={pairCenterX} cy={pairCenterY} r="3.5" fill={yColor} />
+                          <line x1={pairCenterX} y1={pairCenterY - 39} x2={pairCenterX} y2={pairCenterY - 59} stroke={rollColor} strokeWidth="2.5" markerEnd="url(#gnss-arrow-x)" />
+                          <text x={pairCenterX + 7} y={pairCenterY - 48} fontSize="7.5" fontWeight="900" fill={rollColor}>HEADING</text>
+
+                          <g transform="translate(20 28)">
+                              <line x1="0" y1="28" x2="0" y2="0" stroke={xColor} strokeWidth="2.5" markerEnd="url(#gnss-arrow-x)" />
+                              <line x1="0" y1="28" x2="28" y2="28" stroke={yColor} strokeWidth="2.5" markerEnd="url(#gnss-arrow-y)" />
+                              <text x="-5" y="-3" fontSize="9" fontWeight="900" fill={xColor}>X</text>
+                              <text x="33" y="31" fontSize="9" fontWeight="900" fill={yColor}>Y</text>
+                          </g>
+                      </svg>
+                  </div>
+
+                  <div className="space-y-2.5">
+                      <div className={`overflow-hidden rounded-xl border ${t.borderCard}`} style={{ backgroundColor: panelFill }}>
+                          <div className={`border-b ${t.border} px-3 py-2`}>
+                              <span className={`block text-[9px] font-black uppercase ${t.textSub}`}>Front view · B / Z</span>
+                              <span className={`block text-[8px] font-bold ${t.textDim}`}>Two antennas mounted left ↔ right</span>
+                          </div>
+                          <svg viewBox="0 0 320 128" className="h-[156px] w-full" role="img" aria-label="Front view of two horizontal GNSS antennas and receiver height">
+                              <defs>
+                                  <marker id="gnss-arrow-z" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse"><path d="M0 0L6 3L0 6Z" fill={zColor} /></marker>
+                                  <marker id="gnss-arrow-b-front" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse"><path d="M0 0L6 3L0 6Z" fill={baselineColor} /></marker>
+                              </defs>
+                              <line x1="18" y1="105" x2="302" y2="105" stroke={gridColor} strokeWidth="2" />
+                              <rect x="58" y="78" width="42" height="27" rx="8" fill={wheelFill} />
+                              <rect x="220" y="78" width="42" height="27" rx="8" fill={wheelFill} />
+                              <path d="M103 100V62L123 42H197L217 62V100Z" fill={bodyFill} stroke={bodyStroke} strokeWidth="2" />
+                              <rect x="126" y="48" width="68" height="34" rx="5" fill={theme === 'dark' ? '#0f2744' : '#eff6ff'} stroke={bodyStroke} />
+                              <line x1="91" y1={receiverZ} x2="229" y2={receiverZ} stroke={baselineColor} strokeWidth="4" strokeLinecap="round" />
+                              <circle cx="112" cy={receiverZ} r="7" fill={theme === 'dark' ? '#020617' : '#fff'} stroke={baselineColor} strokeWidth="3" />
+                              <circle cx="208" cy={receiverZ} r="7" fill={theme === 'dark' ? '#020617' : '#fff'} stroke={baselineColor} strokeWidth="3" />
+                              <text x="112" y={receiverZ - 10} textAnchor="middle" fontSize="7.5" fontWeight="900" fill={labelColor}>A</text>
+                              <text x="208" y={receiverZ - 10} textAnchor="middle" fontSize="7.5" fontWeight="900" fill={labelColor}>B</text>
+                              <line x1="112" y1={receiverZ + 17} x2="208" y2={receiverZ + 17} {...lineStyle('gnssBaseline', baselineColor)} markerStart="url(#gnss-arrow-b-front)" markerEnd="url(#gnss-arrow-b-front)" />
+                              <text x="160" y={receiverZ + 29} textAnchor="middle" fontSize="8" fontWeight="900" fill={baselineColor}>BASELINE {baselineValue.toFixed(2)} m</text>
+                              <line x1="55" y1="105" x2="55" y2={receiverZ} {...lineStyle('antennaHeight', zColor)} markerStart="url(#gnss-arrow-z)" markerEnd="url(#gnss-arrow-z)" />
+                              <rect x="65" y={(105 + receiverZ) / 2 - 10} width="52" height="20" rx="6" fill={theme === 'dark' ? '#0f172a' : '#fff'} stroke={zColor} />
+                              <text x="91" y={(105 + receiverZ) / 2 + 4} textAnchor="middle" fontSize="9" fontWeight="900" fill={zColor}>Z {zValue.toFixed(2)}</text>
+                          </svg>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-1.5">
+                          {[
+                              ['H', 'Yaw', vehicleSettings.gnssHeadingOffset, yawColor, 'gnssHeadingOffset'],
+                              ['R', 'Roll', vehicleSettings.gnssRollOffset, rollColor, 'gnssRollOffset'],
+                              ['P', 'Pitch', vehicleSettings.gnssPitchOffset, pitchColor, 'gnssPitchOffset']
+                          ].map(([axis, label, value, color, field]) => (
+                              <button
+                                  key={field}
+                                  type="button"
+                                  onClick={() => setVehicleMeasureFocus(field)}
+                                  className={`min-w-0 rounded-lg border px-1.5 py-2 text-center ${vehicleMeasureFocus === field ? 'bg-blue-500/5' : t.borderCard}`}
+                                  style={vehicleMeasureFocus === field ? { borderColor: color } : undefined}
+                              >
+                                  <span className="mx-auto flex h-6 w-6 items-center justify-center rounded-md text-[8px] font-black text-white" style={{ backgroundColor: color }}>{axis}</span>
+                                  <span className={`mt-1 block text-[8px] font-black uppercase ${t.textSub}`}>{label}</span>
+                                  <span className={`block text-[11px] font-black ${t.textMain}`}>{Number(value || 0).toFixed(1)}°</span>
+                              </button>
+                          ))}
+                      </div>
+                  </div>
+              </div>
+          </div>
+      );
+  };
+
+  const GnssLiveIllustration = () => {
+      const colors = {
+          baseline: '#f59e0b',
+          x: '#2563eb',
+          y: '#8b5cf6',
+          z: '#16a34a',
+          heading: '#06b6d4',
+          roll: '#ec4899',
+          pitch: '#f97316'
+      };
+      const baseline = Math.max(0.2, Number(vehicleSettings.gnssBaseline || 1.2));
+      const xValue = Number(vehicleSettings.antennaToRearAxle || 0);
+      const yValue = Number(vehicleSettings.antennaOffset || 0);
+      const zValue = Number(vehicleSettings.antennaHeight || 0);
+      const baselinePx = Math.max(82, Math.min(170, baseline * 78));
+      const barHeightY = Math.max(44, Math.min(70, 60 - (zValue - 3) * 8));
+      const topPairX = 260 + Math.max(-58, Math.min(58, yValue * 70));
+      const topPairY = 235 - Math.max(50, Math.min(125, xValue * 60));
+      const sideRearAxleX = 160;
+      const sideAntennaX = 245 + Math.max(-35, Math.min(55, (xValue - 1.2) * 45));
+      const sideAntennaY = barHeightY - 8;
+      const vehicleAssetPrefix = vehicleSettings.type === 'Articulated Tractor'
+          ? 'articulated'
+          : vehicleSettings.type === 'Self Propelled'
+              ? 'sprayer'
+              : 'tractor';
+      const realVehicleLabel = vehicleSettings.label || vehicleSettings.type || 'Vehicle';
+      const vehicleImage = (view) => `src/assets/vehicles/${vehicleAssetPrefix}-${view}.png`;
+      const activeView = ['gnssBaseline', 'antennaHeight', 'gnssRollOffset'].includes(vehicleMeasureFocus)
+          ? 'front'
+          : ['antennaToRearAxle', 'gnssPitchOffset'].includes(vehicleMeasureFocus)
+              ? 'side'
+              : 'top';
+      const selectedMap = {
+          gnssBaseline: ['Antenna baseline', `B ${baseline.toFixed(2)} m`, colors.baseline],
+          antennaToRearAxle: ['Pair center to rear axle', `X ${xValue.toFixed(2)} m`, colors.x],
+          antennaOffset: ['Pair center lateral offset', `Y ${yValue.toFixed(2)} m`, colors.y],
+          antennaHeight: ['Shared antenna height', `Z ${zValue.toFixed(2)} m`, colors.z],
+          gnssHeadingOffset: ['Baseline heading correction', `${Number(vehicleSettings.gnssHeadingOffset || 0).toFixed(1)}°`, colors.heading],
+          gnssRollOffset: ['Crossbar roll correction', `${Number(vehicleSettings.gnssRollOffset || 0).toFixed(1)}°`, colors.roll],
+          gnssPitchOffset: ['Crossbar pitch correction', `${Number(vehicleSettings.gnssPitchOffset || 0).toFixed(1)}°`, colors.pitch]
+      };
+      const selected = selectedMap[vehicleMeasureFocus] || selectedMap.gnssBaseline;
+      const panelFill = theme === 'dark' ? '#020617' : '#f8fafc';
+      const gridStroke = theme === 'dark' ? '#1e293b' : '#e2e8f0';
+      const textColor = theme === 'dark' ? '#cbd5e1' : '#334155';
+      const mutedColor = theme === 'dark' ? '#64748b' : '#94a3b8';
+      const primaryIsLeft = (vehicleSettings.gnssPrimarySide || 'Left / ANT A').startsWith('Left');
+      const focusStroke = (field, color) => vehicleMeasureFocus === field ? color : mutedColor;
+      const focusWidth = (field) => vehicleMeasureFocus === field ? 4 : 2;
+
+      const AntennaPair = ({ centerX = 0, centerY = 0, scale = 1 }) => (
+          <g
+              style={{
+                  transform: `translate(${centerX}px, ${centerY}px) scale(${scale})`,
+                  transformOrigin: '0 0',
+                  transition: 'transform 320ms cubic-bezier(0.22, 1, 0.36, 1)'
+              }}
+          >
+              <line x1={-baselinePx / 2} y1="0" x2={baselinePx / 2} y2="0" stroke={colors.baseline} strokeWidth="5" strokeLinecap="round" />
+              <g style={{ transform: `translateX(${-baselinePx / 2}px)`, transition: 'transform 320ms cubic-bezier(0.22, 1, 0.36, 1)' }}>
+                  {primaryIsLeft && <circle cx="0" cy="0" r="16" fill="none" stroke={colors.baseline} strokeWidth="2" opacity="0.4" style={{ animation: 'gnssAntennaPulse 1.7s ease-out infinite' }} />}
+                  <circle cx="0" cy="0" r="11" fill={panelFill} stroke={colors.baseline} strokeWidth="4" />
+                  <circle cx="0" cy="0" r="3" fill={colors.baseline} />
+                  <text x="0" y="24" textAnchor="middle" fontSize="9" fontWeight="900" fill={textColor}>ANT A</text>
+                  <text x="0" y="35" textAnchor="middle" fontSize="7" fontWeight="800" fill={primaryIsLeft ? colors.baseline : mutedColor}>{primaryIsLeft ? 'PRIMARY' : 'SECONDARY'}</text>
+              </g>
+              <g style={{ transform: `translateX(${baselinePx / 2}px)`, transition: 'transform 320ms cubic-bezier(0.22, 1, 0.36, 1)' }}>
+                  {!primaryIsLeft && <circle cx="0" cy="0" r="16" fill="none" stroke={colors.baseline} strokeWidth="2" opacity="0.4" style={{ animation: 'gnssAntennaPulse 1.7s ease-out infinite' }} />}
+                  <circle cx="0" cy="0" r="11" fill={panelFill} stroke={colors.baseline} strokeWidth="4" />
+                  <circle cx="0" cy="0" r="3" fill={colors.baseline} />
+                  <text x="0" y="24" textAnchor="middle" fontSize="9" fontWeight="900" fill={textColor}>ANT B</text>
+                  <text x="0" y="35" textAnchor="middle" fontSize="7" fontWeight="800" fill={!primaryIsLeft ? colors.baseline : mutedColor}>{!primaryIsLeft ? 'PRIMARY' : 'SECONDARY'}</text>
+              </g>
+              <circle cx="0" cy="0" r="4" fill={colors.y} />
+          </g>
+      );
+
+      return (
+          <div className={`overflow-hidden rounded-2xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'}`}>
+              <style>{`
+                  @keyframes gnssViewIn {
+                      from { opacity: 0; transform: translateY(8px); }
+                      to { opacity: 1; transform: translateY(0); }
+                  }
+                  @keyframes gnssAntennaPulse {
+                      0% { r: 12; opacity: .55; }
+                      100% { r: 23; opacity: 0; }
+                  }
+              `}</style>
+              <div className={`flex flex-wrap items-center justify-between gap-3 border-b ${t.border} px-4 py-3`}>
+                  <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                          <div className={`text-[9px] font-black uppercase tracking-wider ${t.textSub}`}>Live vehicle reference</div>
+                          <span className="rounded-md bg-amber-500/12 px-1.5 py-0.5 text-[8px] font-black uppercase text-amber-500">ANT A ↔ ANT B</span>
+                      </div>
+                      <div className={`truncate text-sm font-black ${t.textMain}`}>{realVehicleLabel} · 2 × {vehicleSettings.gnssReceiverModel || 'GNSS receiver'}</div>
+                  </div>
+                  <div className={`flex rounded-xl p-1 ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-100'}`}>
+                      {[
+                          ['front', 'Front · B/Z', 'gnssBaseline'],
+                          ['side', 'Side · X', 'antennaToRearAxle'],
+                          ['top', 'Top · Y/H', 'antennaOffset']
+                      ].map(([view, label, focus]) => (
+                          <button
+                              key={view}
+                              type="button"
+                              onClick={() => setVehicleMeasureFocus(focus)}
+                              className={`rounded-lg px-2.5 py-1.5 text-[8px] font-black ${activeView === view ? 'bg-blue-600 text-white shadow-sm' : t.textSub}`}
+                          >
+                              {label}
+                          </button>
+                      ))}
+                  </div>
+              </div>
+
+              <div className="p-3">
+                  <div className={`relative overflow-hidden rounded-xl border ${t.borderCard}`} style={{ backgroundColor: panelFill }}>
+                      <div className={`absolute left-3 top-3 z-10 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/92'} px-3 py-2 shadow-sm backdrop-blur`}>
+                          <div className={`text-[8px] font-black uppercase ${t.textSub}`}>Selected measurement</div>
+                          <div className="mt-0.5 flex items-center gap-2">
+                              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: selected[2] }} />
+                              <span className={`text-[10px] font-black ${t.textMain}`}>{selected[0]}</span>
+                          </div>
+                          <div className="mt-0.5 text-lg font-black leading-none" style={{ color: selected[2] }}>{selected[1]}</div>
+                      </div>
+                      <div className={`absolute right-3 top-3 z-10 text-right text-[8px] font-bold ${t.textDim}`}>
+                          <div>{activeView === 'front' ? 'FRONT VIEW' : activeView === 'side' ? 'RIGHT SIDE VIEW' : 'TOP VIEW'}</div>
+                          <div>Values update live</div>
+                      </div>
+
+                      <svg viewBox="0 0 520 300" className="h-[310px] w-full" role="img" aria-label={`Real ${activeView} tractor view with horizontal dual GNSS antennas`}>
+                          <defs>
+                              <pattern id="gnss-live-grid" width="28" height="28" patternUnits="userSpaceOnUse">
+                                  <path d="M28 0H0V28" fill="none" stroke={gridStroke} strokeWidth="1" />
+                              </pattern>
+                              <marker id="live-arrow-x" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto-start-reverse"><path d="M0 0L7 3.5L0 7Z" fill={colors.x} /></marker>
+                              <marker id="live-arrow-y" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto-start-reverse"><path d="M0 0L7 3.5L0 7Z" fill={colors.y} /></marker>
+                              <marker id="live-arrow-z" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto-start-reverse"><path d="M0 0L7 3.5L0 7Z" fill={colors.z} /></marker>
+                              <marker id="live-arrow-b" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto-start-reverse"><path d="M0 0L7 3.5L0 7Z" fill={colors.baseline} /></marker>
+                              <marker id="live-arrow-heading" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto-start-reverse"><path d="M0 0L7 3.5L0 7Z" fill={colors.heading} /></marker>
+                          </defs>
+                          <rect width="520" height="300" fill="url(#gnss-live-grid)" />
+
+                          {activeView === 'front' && (
+                              <g key="front" style={{ animation: 'gnssViewIn 240ms ease-out' }}>
+                                  <line x1="42" y1="257" x2="478" y2="257" stroke={gridStroke} strokeWidth="3" />
+                                  <image
+                                      href={vehicleImage('front')}
+                                      x="130"
+                                      y="20"
+                                      width="260"
+                                      height="260"
+                                      preserveAspectRatio="xMidYMid meet"
+                                      style={{ filter: theme === 'dark' ? 'drop-shadow(0 10px 10px rgba(0,0,0,.34))' : 'drop-shadow(0 9px 8px rgba(15,23,42,.18))' }}
+                                  />
+                                  <line x1="260" y1="94" x2="260" y2="252" stroke={gridStroke} strokeDasharray="6 5" />
+                                  <g style={{ transform: `translateY(${barHeightY}px)`, transition: 'transform 320ms cubic-bezier(0.22, 1, 0.36, 1)' }}>
+                                      <line x1="170" y1="0" x2="350" y2="0" stroke={colors.baseline} strokeWidth="6" strokeLinecap="round" opacity="0.72" />
+                                      <AntennaPair centerX={260} centerY={0} />
+                                      <line x1={260 - baselinePx / 2} y1="52" x2={260 + baselinePx / 2} y2="52" stroke={focusStroke('gnssBaseline', colors.baseline)} strokeWidth={focusWidth('gnssBaseline')} markerStart="url(#live-arrow-b)" markerEnd="url(#live-arrow-b)" />
+                                      <rect x="225" y="60" width="70" height="22" rx="7" fill={panelFill} stroke={colors.baseline} />
+                                      <text x="260" y="75" textAnchor="middle" fontSize="10" fontWeight="900" fill={colors.baseline}>B {baseline.toFixed(2)} m</text>
+                                  </g>
+                                  <line x1="66" y1="257" x2="66" y2={barHeightY} stroke={focusStroke('antennaHeight', colors.z)} strokeWidth={focusWidth('antennaHeight')} markerStart="url(#live-arrow-z)" markerEnd="url(#live-arrow-z)" />
+                                  <rect x="78" y={(257 + barHeightY) / 2 - 12} width="72" height="24" rx="7" fill={panelFill} stroke={colors.z} />
+                                  <text x="114" y={(257 + barHeightY) / 2 + 4} textAnchor="middle" fontSize="10" fontWeight="900" fill={colors.z}>Z {zValue.toFixed(2)} m</text>
+                                  <text x="260" y="284" textAnchor="middle" fontSize="9" fontWeight="800" fill={mutedColor}>FRONT REFERENCE · ANT A / B ACROSS CAB ROOF</text>
+                              </g>
+                          )}
+
+                          {activeView === 'side' && (
+                              <g key="side" style={{ animation: 'gnssViewIn 240ms ease-out' }}>
+                                  <line x1="38" y1="257" x2="482" y2="257" stroke={gridStroke} strokeWidth="3" />
+                                  <image
+                                      href={vehicleImage('side')}
+                                      x="90"
+                                      y="-10"
+                                      width="340"
+                                      height="340"
+                                      preserveAspectRatio="xMidYMid meet"
+                                      style={{ filter: theme === 'dark' ? 'drop-shadow(0 10px 10px rgba(0,0,0,.34))' : 'drop-shadow(0 9px 8px rgba(15,23,42,.18))' }}
+                                  />
+                                  <line x1={sideRearAxleX} y1="142" x2={sideRearAxleX} y2="257" stroke={colors.x} strokeDasharray="5 4" opacity="0.65" />
+                                  <circle cx={sideRearAxleX} cy="211" r="7" fill={colors.x} stroke={panelFill} strokeWidth="3" />
+                                  <text x={sideRearAxleX} y="278" textAnchor="middle" fontSize="9" fontWeight="900" fill={colors.x}>REAR AXLE DATUM</text>
+                                  <g style={{ transform: `translate(${sideAntennaX}px, ${sideAntennaY}px)`, transition: 'transform 320ms cubic-bezier(0.22, 1, 0.36, 1)' }}>
+                                      <line x1="-42" y1="0" x2="42" y2="0" stroke={colors.baseline} strokeWidth="6" strokeLinecap="round" />
+                                      <circle cx="-5" cy="0" r="10" fill={panelFill} stroke={colors.baseline} strokeWidth="3" />
+                                      <circle cx="5" cy="0" r="10" fill={panelFill} stroke={colors.baseline} strokeWidth="3" />
+                                      <text x="0" y="-16" textAnchor="middle" fontSize="9" fontWeight="900" fill={colors.baseline}>ANT A / B</text>
+                                  </g>
+                                  <line x1={sideRearAxleX} y1="116" x2={sideAntennaX} y2="116" stroke={focusStroke('antennaToRearAxle', colors.x)} strokeWidth={focusWidth('antennaToRearAxle')} markerStart="url(#live-arrow-x)" markerEnd="url(#live-arrow-x)" />
+                                  <line x1={sideAntennaX} y1={sideAntennaY + 12} x2={sideAntennaX} y2="116" stroke={colors.x} strokeDasharray="4 4" opacity="0.55" />
+                                  <line x1={sideRearAxleX} y1="116" x2={sideRearAxleX} y2="200" stroke={colors.x} strokeDasharray="4 4" opacity="0.55" />
+                                  <rect x={(sideRearAxleX + sideAntennaX) / 2 - 38} y="124" width="76" height="24" rx="7" fill={panelFill} stroke={colors.x} />
+                                  <text x={(sideRearAxleX + sideAntennaX) / 2} y="140" textAnchor="middle" fontSize="10" fontWeight="900" fill={colors.x}>X {xValue.toFixed(2)} m</text>
+                                  <line x1="62" y1="257" x2="62" y2={sideAntennaY} stroke={colors.z} strokeWidth="2" opacity="0.5" markerStart="url(#live-arrow-z)" markerEnd="url(#live-arrow-z)" />
+                              </g>
+                          )}
+
+                          {activeView === 'top' && (
+                              <g key="top" style={{ animation: 'gnssViewIn 240ms ease-out' }}>
+                                  <line x1="260" y1="28" x2="260" y2="280" stroke={gridStroke} strokeDasharray="6 5" />
+                                  <image
+                                      href={vehicleImage('top')}
+                                      x="110"
+                                      y="0"
+                                      width="300"
+                                      height="300"
+                                      preserveAspectRatio="xMidYMid meet"
+                                      style={{ filter: theme === 'dark' ? 'drop-shadow(0 10px 10px rgba(0,0,0,.34))' : 'drop-shadow(0 9px 8px rgba(15,23,42,.18))' }}
+                                  />
+                                  <line x1="118" y1="226" x2="402" y2="226" stroke={colors.x} strokeWidth="2.5" />
+                                  <text x="121" y="242" fontSize="9" fontWeight="900" fill={colors.x}>REAR AXLE DATUM</text>
+                                  <AntennaPair centerX={topPairX} centerY={topPairY} />
+                                  <line x1="260" y1={topPairY + 50} x2={topPairX} y2={topPairY + 50} stroke={focusStroke('antennaOffset', colors.y)} strokeWidth={focusWidth('antennaOffset')} markerEnd="url(#live-arrow-y)" />
+                                  <rect x={topPairX - 35} y={topPairY + 58} width="70" height="22" rx="7" fill={panelFill} stroke={colors.y} />
+                                  <text x={topPairX} y={topPairY + 73} textAnchor="middle" fontSize="10" fontWeight="900" fill={colors.y}>Y {yValue.toFixed(2)} m</text>
+                                  <line x1={topPairX} y1={topPairY - 18} x2={topPairX} y2={Math.max(22, topPairY - 70)} stroke={focusStroke('gnssHeadingOffset', colors.heading)} strokeWidth={focusWidth('gnssHeadingOffset')} markerEnd="url(#live-arrow-heading)" />
+                                  <text x={topPairX + 9} y={Math.max(34, topPairY - 48)} fontSize="9" fontWeight="900" fill={colors.heading}>HEADING</text>
+                                  <line x1="446" y1="226" x2="446" y2={topPairY} stroke={colors.x} strokeWidth="2" opacity="0.45" markerStart="url(#live-arrow-x)" markerEnd="url(#live-arrow-x)" />
+                                  <text x="458" y={(226 + topPairY) / 2} fontSize="9" fontWeight="900" fill={colors.x}>X {xValue.toFixed(2)}</text>
+                              </g>
+                          )}
+                      </svg>
+                  </div>
+
+                  <div className={`mt-2.5 flex flex-wrap items-center justify-between gap-2 rounded-xl border ${t.borderCard} px-3 py-2`}>
+                      <div className="flex items-center gap-2">
+                          <span className="h-2 w-2 rounded-full bg-green-500" />
+                          <span className={`text-[9px] font-black ${t.textMain}`}>Illustration follows selected input automatically</span>
+                      </div>
+                      <div className={`text-[9px] font-bold ${t.textSub}`}>Primary: {vehicleSettings.gnssPrimarySide || 'Left / ANT A'} · Baseline {baseline.toFixed(2)} m</div>
+                  </div>
+              </div>
+          </div>
+      );
+  };
+
+  const VehicleGeometryDiagram = ({ group = 'chassis' }) => {
+      const isChassis = group === 'chassis';
+      const isGnss = group === 'gnss';
+      const accent = '#2563eb';
+      const muted = theme === 'dark' ? '#64748b' : '#94a3b8';
+      const bodyFill = theme === 'dark' ? '#1e3a5f' : '#dbeafe';
+      const bodyStroke = theme === 'dark' ? '#60a5fa' : '#2563eb';
+      const wheelFill = theme === 'dark' ? '#475569' : '#334155';
+      const panelFill = theme === 'dark' ? '#0f172a' : '#f8fafc';
+      const gridStroke = theme === 'dark' ? '#1e293b' : '#e2e8f0';
+      const activeStroke = (field) => vehicleMeasureFocus === field ? accent : muted;
+      const activeWidth = (field) => vehicleMeasureFocus === field ? 3 : 1.4;
+      const measureValue = {
+          wheelbase: `${Number(vehicleSettings.wheelbase || 0).toFixed(2)} m`,
+          frontAxleWidth: `${Number(vehicleSettings.frontAxleWidth || 0).toFixed(2)} m`,
+          rearAxleWidth: `${Number(vehicleSettings.rearAxleWidth || 0).toFixed(2)} m`,
+          frontOverhang: `${Number(vehicleSettings.frontOverhang || 0).toFixed(2)} m`,
+          rearOverhang: `${Number(vehicleSettings.rearOverhang || 0).toFixed(2)} m`,
+          overallHeight: `${Number(vehicleSettings.overallHeight || 0).toFixed(2)} m`,
+          turnRadius: `${Number(vehicleSettings.turnRadius || 0).toFixed(2)} m`,
+          antennaHeight: `${Number(vehicleSettings.antennaHeight || 0).toFixed(2)} m`,
+          antennaOffset: `${Number(vehicleSettings.antennaOffset || 0).toFixed(2)} m`,
+          antennaToRearAxle: `${Number(vehicleSettings.antennaToRearAxle || 0).toFixed(2)} m`,
+          gnssHeadingOffset: `${Number(vehicleSettings.gnssHeadingOffset || 0).toFixed(1)}°`,
+          gnssRollOffset: `${Number(vehicleSettings.gnssRollOffset || 0).toFixed(1)}°`,
+          gnssPitchOffset: `${Number(vehicleSettings.gnssPitchOffset || 0).toFixed(1)}°`,
+          rearHitch: `${Number(vehicleSettings.rearHitch || 0).toFixed(2)} m`,
+          hitchOffset: `${Number(vehicleSettings.hitchOffset || 0).toFixed(2)} m`,
+          hitchHeight: `${Number(vehicleSettings.hitchHeight || 0).toFixed(2)} m`
+      };
+
+      const MeasurementLabel = ({ x, y, field, anchor = 'middle' }) => (
+          <g>
+              <rect
+                  x={anchor === 'middle' ? x - 31 : x}
+                  y={y - 10}
+                  width="62"
+                  height="20"
+                  rx="7"
+                  fill={vehicleMeasureFocus === field ? accent : panelFill}
+                  stroke={activeStroke(field)}
+                  strokeWidth="1"
+              />
+              <text
+                  x={anchor === 'middle' ? x : x + 31}
+                  y={y + 4}
+                  textAnchor="middle"
+                  fontSize="10"
+                  fontWeight="800"
+                  fill={vehicleMeasureFocus === field ? '#ffffff' : (theme === 'dark' ? '#cbd5e1' : '#334155')}
+              >
+                  {measureValue[field]}
+              </text>
+          </g>
+      );
+
+      return (
+          <div className={`rounded-2xl border ${t.borderCard} overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-slate-50'}`}>
+              <div className={`flex items-center justify-between gap-3 border-b ${t.border} px-4 py-3`}>
+                  <div>
+                      <div className={`text-[10px] font-black uppercase tracking-wider ${t.textSub}`}>Live geometry</div>
+                      <div className={`text-sm font-black ${t.textMain}`}>{isChassis ? 'Chassis / top view' : isGnss ? 'GNSS receiver reference' : 'Hitch / coupling reference'}</div>
+                  </div>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-500/10 px-2.5 py-1 text-[9px] font-black uppercase text-blue-500">
+                      <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+                      Selected measure
+                  </span>
+              </div>
+              <div className="px-3 pb-3 pt-2">
+                  <svg viewBox="0 0 360 300" className="h-[300px] w-full" role="img" aria-label={isChassis ? 'Top view vehicle dimension diagram' : isGnss ? 'GNSS receiver dimension diagram' : 'Vehicle hitch dimension diagram'}>
+                      <defs>
+                          <pattern id={`vehicle-grid-${group}`} width="24" height="24" patternUnits="userSpaceOnUse">
+                              <path d="M24 0H0V24" fill="none" stroke={gridStroke} strokeWidth="1" />
+                          </pattern>
+                          <marker id={`vehicle-arrow-${group}`} markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto-start-reverse">
+                              <path d="M0 0L6 3L0 6Z" fill={accent} />
+                          </marker>
+                      </defs>
+                      <rect x="0" y="0" width="360" height="300" rx="14" fill={`url(#vehicle-grid-${group})`} />
+
+                      {isChassis ? (
+                          <>
+                              <line x1="180" y1="18" x2="180" y2="284" stroke={gridStroke} strokeDasharray="5 5" />
+                              <rect x="88" y="47" width="33" height="61" rx="10" fill={wheelFill} />
+                              <rect x="239" y="47" width="33" height="61" rx="10" fill={wheelFill} />
+                              <rect x="78" y="184" width="42" height="74" rx="11" fill={wheelFill} />
+                              <rect x="240" y="184" width="42" height="74" rx="11" fill={wheelFill} />
+                              <path d="M143 43H217L228 104V225L210 253H150L132 225V104L143 43Z" fill={bodyFill} stroke={bodyStroke} strokeWidth="2" />
+                              <path d="M151 53H209L215 105H145L151 53Z" fill={theme === 'dark' ? '#0f2744' : '#bfdbfe'} stroke={bodyStroke} strokeWidth="1.5" />
+                              <rect x="147" y="118" width="66" height="76" rx="10" fill={theme === 'dark' ? '#172554' : '#eff6ff'} stroke={bodyStroke} strokeWidth="1.5" />
+                              <path d="M180 253V277" stroke={bodyStroke} strokeWidth="6" strokeLinecap="round" />
+                              <circle cx="180" cy="282" r="5" fill={accent} />
+
+                              <line x1="70" y1="77" x2="70" y2="221" stroke={activeStroke('wheelbase')} strokeWidth={activeWidth('wheelbase')} markerStart={vehicleMeasureFocus === 'wheelbase' ? `url(#vehicle-arrow-${group})` : undefined} markerEnd={vehicleMeasureFocus === 'wheelbase' ? `url(#vehicle-arrow-${group})` : undefined} />
+                              <line x1="76" y1="77" x2="128" y2="77" stroke={gridStroke} />
+                              <line x1="76" y1="221" x2="128" y2="221" stroke={gridStroke} />
+                              <MeasurementLabel x={39} y={149} field="wheelbase" />
+
+                              <line x1="104" y1="31" x2="256" y2="31" stroke={activeStroke('frontAxleWidth')} strokeWidth={activeWidth('frontAxleWidth')} markerStart={vehicleMeasureFocus === 'frontAxleWidth' ? `url(#vehicle-arrow-${group})` : undefined} markerEnd={vehicleMeasureFocus === 'frontAxleWidth' ? `url(#vehicle-arrow-${group})` : undefined} />
+                              <MeasurementLabel x={180} y={15} field="frontAxleWidth" />
+
+                              <line x1="99" y1="271" x2="261" y2="271" stroke={activeStroke('rearAxleWidth')} strokeWidth={activeWidth('rearAxleWidth')} markerStart={vehicleMeasureFocus === 'rearAxleWidth' ? `url(#vehicle-arrow-${group})` : undefined} markerEnd={vehicleMeasureFocus === 'rearAxleWidth' ? `url(#vehicle-arrow-${group})` : undefined} />
+                              <MeasurementLabel x={180} y={287} field="rearAxleWidth" />
+
+                               <path d="M285 205C332 185 338 125 307 93" fill="none" stroke={activeStroke('turnRadius')} strokeWidth={activeWidth('turnRadius')} strokeDasharray="5 4" />
+                               <MeasurementLabel x={312} y={78} field="turnRadius" />
+
+                               {vehicleMeasureFocus === 'frontOverhang' && (
+                                   <>
+                                       <line x1="304" y1="43" x2="304" y2="77" stroke={accent} strokeWidth="3" markerStart={`url(#vehicle-arrow-${group})`} markerEnd={`url(#vehicle-arrow-${group})`} />
+                                       <MeasurementLabel x={326} y={44} field="frontOverhang" />
+                                   </>
+                               )}
+                               {vehicleMeasureFocus === 'rearOverhang' && (
+                                   <>
+                                       <line x1="304" y1="221" x2="304" y2="253" stroke={accent} strokeWidth="3" markerStart={`url(#vehicle-arrow-${group})`} markerEnd={`url(#vehicle-arrow-${group})`} />
+                                       <MeasurementLabel x={326} y={257} field="rearOverhang" />
+                                   </>
+                               )}
+                           </>
+                      ) : isGnss ? (
+                           <>
+                               <line x1="180" y1="18" x2="180" y2="284" stroke={gridStroke} strokeDasharray="5 5" />
+                              <rect x="88" y="47" width="33" height="61" rx="10" fill={wheelFill} />
+                              <rect x="239" y="47" width="33" height="61" rx="10" fill={wheelFill} />
+                              <rect x="78" y="184" width="42" height="74" rx="11" fill={wheelFill} />
+                              <rect x="240" y="184" width="42" height="74" rx="11" fill={wheelFill} />
+                              <path d="M143 43H217L228 104V225L210 253H150L132 225V104L143 43Z" fill={bodyFill} stroke={bodyStroke} strokeWidth="2" />
+                              <rect x="147" y="118" width="66" height="76" rx="10" fill={theme === 'dark' ? '#172554' : '#eff6ff'} stroke={bodyStroke} strokeWidth="1.5" />
+                              <line x1="180" y1="44" x2="180" y2="258" stroke={gridStroke} strokeDasharray="4 4" />
+                              <circle cx="196" cy="118" r="8" fill="#ffffff" stroke={accent} strokeWidth="4" />
+                              <circle cx="196" cy="118" r="2.5" fill={accent} />
+                              <path d="M180 253V277" stroke={bodyStroke} strokeWidth="6" strokeLinecap="round" />
+                              <circle cx="180" cy="282" r="5" fill={accent} />
+
+                              <line x1="180" y1="96" x2="196" y2="96" stroke={activeStroke('antennaOffset')} strokeWidth={activeWidth('antennaOffset')} markerStart={vehicleMeasureFocus === 'antennaOffset' ? `url(#vehicle-arrow-${group})` : undefined} markerEnd={vehicleMeasureFocus === 'antennaOffset' ? `url(#vehicle-arrow-${group})` : undefined} />
+                              <MeasurementLabel x={226} y={86} field="antennaOffset" />
+
+                               <line x1="248" y1="118" x2="248" y2="221" stroke={activeStroke('antennaToRearAxle')} strokeWidth={activeWidth('antennaToRearAxle')} markerStart={vehicleMeasureFocus === 'antennaToRearAxle' ? `url(#vehicle-arrow-${group})` : undefined} markerEnd={vehicleMeasureFocus === 'antennaToRearAxle' ? `url(#vehicle-arrow-${group})` : undefined} />
+                               <MeasurementLabel x={300} y={169} field="antennaToRearAxle" />
+
+                               <g transform="translate(18 58)">
+                                  <rect x="0" y="0" width="74" height="136" rx="12" fill={panelFill} stroke={activeStroke('antennaHeight')} strokeWidth={activeWidth('antennaHeight')} />
+                                  <path d="M16 105H58M24 104V77L32 58H51L58 77V104" fill={bodyFill} stroke={bodyStroke} strokeWidth="2" />
+                                  <line x1="37" y1="22" x2="37" y2="104" stroke={activeStroke('antennaHeight')} strokeWidth={activeWidth('antennaHeight')} markerStart={vehicleMeasureFocus === 'antennaHeight' ? `url(#vehicle-arrow-${group})` : undefined} markerEnd={vehicleMeasureFocus === 'antennaHeight' ? `url(#vehicle-arrow-${group})` : undefined} />
+                                  <circle cx="37" cy="19" r="6" fill="#ffffff" stroke={accent} strokeWidth="3" />
+                                   <text x="37" y="124" textAnchor="middle" fontSize="9" fontWeight="800" fill={theme === 'dark' ? '#cbd5e1' : '#334155'}>{measureValue.antennaHeight}</text>
+                               </g>
+
+                               <g transform="translate(250 232)">
+                                   {[
+                                       ['H', 'gnssHeadingOffset', 0],
+                                       ['R', 'gnssRollOffset', 34],
+                                       ['P', 'gnssPitchOffset', 68]
+                                   ].map(([label, field, x]) => (
+                                       <g key={field} transform={`translate(${x} 0)`}>
+                                           <circle cx="12" cy="12" r="11" fill={vehicleMeasureFocus === field ? accent : panelFill} stroke={activeStroke(field)} />
+                                           <text x="12" y="15" textAnchor="middle" fontSize="8" fontWeight="900" fill={vehicleMeasureFocus === field ? '#fff' : muted}>{label}</text>
+                                           <text x="12" y="35" textAnchor="middle" fontSize="7" fontWeight="800" fill={muted}>{measureValue[field]}</text>
+                                       </g>
+                                   ))}
+                               </g>
+                           </>
+                      ) : (
+                           <>
+                               <line x1="180" y1="18" x2="180" y2="284" stroke={gridStroke} strokeDasharray="5 5" />
+                               <rect x="88" y="47" width="33" height="61" rx="10" fill={wheelFill} />
+                               <rect x="239" y="47" width="33" height="61" rx="10" fill={wheelFill} />
+                               <rect x="78" y="184" width="42" height="74" rx="11" fill={wheelFill} />
+                               <rect x="240" y="184" width="42" height="74" rx="11" fill={wheelFill} />
+                               <path d="M143 43H217L228 104V225L210 253H150L132 225V104L143 43Z" fill={bodyFill} stroke={bodyStroke} strokeWidth="2" />
+                               <rect x="147" y="118" width="66" height="76" rx="10" fill={theme === 'dark' ? '#172554' : '#eff6ff'} stroke={bodyStroke} strokeWidth="1.5" />
+                               <path d="M180 253V282" stroke={bodyStroke} strokeWidth="6" strokeLinecap="round" />
+                               <circle cx="180" cy="284" r="6" fill="#ffffff" stroke={accent} strokeWidth="3" />
+
+                               <line x1="270" y1="221" x2="270" y2="284" stroke={activeStroke('rearHitch')} strokeWidth={activeWidth('rearHitch')} markerStart={vehicleMeasureFocus === 'rearHitch' ? `url(#vehicle-arrow-${group})` : undefined} markerEnd={vehicleMeasureFocus === 'rearHitch' ? `url(#vehicle-arrow-${group})` : undefined} />
+                               <MeasurementLabel x={316} y={250} field="rearHitch" />
+
+                               <line x1="180" y1="267" x2="204" y2="267" stroke={activeStroke('hitchOffset')} strokeWidth={activeWidth('hitchOffset')} markerStart={vehicleMeasureFocus === 'hitchOffset' ? `url(#vehicle-arrow-${group})` : undefined} markerEnd={vehicleMeasureFocus === 'hitchOffset' ? `url(#vehicle-arrow-${group})` : undefined} />
+                               <MeasurementLabel x={232} y={279} field="hitchOffset" />
+
+                               <g transform="translate(18 72)">
+                                   <rect x="0" y="0" width="76" height="128" rx="12" fill={panelFill} stroke={activeStroke('hitchHeight')} strokeWidth={activeWidth('hitchHeight')} />
+                                   <path d="M15 104H61M24 104V66H52V104" fill={bodyFill} stroke={bodyStroke} strokeWidth="2" />
+                                   <circle cx="38" cy="70" r="5" fill="#ffffff" stroke={accent} strokeWidth="2.5" />
+                                   <line x1="12" y1="70" x2="12" y2="104" stroke={activeStroke('hitchHeight')} strokeWidth={activeWidth('hitchHeight')} markerStart={vehicleMeasureFocus === 'hitchHeight' ? `url(#vehicle-arrow-${group})` : undefined} markerEnd={vehicleMeasureFocus === 'hitchHeight' ? `url(#vehicle-arrow-${group})` : undefined} />
+                                   <text x="38" y="121" textAnchor="middle" fontSize="9" fontWeight="800" fill={theme === 'dark' ? '#cbd5e1' : '#334155'}>{measureValue.hitchHeight}</text>
+                               </g>
+                           </>
+                      )}
+                  </svg>
+              </div>
+          </div>
+      );
+  };
 
   const settingsNavSections = [
       {
@@ -5311,92 +6108,325 @@ const App = () => {
         }
         case 'vehicle': {
             const avgTrack = ((Number(vehicleSettings.frontAxleWidth) || 0) + (Number(vehicleSettings.rearAxleWidth) || 0)) / 2;
+            const overallLength = Number(vehicleSettings.frontOverhang || 0) + Number(vehicleSettings.wheelbase || 0) + Number(vehicleSettings.rearOverhang || 0);
+            const vehicleSteps = [
+                { id: 'information', label: 'Information', detail: 'Profile and controls', icon: Tractor },
+                { id: 'geometry', label: 'Dimensions', detail: 'Chassis, GNSS and hitch', icon: Ruler },
+                { id: 'summary', label: 'Review', detail: 'Validate and save', icon: CheckCircle2 }
+            ];
+            const currentStepIndex = vehicleSteps.findIndex(step => step.id === vehicleSetupStep);
+            const informationReady = Boolean(vehicleSettings.label || activeVehicleProfile.label) && Boolean(vehicleSettings.type);
+            const geometryReady = Number(vehicleSettings.wheelbase) > 0
+                && Number(vehicleSettings.frontAxleWidth) > 0
+                && Number(vehicleSettings.rearAxleWidth) > 0
+                && Number(vehicleSettings.antennaHeight) > 0
+                && Number(vehicleSettings.gnssBaseline) > 0
+                && Number(vehicleSettings.antennaToRearAxle) >= 0
+                && Number(vehicleSettings.hitchHeight) >= 0;
+            const goToVehicleStep = (index) => {
+                const bounded = Math.max(0, Math.min(vehicleSteps.length - 1, index));
+                setVehicleSetupStep(vehicleSteps[bounded].id);
+                requestAnimationFrame(() => {
+                    settingsContentScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                });
+            };
+            const renderReviewRow = (label, value, unit = '') => (
+                <div className={`flex items-center justify-between gap-4 border-b ${t.border} py-2.5 last:border-b-0`}>
+                    <span className={`text-xs font-bold ${t.textSub}`}>{label}</span>
+                    <span className={`text-sm font-black ${t.textMain}`}>{value}{unit && <span className={`ml-1 text-[10px] uppercase ${t.textDim}`}>{unit}</span>}</span>
+                </div>
+            );
+
             return (
-                <div className="space-y-5">
-                    <SettingsSection
-                        title="Vehicle Profiles"
-                        detail="Saved machine setups. Pick the tractor once, then update only when hardware changes."
-                        icon={Tractor}
-                        actions={<><SettingsActionButton onClick={() => saveVehicleProfile('new')}>Save New</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => saveVehicleProfile('update')}>Update Profile</SettingsActionButton></>}
-                    >
-                        <div className="flex items-center gap-3">
-                            <div className="relative flex-1 min-w-0">
-                                <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${t.textDim}`} />
-                                <input
-                                    value={vehicleProfileSearch}
-                                    onChange={(e) => setVehicleProfileSearch(e.target.value)}
-                                    placeholder="Search vehicle profiles"
-                                    className={`w-full pl-9 pr-3 py-2.5 rounded-lg border ${t.borderCard} ${t.bgInput} ${t.textMain} outline-none focus:border-blue-500`}
-                                />
-                            </div>
-                            <span className={`shrink-0 text-xs font-black ${t.textSub}`}>{filteredVehicleProfiles.length}/{savedVehicleProfiles.length}</span>
-                        </div>
-                        <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3 max-h-[286px] overflow-y-auto pr-1">
-                            {filteredVehicleProfiles.map((profile) => {
-                                const active = vehicleSettings.profileId === profile.id;
-                                return (
-                                    <button
-                                        key={profile.id}
-                                        onClick={() => applyVehicleProfile(profile)}
-                                        className={`relative text-left rounded-xl border p-3 min-h-[128px] transition-all ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'} hover:brightness-95`}`}
-                                    >
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} text-blue-500`}`}>
-                                                <Tractor className="w-5 h-5" />
-                                            </div>
-                                            <div className="flex items-center gap-1">
-                                                {profile.custom && (
-                                                    <span
-                                                        role="button"
-                                                        tabIndex={0}
-                                                        onClick={(e) => deleteVehicleProfile(profile, e)}
-                                                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') deleteVehicleProfile(profile, e); }}
-                                                        className="p-1.5 rounded-md text-red-500 hover:bg-red-500/10"
-                                                    >
-                                                        <Trash2 className="w-3.5 h-3.5" />
-                                                    </span>
-                                                )}
-                                                {active && <CheckCircle2 className="w-5 h-5 text-blue-500" />}
+                <section className={`${t.bgPanel} min-h-full overflow-hidden`}>
+                    <div className={`grid grid-cols-3 border-b ${t.border}`}>
+                        {vehicleSteps.map((step, index) => {
+                            const StepIcon = step.icon;
+                            const active = step.id === vehicleSetupStep;
+                            const complete = index < currentStepIndex || (step.id === 'information' ? informationReady : step.id === 'geometry' ? geometryReady : false);
+                            return (
+                                <button
+                                    key={step.id}
+                                    onClick={() => goToVehicleStep(index)}
+                                    className={`relative flex min-w-0 items-center justify-center gap-2 px-2 py-3 text-left transition-colors ${active ? (theme === 'dark' ? 'bg-blue-500/12' : 'bg-blue-50') : 'hover:bg-blue-500/5'}`}
+                                >
+                                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-black ${active ? 'bg-blue-600 text-white' : complete ? 'bg-green-500/15 text-green-500' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} ${t.textSub}`}`}>
+                                        {complete && !active ? <Check className="h-3.5 w-3.5" /> : <StepIcon className="h-3.5 w-3.5" />}
+                                    </span>
+                                    <span className="hidden min-w-0 sm:block">
+                                        <span className={`block truncate text-xs font-black ${active ? 'text-blue-500' : t.textMain}`}>{step.label}</span>
+                                        <span className={`block truncate text-[9px] ${t.textDim}`}>{step.detail}</span>
+                                    </span>
+                                    {active && <span className="absolute inset-x-4 bottom-0 h-0.5 rounded-full bg-blue-600" />}
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    <div className="grid min-h-[560px] grid-cols-[210px_minmax(0,1fr)]">
+                        <VehicleLibrarySidebar />
+
+                        <div className="min-w-0 p-4 lg:p-5">
+                            {vehicleSetupStep === 'information' && (
+                                <div className={`overflow-hidden rounded-2xl border ${t.borderCard}`}>
+                                    <div className={`flex flex-wrap items-center justify-between gap-3 border-b ${t.border} px-4 py-3`}>
+                                        <div className="flex min-w-0 items-center gap-3">
+                                            <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-blue-50'} text-blue-500`}>
+                                                <Tractor className="h-5 w-5" />
+                                            </span>
+                                            <div className="min-w-0">
+                                                <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>Active machine</div>
+                                                <div className={`truncate text-base font-black ${t.textMain}`}>{vehicleSettings.label || activeVehicleProfile.label}</div>
+                                                <div className={`truncate text-[10px] ${t.textSub}`}>{vehicleSettings.brand || 'Generic'} · {vehicleSettings.model || vehicleSettings.type}</div>
                                             </div>
                                         </div>
-                                        <div className={`mt-3 font-black leading-tight truncate ${t.textMain}`}>{profile.label}</div>
-                                        <div className={`text-xs leading-snug ${t.textSub}`}>{profile.detail}</div>
-                                        {profile.custom && <div className="mt-2 inline-flex px-2 py-1 rounded-md bg-green-500/10 text-green-500 text-[9px] font-black uppercase">Saved</div>}
-                                    </button>
-                                );
-                            })}
-                            {filteredVehicleProfiles.length === 0 && (
-                                <div className={`col-span-full rounded-xl border border-dashed ${t.borderCard} p-5 text-center text-sm ${t.textDim}`}>No vehicle profile matched.</div>
+                                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                                            <span className={`rounded-lg border ${t.borderCard} px-2.5 py-1.5 text-[9px] font-black ${t.textMain}`}>{Number(vehicleSettings.horsepower || 0)} HP</span>
+                                            <span className={`rounded-lg border ${t.borderCard} px-2.5 py-1.5 text-[9px] font-black ${t.textMain}`}>{vehicleSettings.steeringType || 'Front axle'}</span>
+                                            <span className={`rounded-full px-2.5 py-1 text-[8px] font-black uppercase ${informationReady ? 'bg-green-500/10 text-green-500' : 'bg-orange-500/10 text-orange-500'}`}>
+                                                {informationReady ? 'Complete' : 'Required'}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-4 p-4">
+                                        <div className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
+                                            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-500/10 text-[10px] font-black text-blue-500">1</span>
+                                            <div>
+                                                <div className={`mb-3 text-xs font-black ${t.textMain}`}>Identity</div>
+                                                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                                    <SettingInput theme={t} label="Profile Name" value={vehicleSettings.label || activeVehicleProfile.label || ''} onChange={(event) => handleVehicleChange('label', event.target.value)} />
+                                                    <SettingSelect label="Vehicle Type" value={vehicleSettings.type || 'Tractor 4WD'} onChange={(value) => handleVehicleChange('type', value)} options={['Tractor 4WD', 'Articulated Tractor', 'Self Propelled', 'Harvester', 'Utility Vehicle']} />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className={`h-px ${t.divider}`} />
+
+                                        <div className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
+                                            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-500/10 text-[10px] font-black text-blue-500">2</span>
+                                            <div>
+                                                <div className={`mb-3 text-xs font-black ${t.textMain}`}>Machine details</div>
+                                                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                                    <SettingInput theme={t} label="Brand" value={vehicleSettings.brand || ''} onChange={(event) => handleVehicleChange('brand', event.target.value)} />
+                                                    <SettingInput theme={t} label="Model" value={vehicleSettings.model || ''} onChange={(event) => handleVehicleChange('model', event.target.value)} />
+                                                    <SettingInput theme={t} label="Power (HP)" value={vehicleSettings.horsepower || 0} type="number" onChange={(event) => handleVehicleChange('horsepower', parseFloat(event.target.value) || 0)} />
+                                                    <SettingInput theme={t} label="Purchase Date" value={vehicleSettings.purchaseDate || ''} type="date" onChange={(event) => handleVehicleChange('purchaseDate', event.target.value)} />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className={`h-px ${t.divider}`} />
+
+                                        <div className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
+                                            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-500/10 text-[10px] font-black text-blue-500">3</span>
+                                            <div>
+                                                <div className={`mb-3 text-xs font-black ${t.textMain}`}>Steering system</div>
+                                                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                                    <SettingSelect label="Steering Control" value={vehicleSettings.controlType || 'Electronic Steering Wheel'} onChange={(value) => handleVehicleChange('controlType', value)} options={['Electronic Steering Wheel', 'CAN Hydraulic', 'PWM Hydraulic', 'Manual Assist']} />
+                                                    <SettingSelect label="Steering Geometry" value={vehicleSettings.steeringType || 'Front axle'} onChange={(value) => handleVehicleChange('steeringType', value)} options={['Front axle', 'Articulated', 'Rear steer']} />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {vehicleSetupStep === 'geometry' && (
+                                <div className="space-y-3">
+                                    <div className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border ${t.borderCard} p-3`}>
+                                        <div>
+                                            <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>Dimension setup</div>
+                                            <div className={`text-sm font-black ${t.textMain}`}>Configure every physical reference point</div>
+                                        </div>
+                                        <div className={`grid grid-cols-3 rounded-xl p-1 ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-100'}`}>
+                                            {[
+                                                ['chassis', 'Chassis', 'wheelbase'],
+                                                ['gnss', 'GNSS receiver', 'gnssBaseline'],
+                                                ['hitch', 'Hitch', 'rearHitch']
+                                            ].map(([group, label, focus]) => (
+                                                <button
+                                                    key={group}
+                                                    type="button"
+                                                    onClick={() => { setVehicleGeometryGroup(group); setVehicleMeasureFocus(focus); }}
+                                                    className={`rounded-lg px-3 py-2 text-[9px] font-black ${vehicleGeometryGroup === group ? 'bg-blue-600 text-white shadow-sm' : t.textSub}`}
+                                                >
+                                                    {label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className={vehicleGeometryGroup === 'gnss' ? 'space-y-3' : 'grid grid-cols-[minmax(250px,0.95fr)_minmax(300px,1.05fr)] gap-3'}>
+                                        {vehicleGeometryGroup === 'gnss'
+                                            ? <GnssLiveIllustration />
+                                            : <VehicleGeometryDiagram group={vehicleGeometryGroup} />
+                                        }
+
+                                        <div className={`rounded-2xl border ${t.borderCard} p-4`}>
+                                            <div className="mb-4">
+                                                <div className={`text-[10px] font-black uppercase tracking-wide ${t.textSub}`}>Measurement setup</div>
+                                                <div className={`text-base font-black ${t.textMain}`}>
+                                                    {vehicleGeometryGroup === 'chassis' ? 'Chassis dimensions' : vehicleGeometryGroup === 'gnss' ? 'Dual-antenna horizontal geometry' : 'Hitch & coupling point'}
+                                                </div>
+                                                <p className={`mt-1 text-[10px] leading-relaxed ${t.textSub}`}>{vehicleGeometryGroup === 'gnss' ? 'ANT A and ANT B form a left-to-right heading baseline. X/Y/Z use the midpoint of that pair.' : 'Select a value to highlight its physical reference on the diagram.'}</p>
+                                            </div>
+
+                                            {vehicleGeometryGroup === 'chassis' && (
+                                                <>
+                                                    <div className="grid grid-cols-2 gap-2.5">
+                                                        <VehicleParameterInput field="wheelbase" label="Wheelbase" value={vehicleSettings.wheelbase} hint="Front axle to rear axle." />
+                                                        <VehicleParameterInput field="turnRadius" label="Min. turn radius" value={vehicleSettings.turnRadius} hint="Guidance and U-turn limit." />
+                                                        <VehicleParameterInput field="frontAxleWidth" label="Front wheel track" value={vehicleSettings.frontAxleWidth} hint="Tire center to tire center." />
+                                                        <VehicleParameterInput field="rearAxleWidth" label="Rear wheel track" value={vehicleSettings.rearAxleWidth} hint="Tire center to tire center." />
+                                                        <VehicleParameterInput field="frontOverhang" label="Front overhang" value={vehicleSettings.frontOverhang || 0} hint="Front axle to nose." />
+                                                        <VehicleParameterInput field="rearOverhang" label="Rear overhang" value={vehicleSettings.rearOverhang || 0} hint="Rear axle to body edge." />
+                                                        <VehicleParameterInput field="overallHeight" label="Vehicle height" value={vehicleSettings.overallHeight || 0} hint="Ground to highest point." />
+                                                    </div>
+                                                    <div className={`mt-3 grid grid-cols-3 gap-2 rounded-xl border ${t.borderCard} p-3`}>
+                                                        <div>
+                                                            <div className={`text-[8px] font-black uppercase ${t.textSub}`}>Overall length</div>
+                                                            <div className={`text-sm font-black ${t.textMain}`}>{overallLength.toFixed(2)} m</div>
+                                                        </div>
+                                                        <div>
+                                                            <div className={`text-[8px] font-black uppercase ${t.textSub}`}>Average track</div>
+                                                            <div className={`text-sm font-black ${t.textMain}`}>{avgTrack.toFixed(2)} m</div>
+                                                        </div>
+                                                        <div>
+                                                            <div className={`text-[8px] font-black uppercase ${t.textSub}`}>Steering</div>
+                                                            <div className={`truncate text-[11px] font-black ${t.textMain}`}>{vehicleSettings.steeringType || 'Front axle'}</div>
+                                                        </div>
+                                                    </div>
+                                                </>
+                                            )}
+
+                                            {vehicleGeometryGroup === 'gnss' && (
+                                                <div className="space-y-3">
+                                                    <section className={`overflow-hidden rounded-xl border ${t.borderCard}`}>
+                                                        <div className={`border-b ${t.border} px-3 py-2.5`}>
+                                                            <div className="flex items-start justify-between gap-3">
+                                                                <div>
+                                                                    <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>1 · Dual receiver hardware</div>
+                                                                    <div className={`text-xs font-black ${t.textMain}`}>Two antennas on one horizontal crossbar</div>
+                                                                </div>
+                                                                <span className="rounded-lg bg-amber-500/12 px-2 py-1 text-[8px] font-black uppercase text-amber-500">A ↔ B · Horizontal</span>
+                                                            </div>
+                                                        </div>
+                                                        <div className="grid grid-cols-[0.9fr_1.2fr_1fr] gap-2.5 p-3">
+                                                            <SettingSelect label="Receiver Model" value={vehicleSettings.gnssReceiverModel || 'AG-372'} onChange={(value) => handleVehicleChange('gnssReceiverModel', value)} options={['AG-372', 'SMART7-S', 'Nav-900', 'Generic RTK']} />
+                                                            <SettingSelect label="Crossbar Position" value={vehicleSettings.gnssMountPosition || 'Cab roof crossbar'} onChange={(value) => handleVehicleChange('gnssMountPosition', value)} options={['Cab roof crossbar', 'Front roof crossbar', 'Rear roof crossbar', 'Custom crossbar']} />
+                                                            <SettingSelect label="Primary Antenna" value={vehicleSettings.gnssPrimarySide || 'Left / ANT A'} onChange={(value) => handleVehicleChange('gnssPrimarySide', value)} options={['Left / ANT A', 'Right / ANT B']} />
+                                                        </div>
+                                                    </section>
+
+                                                    <section className={`overflow-hidden rounded-xl border ${t.borderCard}`}>
+                                                        <div className={`flex items-start justify-between gap-3 border-b ${t.border} px-3 py-2.5`}>
+                                                            <div>
+                                                                <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>2 · Baseline & pair-center position</div>
+                                                                <div className={`text-xs font-black ${t.textMain}`}>Measure from rear axle to the midpoint of ANT A / ANT B</div>
+                                                            </div>
+                                                            <span className={`shrink-0 rounded-lg ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-100'} px-2 py-1 text-[8px] font-black ${t.textSub}`}>B + X / Y / Z</span>
+                                                        </div>
+                                                        <GnssAxisField field="gnssBaseline" axis="B" label="Antenna baseline" value={vehicleSettings.gnssBaseline || 1.2} color="#f59e0b" hint="ANT A center to ANT B center" />
+                                                        <GnssAxisField field="antennaToRearAxle" axis="X" label="Pair-center fore-aft" value={vehicleSettings.antennaToRearAxle || 0} color="#2563eb" hint="+ forward from rear axle" />
+                                                        <GnssAxisField field="antennaOffset" axis="Y" label="Pair-center lateral" value={vehicleSettings.antennaOffset} color="#8b5cf6" hint="+ right · − left of vehicle centerline" />
+                                                        <GnssAxisField field="antennaHeight" axis="Z" label="Shared antenna height" value={vehicleSettings.antennaHeight} color="#16a34a" hint="Ground to ANT A / ANT B phase centers" />
+                                                    </section>
+
+                                                    <section className={`rounded-xl border ${t.borderCard} p-3`}>
+                                                        <div className="mb-2.5">
+                                                            <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>3 · Baseline orientation calibration</div>
+                                                            <div className={`text-xs font-black ${t.textMain}`}>Correct crossbar alignment after installation</div>
+                                                        </div>
+                                                        <div className="grid grid-cols-3 gap-2">
+                                                            <GnssAngleField field="gnssHeadingOffset" axis="H" label="Heading" value={vehicleSettings.gnssHeadingOffset || 0} color="#f97316" />
+                                                            <GnssAngleField field="gnssRollOffset" axis="R" label="Roll" value={vehicleSettings.gnssRollOffset || 0} color="#06b6d4" />
+                                                            <GnssAngleField field="gnssPitchOffset" axis="P" label="Pitch" value={vehicleSettings.gnssPitchOffset || 0} color="#ec4899" />
+                                                        </div>
+                                                    </section>
+
+                                                    <div className={`flex items-center gap-2 rounded-xl border border-green-500/25 bg-green-500/8 px-3 py-2.5`}>
+                                                        <CheckCircle2 className="h-4 w-4 shrink-0 text-green-500" />
+                                                        <div className="min-w-0">
+                                                            <div className="text-[9px] font-black uppercase text-green-500">Reference ready</div>
+                                                            <div className={`truncate text-[10px] font-bold ${t.textSub}`}>B {Number(vehicleSettings.gnssBaseline || 0).toFixed(2)} m · X {Number(vehicleSettings.antennaToRearAxle || 0).toFixed(2)} m · Y {Number(vehicleSettings.antennaOffset || 0).toFixed(2)} m · Z {Number(vehicleSettings.antennaHeight || 0).toFixed(2)} m</div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {vehicleGeometryGroup === 'hitch' && (
+                                                <>
+                                                    <SettingSelect label="Hitch Type" value={vehicleSettings.hitchType || 'Rear 3-point'} onChange={(value) => handleVehicleChange('hitchType', value)} options={['Rear 3-point', 'Drawbar', 'Integrated', 'Front mount']} />
+                                                    <div className="mt-3 grid grid-cols-2 gap-2.5">
+                                                        <VehicleParameterInput field="rearHitch" label="Rear axle to hitch / X" value={vehicleSettings.rearHitch} hint="Axle center to coupling pin." />
+                                                        <VehicleParameterInput field="hitchOffset" label="Lateral offset / Y" value={vehicleSettings.hitchOffset || 0} hint="+ right, − left of center." />
+                                                        <VehicleParameterInput field="hitchHeight" label="Hitch height / Z" value={vehicleSettings.hitchHeight || 0} hint="Ground to coupling point." />
+                                                    </div>
+                                                    <div className={`mt-3 rounded-xl border ${t.borderCard} p-3`}>
+                                                        <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Coupling reference</div>
+                                                        <div className={`mt-1 text-xs font-black ${t.textMain}`}>{vehicleSettings.hitchType || 'Rear 3-point'}</div>
+                                                        <div className={`mt-1 text-[10px] leading-relaxed ${t.textDim}`}>These offsets are measured from the rear axle center and are used to place the implement correctly on the map.</div>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {vehicleSetupStep === 'summary' && (
+                                <div className="grid grid-cols-[minmax(250px,0.9fr)_minmax(300px,1.1fr)] gap-3">
+                                    <div className="space-y-3">
+                                        <VehicleGeometryDiagram group="chassis" />
+                                        <div className="grid grid-cols-3 gap-2">
+                                            <SettingsMetric label="Wheelbase" value={`${Number(vehicleSettings.wheelbase || 0).toFixed(2)} m`} />
+                                            <SettingsMetric label="Track Avg" value={`${avgTrack.toFixed(2)} m`} />
+                                            <SettingsMetric label="Length" value={`${overallLength.toFixed(2)} m`} />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-3">
+                                        <div className={`rounded-2xl border ${t.borderCard} p-4`}>
+                                            <div className="mb-3 flex items-start justify-between gap-3">
+                                                <div>
+                                                    <div className={`text-[10px] font-black uppercase tracking-wide ${t.textSub}`}>Vehicle summary</div>
+                                                    <div className={`text-base font-black ${t.textMain}`}>{vehicleSettings.label || activeVehicleProfile.label}</div>
+                                                </div>
+                                                <span className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase ${informationReady && geometryReady ? 'bg-green-500/10 text-green-500' : 'bg-orange-500/10 text-orange-500'}`}>
+                                                    {informationReady && geometryReady ? 'Ready to save' : 'Needs review'}
+                                                </span>
+                                            </div>
+                                            {renderReviewRow('Machine', `${vehicleSettings.brand || 'Generic'} ${vehicleSettings.model || vehicleSettings.type}`)}
+                                            {renderReviewRow('Control', vehicleSettings.controlType || 'Electronic Steering Wheel')}
+                                            {renderReviewRow('Wheelbase', Number(vehicleSettings.wheelbase || 0).toFixed(2), 'm')}
+                                            {renderReviewRow('Front / Rear track', `${Number(vehicleSettings.frontAxleWidth || 0).toFixed(2)} / ${Number(vehicleSettings.rearAxleWidth || 0).toFixed(2)}`, 'm')}
+                                            {renderReviewRow('GNSS receiver pair', `2 × ${vehicleSettings.gnssReceiverModel || 'Generic RTK'} · ${vehicleSettings.gnssMountPosition || 'Cab roof crossbar'}`)}
+                                            {renderReviewRow('GNSS baseline / primary', `${Number(vehicleSettings.gnssBaseline || 0).toFixed(2)} m · ${vehicleSettings.gnssPrimarySide || 'Left / ANT A'}`)}
+                                            {renderReviewRow('Pair-center X/Y/Z', `${Number(vehicleSettings.antennaToRearAxle || 0).toFixed(2)} / ${Number(vehicleSettings.antennaOffset || 0).toFixed(2)} / ${Number(vehicleSettings.antennaHeight || 0).toFixed(2)}`, 'm')}
+                                            {renderReviewRow('GNSS H/R/P offset', `${Number(vehicleSettings.gnssHeadingOffset || 0).toFixed(1)} / ${Number(vehicleSettings.gnssRollOffset || 0).toFixed(1)} / ${Number(vehicleSettings.gnssPitchOffset || 0).toFixed(1)}`, '°')}
+                                            {renderReviewRow('Hitch X/Y/Z', `${Number(vehicleSettings.rearHitch || 0).toFixed(2)} / ${Number(vehicleSettings.hitchOffset || 0).toFixed(2)} / ${Number(vehicleSettings.hitchHeight || 0).toFixed(2)}`, 'm')}
+                                        </div>
+                                        <div className={`rounded-2xl border ${t.borderCard} p-4`}>
+                                            <div className={`mb-3 text-[10px] font-black uppercase tracking-wide ${t.textSub}`}>Validation</div>
+                                            {[
+                                                ['Identity complete', informationReady],
+                                                ['Chassis dimensions valid', Number(vehicleSettings.wheelbase) > 0 && avgTrack > 0],
+                                                ['Dual GNSS baseline configured', Number(vehicleSettings.gnssBaseline) > 0 && Number(vehicleSettings.antennaHeight) > 0 && Number(vehicleSettings.antennaToRearAxle) >= 0],
+                                                ['Hitch reference configured', Number(vehicleSettings.rearHitch) >= 0 && Number(vehicleSettings.hitchHeight) >= 0]
+                                            ].map(([label, ready]) => (
+                                                <div key={label} className="flex items-center gap-2 py-1.5">
+                                                    {ready ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <AlertTriangle className="h-4 w-4 text-orange-500" />}
+                                                    <span className={`text-xs font-bold ${ready ? t.textMain : 'text-orange-500'}`}>{label}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
                             )}
                         </div>
-                        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-                            <SettingsMetric label="Active Profile" value={activeVehicleProfile.label} />
-                            <SettingsMetric label="Wheelbase" value={`${vehicleSettings.wheelbase} m`} />
-                            <SettingsMetric label="Track Avg" value={`${avgTrack.toFixed(2)} m`} />
-                            <SettingsMetric label="Turn Radius" value={`${vehicleSettings.turnRadius} m`} />
-                        </div>
-                    </SettingsSection>
+                    </div>
 
-                    <SettingsSection title="Vehicle Geometry" detail="Dimensions used by steering simulation, map rotation and hitch placement." icon={Ruler}>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <SettingInput theme={t} label="Vehicle Type" value={vehicleSettings.type} onChange={(e) => handleVehicleChange('type', e.target.value)} />
-                            <SettingSelect label="Steering Type" value={vehicleSettings.steeringType || 'Front axle'} onChange={(value) => handleVehicleChange('steeringType', value)} options={['Front axle', 'Articulated', 'Rear steer']} />
-                            <SettingInput theme={t} label="Wheelbase (m)" value={vehicleSettings.wheelbase} type="number" onChange={(e) => handleVehicleChange('wheelbase', parseFloat(e.target.value) || 0)} />
-                            <SettingInput theme={t} label="Turning Radius (m)" value={vehicleSettings.turnRadius} type="number" onChange={(e) => handleVehicleChange('turnRadius', parseFloat(e.target.value) || 0)} />
-                            <SettingInput theme={t} label="Front Axle Width (m)" value={vehicleSettings.frontAxleWidth} type="number" onChange={(e) => handleVehicleChange('frontAxleWidth', parseFloat(e.target.value) || 0)} />
-                            <SettingInput theme={t} label="Rear Axle Width (m)" value={vehicleSettings.rearAxleWidth} type="number" onChange={(e) => handleVehicleChange('rearAxleWidth', parseFloat(e.target.value) || 0)} />
-                        </div>
-                    </SettingsSection>
-
-                    <SettingsSection title="Antenna / Hitch" detail="GNSS antenna and implement hitch reference points." icon={LocateFixed}>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <SettingInput theme={t} label="Antenna Height (m)" value={vehicleSettings.antennaHeight} type="number" onChange={(e) => handleVehicleChange('antennaHeight', parseFloat(e.target.value) || 0)} />
-                            <SettingInput theme={t} label="Antenna Offset X (m)" value={vehicleSettings.antennaOffset} type="number" onChange={(e) => handleVehicleChange('antennaOffset', parseFloat(e.target.value) || 0)} />
-                            <SettingInput theme={t} label="Rear Hitch Length (m)" value={vehicleSettings.rearHitch} type="number" onChange={(e) => handleVehicleChange('rearHitch', parseFloat(e.target.value) || 0)} />
-                            <SettingSelect label="Hitch Type" value={vehicleSettings.hitchType || 'Rear 3-point'} onChange={(value) => handleVehicleChange('hitchType', value)} options={['Rear 3-point', 'Drawbar', 'Integrated', 'Front mount']} />
-                        </div>
-                    </SettingsSection>
-                </div>
+                </section>
             );
         }
         case 'implement': {
@@ -6360,7 +7390,7 @@ const App = () => {
               </div>
 
               <div className="flex-1 min-h-0 flex overflow-hidden">
-                  <div className={`w-[28%] min-w-[280px] max-w-[340px] border-r ${t.border} ${t.bgPanel} flex flex-col min-h-0`}>
+                  <div className={`w-[30%] min-w-[240px] max-w-[300px] border-r ${t.border} ${t.bgPanel} flex flex-col min-h-0`}>
                       <nav className="flex-1 min-h-0 overflow-y-auto px-4 py-5 space-y-5">
                           {settingsNavSections.map((section) => (
                               <div key={section.title}>
@@ -6373,7 +7403,10 @@ const App = () => {
                                               label={item.label}
                                               icon={item.icon}
                                               active={settingsTab === item.id}
-                                              onClick={() => setSettingsTab(item.id)}
+                                              onClick={() => {
+                                                  setSettingsTab(item.id);
+                                                  requestAnimationFrame(() => settingsContentScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' }));
+                                              }}
                                           />
                                       ))}
                                   </div>
@@ -6383,12 +7416,43 @@ const App = () => {
                   </div>
 
                   <div className={`flex-1 min-w-0 min-h-0 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
-                      <div className="flex-1 min-h-0 p-5 lg:p-7 overflow-y-auto scroll-pb-28">
-                          <div className="max-w-5xl pb-24">{renderSettingsContent()}</div>
+                      <div ref={settingsContentScrollRef} className={`flex-1 min-h-0 overflow-y-auto scroll-pb-28 ${settingsTab === 'vehicle' ? 'p-0' : 'p-5 lg:p-7'}`}>
+                          <div className={`${settingsTab === 'vehicle' ? 'w-full' : 'max-w-5xl'} pb-24`}>{renderSettingsContent()}</div>
                       </div>
-                      <div className={`p-4 lg:p-5 border-t ${t.borderCard} flex justify-end gap-4 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
-                          <button className={`px-6 lg:px-8 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-base lg:text-lg`} onClick={() => setSettingsOpen(false)}>Cancel</button>
-                          <button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg" onClick={() => { setSettingsOpen(false); showNotification("Settings Saved Successfully", "success"); }}>Save Changes</button>
+                      <div className={`p-4 lg:p-5 border-t ${t.borderCard} flex items-center gap-3 ${settingsTab === 'vehicle' ? 'justify-between' : 'justify-end'} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
+                          <button className={`px-5 lg:px-7 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-sm lg:text-base`} onClick={() => setSettingsOpen(false)}>Cancel</button>
+                          {settingsTab === 'vehicle' ? (
+                              <div className="flex items-center gap-3">
+                                  <button
+                                      onClick={() => goToVehicleStep(vehicleSetupStepIds.indexOf(vehicleSetupStep) - 1)}
+                                      disabled={vehicleSetupStep === 'information'}
+                                      className={`flex items-center gap-2 rounded-lg border ${t.borderCard} px-4 py-2.5 text-sm font-black ${t.textMain} disabled:cursor-not-allowed disabled:opacity-35`}
+                                  >
+                                      <ChevronRight className="h-4 w-4 rotate-180" />
+                                      Back
+                                  </button>
+                                  <div className={`hidden min-w-[96px] text-center text-[10px] font-bold sm:block ${t.textDim}`}>
+                                      Step {vehicleSetupStepIds.indexOf(vehicleSetupStep) + 1} / {vehicleSetupStepIds.length}
+                                  </div>
+                                  <button
+                                      onClick={() => {
+                                          const index = vehicleSetupStepIds.indexOf(vehicleSetupStep);
+                                          if (index < vehicleSetupStepIds.length - 1) {
+                                              goToVehicleStep(index + 1);
+                                          } else {
+                                              const profile = savedVehicleProfiles.find(item => item.id === vehicleSettings.profileId);
+                                              saveVehicleProfile(profile?.custom ? 'update' : 'new');
+                                          }
+                                      }}
+                                      className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-black text-white shadow-lg shadow-blue-900/20 hover:bg-blue-500"
+                                  >
+                                      {vehicleSetupStep === 'summary' ? 'Save Vehicle' : 'Continue'}
+                                      {vehicleSetupStep === 'summary' ? <Check className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                                  </button>
+                              </div>
+                          ) : (
+                              <button className="px-6 lg:px-8 py-2 lg:py-3 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 shadow-lg shadow-blue-900/20 text-base lg:text-lg" onClick={() => { setSettingsOpen(false); showNotification("Settings Saved Successfully", "success"); }}>Save Changes</button>
+                          )}
                       </div>
                   </div>
               </div>

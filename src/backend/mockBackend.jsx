@@ -48,21 +48,42 @@ const MockBackend = (() => {
     },
     vehicleSettings: {
       profileId: 'tractor-4wd',
+      label: 'Tractor 4WD',
       type: 'Tractor 4WD',
+      brand: 'Generic',
+      model: 'Utility 125',
+      controlType: 'Electronic Steering Wheel',
+      horsepower: 125,
+      purchaseDate: '2024-01-15',
       wheelbase: 2.5,
       frontAxleWidth: 1.95,
       rearAxleWidth: 2.65,
+      frontOverhang: 1.35,
+      rearOverhang: 1.05,
+      overallHeight: 3.10,
       antennaHeight: 3.20,
       antennaOffset: 0,
+      antennaToRearAxle: 1.15,
+      gnssReceiverModel: 'AG-372',
+      gnssLayout: 'Dual antenna horizontal',
+      gnssAntennaCount: 2,
+      gnssBaseline: 1.20,
+      gnssPrimarySide: 'Left / ANT A',
+      gnssMountPosition: 'Cab roof crossbar',
+      gnssHeadingOffset: 0,
+      gnssRollOffset: 0,
+      gnssPitchOffset: 0,
       rearHitch: 1.10,
+      hitchOffset: 0,
+      hitchHeight: 0.65,
       turnRadius: 6.5,
       steeringType: 'Front axle',
       hitchType: 'Rear 3-point'
     },
     vehicleProfiles: [
-      { id: 'tractor-4wd', label: 'Tractor 4WD', detail: 'Standard rear implement tractor', type: 'Tractor 4WD', wheelbase: 2.5, frontAxleWidth: 1.95, rearAxleWidth: 2.65, antennaHeight: 3.2, antennaOffset: 0, rearHitch: 1.1, turnRadius: 6.5, steeringType: 'Front axle', hitchType: 'Rear 3-point' },
-      { id: 'articulated', label: 'Articulated', detail: 'Large articulated tractor', type: 'Articulated Tractor', wheelbase: 3.4, frontAxleWidth: 2.9, rearAxleWidth: 2.9, antennaHeight: 3.45, antennaOffset: 0, rearHitch: 1.4, turnRadius: 8.0, steeringType: 'Articulated', hitchType: 'Drawbar' },
-      { id: 'self-propelled', label: 'Self Propelled', detail: 'Sprayer / applicator chassis', type: 'Self Propelled', wheelbase: 3.0, frontAxleWidth: 3.2, rearAxleWidth: 3.2, antennaHeight: 3.8, antennaOffset: 0, rearHitch: 0.5, turnRadius: 7.2, steeringType: 'Front axle', hitchType: 'Integrated' }
+      { id: 'tractor-4wd', label: 'Tractor 4WD', detail: 'Standard rear implement tractor', type: 'Tractor 4WD', brand: 'Generic', model: 'Utility 125', controlType: 'Electronic Steering Wheel', horsepower: 125, purchaseDate: '2024-01-15', wheelbase: 2.5, frontAxleWidth: 1.95, rearAxleWidth: 2.65, frontOverhang: 1.35, rearOverhang: 1.05, overallHeight: 3.1, antennaHeight: 3.2, antennaOffset: 0, antennaToRearAxle: 1.15, gnssReceiverModel: 'AG-372', gnssLayout: 'Dual antenna horizontal', gnssAntennaCount: 2, gnssBaseline: 1.2, gnssPrimarySide: 'Left / ANT A', gnssMountPosition: 'Cab roof crossbar', gnssHeadingOffset: 0, gnssRollOffset: 0, gnssPitchOffset: 0, rearHitch: 1.1, hitchOffset: 0, hitchHeight: 0.65, turnRadius: 6.5, steeringType: 'Front axle', hitchType: 'Rear 3-point' },
+      { id: 'articulated', label: 'Articulated', detail: 'Large articulated tractor', type: 'Articulated Tractor', brand: 'Generic', model: 'Artic 420', controlType: 'CAN Hydraulic', horsepower: 420, purchaseDate: '2023-09-20', wheelbase: 3.4, frontAxleWidth: 2.9, rearAxleWidth: 2.9, frontOverhang: 1.75, rearOverhang: 1.45, overallHeight: 3.55, antennaHeight: 3.45, antennaOffset: 0, antennaToRearAxle: 1.65, gnssReceiverModel: 'SMART7-S', gnssLayout: 'Dual antenna horizontal', gnssAntennaCount: 2, gnssBaseline: 1.6, gnssPrimarySide: 'Left / ANT A', gnssMountPosition: 'Cab roof crossbar', gnssHeadingOffset: 0, gnssRollOffset: 0, gnssPitchOffset: 0, rearHitch: 1.4, hitchOffset: 0, hitchHeight: 0.78, turnRadius: 8.0, steeringType: 'Articulated', hitchType: 'Drawbar' },
+      { id: 'self-propelled', label: 'Self Propelled', detail: 'Sprayer / applicator chassis', type: 'Self Propelled', brand: 'Generic', model: 'SP 3200', controlType: 'CAN Hydraulic', horsepower: 280, purchaseDate: '2024-05-10', wheelbase: 3.0, frontAxleWidth: 3.2, rearAxleWidth: 3.2, frontOverhang: 1.6, rearOverhang: 1.25, overallHeight: 3.7, antennaHeight: 3.8, antennaOffset: 0, antennaToRearAxle: 1.4, gnssReceiverModel: 'AG-372', gnssLayout: 'Dual antenna horizontal', gnssAntennaCount: 2, gnssBaseline: 1.5, gnssPrimarySide: 'Left / ANT A', gnssMountPosition: 'Cab roof crossbar', gnssHeadingOffset: 0, gnssRollOffset: 0, gnssPitchOffset: 0, rearHitch: 0.5, hitchOffset: 0, hitchHeight: 0.72, turnRadius: 7.2, steeringType: 'Front axle', hitchType: 'Integrated' }
     ],
     implementSettings: {
       profileId: 'planter-6r',
@@ -295,7 +316,32 @@ const MockBackend = (() => {
     if (!persisted) return base;
 
     const next = { ...base, ...persisted.data };
-    next.vehicleSettings = { ...base.vehicleSettings, ...(persisted.data.vehicleSettings || {}) };
+    const persistedVehicleSettings = persisted.data.vehicleSettings || {};
+    next.vehicleSettings = { ...base.vehicleSettings, ...persistedVehicleSettings };
+    if (!persistedVehicleSettings.gnssLayout) {
+      const activeBaseProfile = base.vehicleProfiles.find((item) => item.id === next.vehicleSettings.profileId) || base.vehicleSettings;
+      next.vehicleSettings = {
+        ...next.vehicleSettings,
+        gnssLayout: 'Dual antenna horizontal',
+        gnssAntennaCount: 2,
+        gnssBaseline: activeBaseProfile.gnssBaseline || 1.2,
+        gnssPrimarySide: 'Left / ANT A',
+        gnssMountPosition: 'Cab roof crossbar'
+      };
+    }
+    const persistedVehicleProfiles = persisted.data.vehicleProfiles || base.vehicleProfiles;
+    next.vehicleProfiles = persistedVehicleProfiles.map((profile) => {
+      const baseProfile = base.vehicleProfiles.find((item) => item.id === profile.id) || base.vehicleSettings;
+      const merged = { ...baseProfile, ...profile };
+      return profile.gnssLayout ? merged : {
+        ...merged,
+        gnssLayout: 'Dual antenna horizontal',
+        gnssAntennaCount: 2,
+        gnssBaseline: baseProfile.gnssBaseline || 1.2,
+        gnssPrimarySide: 'Left / ANT A',
+        gnssMountPosition: 'Cab roof crossbar'
+      };
+    });
     next.implementSettings = { ...base.implementSettings, ...(persisted.data.implementSettings || {}) };
     next.rtkSettings = { ...base.rtkSettings, ...(persisted.data.rtkSettings || {}) };
     next.wifiSettings = { ...base.wifiSettings, ...(persisted.data.wifiSettings || {}) };
