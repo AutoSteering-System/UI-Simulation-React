@@ -1,5 +1,11 @@
 const { useState, useEffect, useRef } = React;
 
+const MAP_ZOOM_REFERENCE = 0.6;
+const DEFAULT_MAP_ZOOM = 1.2;
+const MIN_MAP_ZOOM = 0.6;
+const MAX_MAP_ZOOM = 2.4;
+const MAP_ZOOM_STEP = 0.2;
+
 const DEFAULT_FEATURE_SETTINGS = {
     terrainCompensation: true,
     electricPowerSteering: true,
@@ -114,6 +120,8 @@ const App = () => {
   const [boundaryAlertOpen, setBoundaryAlertOpen] = useState(false);
   const [boundaryAlertType, setBoundaryAlertType] = useState(null);
   const [previewBoundary, setPreviewBoundary] = useState(null);
+  const [boundaryCaptureReady, setBoundaryCaptureReady] = useState(false);
+  const boundaryCaptureContextRef = useRef({ reopenFieldManager: false });
 
   // Delete Confirm Modal
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -123,6 +131,7 @@ const App = () => {
   const [tempManualHeading, setTempManualHeading] = useState('0.0');
   const [settingsTab, setSettingsTab] = useState('overview');
   const [fieldAssetTab, setFieldAssetTab] = useState('lines');
+  const [fieldQuickView, setFieldQuickView] = useState(null);
   const [showArchivedLines, setShowArchivedLines] = useState(false);
   const [lineCatalogFilter, setLineCatalogFilter] = useState('ALL');
   const [selectedCatalogLineId, setSelectedCatalogLineId] = useState(null);
@@ -145,6 +154,7 @@ const App = () => {
 
   // NEW: Locked Lane Index for Auto Steer
   const activeLaneRef = useRef(null);
+  const manualLaneRef = useRef(null);
   const bootstrappedLineRef = useRef(false);
   const runTelemetrySyncRef = useRef({ runStatus: '', rtkTelemetry: '', runKpi: '' });
 
@@ -164,7 +174,7 @@ const App = () => {
 
   const [satelliteCount, setSatelliteCount] = useState(() => Number(savedUiLocalState.satelliteCount || gnssTelemetry?.roverUsedSats || 12));
   const [notification, setNotification] = useState(null);
-  const [zoomLevel, setZoomLevel] = useState(0.6);
+  const [zoomLevel, setZoomLevel] = useState(DEFAULT_MAP_ZOOM);
   const [sceneViewMode, setSceneViewMode] = useState(() => {
       const params = new URLSearchParams(window.location.search);
       const mode = params.get('view') || params.get('vehicle') || params.get('mapView');
@@ -176,10 +186,18 @@ const App = () => {
       return mode === 'dark' ? 'dark' : 'light';
   });
   const [isDraggingMap, setIsDraggingMap] = useState(false);
+  const mapCanvasRef = useRef(null);
+  const [mapCanvasSize, setMapCanvasSize] = useState({ width: 1000, height: 700 });
   const dragStartRef = useRef({ x: 0, y: 0 });
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const keysPressed = useRef({});
   const crossTrackErrorRef = useRef(0);
+  const guidanceErrorFilterRef = useRef({
+      value: 0,
+      lastSampleAt: 0,
+      lastCommitAt: 0,
+      lastDisplay: 0
+  });
   const mapVisualHeadingRef = useRef(0);
   const turnAssistRef = useRef(null);
   const rtkLossHandledRef = useRef(false);
@@ -209,6 +227,34 @@ const App = () => {
       if (shouldCloseDockTools) setDockMenuOpen(false);
   }, [dockMenuOpen, isCreating, isRecordingBoundary, uTurnPanelOpen, rtkQualityOpen, eventHistoryOpen, productivityOpen, menuOpen, settingsOpen, fieldManagerOpen, linesPanelOpen, lineModeModalOpen, lineNameModalOpen, boundaryNameModalOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen]);
 
+  useEffect(() => {
+      const mapCanvas = mapCanvasRef.current;
+      if (!mapCanvas) return undefined;
+
+      const updateMapCanvasSize = () => {
+          const bounds = mapCanvas.getBoundingClientRect();
+          const nextWidth = Math.max(1, bounds.width);
+          const nextHeight = Math.max(1, bounds.height);
+          setMapCanvasSize((current) => (
+              Math.abs(current.width - nextWidth) < 0.5 && Math.abs(current.height - nextHeight) < 0.5
+                  ? current
+                  : { width: nextWidth, height: nextHeight }
+          ));
+      };
+
+      updateMapCanvasSize();
+      const resizeObserver = typeof ResizeObserver !== 'undefined'
+          ? new ResizeObserver(updateMapCanvasSize)
+          : null;
+      resizeObserver?.observe(mapCanvas);
+      window.addEventListener('resize', updateMapCanvasSize);
+
+      return () => {
+          resizeObserver?.disconnect();
+          window.removeEventListener('resize', updateMapCanvasSize);
+      };
+  }, []);
+
   // Store refs to guidance data for physics loop
   const guidanceRef = useRef({
       type: null,
@@ -237,6 +283,18 @@ const App = () => {
         }
     };
   }, [guidanceLine, pointA, pointB, aPlusPoint, aPlusHeading, curvePoints, pivotCenter, pivotRadius, activeLineId, fields, selectedFieldId, isMultiLineMode, implementSettings.width, manualOffset]);
+
+  useEffect(() => {
+      manualLaneRef.current = null;
+      guidanceErrorFilterRef.current = {
+          value: 0,
+          lastSampleAt: 0,
+          lastCommitAt: 0,
+          lastDisplay: 0
+      };
+      crossTrackErrorRef.current = 0;
+      setCrossTrackError(0);
+  }, [activeLineId, guidanceLine, isMultiLineMode, implementSettings.width]);
 
 
   const t = theme === 'dark' ? {
@@ -405,29 +463,62 @@ const App = () => {
   const getTargetRelativeXte = (rawXte, guide) => {
       const offset = Number(guide.manualOffset) || 0;
       if (guide.isMulti && guide.width > 0) {
-          const targetLaneIndex = activeLaneRef.current !== null ? activeLaneRef.current : Math.round(rawXte / guide.width);
+          let targetLaneIndex = activeLaneRef.current;
+          if (targetLaneIndex === null) {
+              const nearestLane = Math.round(rawXte / guide.width);
+              if (steeringMode !== 'MANUAL') {
+                  targetLaneIndex = nearestLane;
+              } else {
+                  if (manualLaneRef.current === null) manualLaneRef.current = nearestLane;
+                  const laneRelativeXte = rawXte - manualLaneRef.current * guide.width;
+                  const switchThreshold = guide.width * 0.62;
+                  if (laneRelativeXte > switchThreshold) manualLaneRef.current += 1;
+                  else if (laneRelativeXte < -switchThreshold) manualLaneRef.current -= 1;
+                  targetLaneIndex = manualLaneRef.current;
+              }
+          }
           return rawXte - (targetLaneIndex * guide.width) - offset;
       }
       return rawXte - offset;
   };
 
   const setGuidanceErrorFromPixels = (xtePixels) => {
-      const nextCm = Math.round((xtePixels / PIXELS_PER_METER) * 1000) / 10;
-      if (Math.abs(nextCm - crossTrackErrorRef.current) < 0.2) return;
-      crossTrackErrorRef.current = nextCm;
-      setCrossTrackError(nextCm);
+      const rawCm = Math.round((xtePixels / PIXELS_PER_METER) * 1000) / 10;
+      const now = performance.now();
+      const filter = guidanceErrorFilterRef.current;
+      const sampleDeltaMs = filter.lastSampleAt > 0
+          ? Math.min(120, Math.max(8, now - filter.lastSampleAt))
+          : 16;
+      const smoothingTimeMs = steeringMode === 'MANUAL' ? 340 : 110;
+      const alpha = 1 - Math.exp(-sampleDeltaMs / smoothingTimeMs);
+
+      filter.value += (rawCm - filter.value) * alpha;
+      filter.lastSampleAt = now;
+      if (Math.abs(rawCm) < 0.45 && Math.abs(filter.value) < 0.8) filter.value = 0;
+
+      const quantizeStep = steeringMode === 'MANUAL'
+          ? (Math.abs(filter.value) >= 10 ? 1 : 0.5)
+          : 0.1;
+      const nextDisplay = Math.round(filter.value / quantizeStep) * quantizeStep;
+      const displayDelta = Math.abs(nextDisplay - filter.lastDisplay);
+      const elapsedSinceCommit = now - filter.lastCommitAt;
+      const minimumInterval = steeringMode === 'MANUAL' ? 120 : 45;
+      const forceCommit = displayDelta >= (steeringMode === 'MANUAL' ? 8 : 3);
+      const manualDisplayDeadband = Math.abs(filter.value) >= 10 ? 2 : 0.75;
+
+      if (!forceCommit && elapsedSinceCommit < minimumInterval) return;
+      if (steeringMode === 'MANUAL' && displayDelta < manualDisplayDeadband && elapsedSinceCommit < 360) return;
+      if (displayDelta < 0.05) return;
+
+      filter.lastDisplay = nextDisplay;
+      filter.lastCommitAt = now;
+      crossTrackErrorRef.current = nextDisplay;
+      setCrossTrackError(nextDisplay);
   };
 
   const getXteDirection = () => {
       if (Math.abs(crossTrackError) < 1) return 'CENTER';
       return crossTrackError < 0 ? 'LEFT' : 'RIGHT';
-  };
-
-  const getXteTone = () => {
-      const abs = Math.abs(crossTrackError);
-      if (abs >= 10) return 'bg-red-500/10 border-red-500 text-red-600';
-      if (abs >= 4) return 'bg-yellow-500/10 border-yellow-500 text-yellow-700';
-      return theme === 'dark' ? 'bg-slate-900/60 border-slate-700 text-white' : 'bg-white/70 border-gray-300 text-slate-900';
   };
 
   const getLineLengthMeters = (line) => {
@@ -611,61 +702,12 @@ const App = () => {
                 else if (p.steeringAngle < 0) p.steeringAngle = Math.min(0, p.steeringAngle + steeringReturnSpeed * dt);
             }
 
-            // NEW: Snap Line to Vehicle in Single Mode (Manual Driving)
-            if (!guidanceRef.current.isMulti && guidanceRef.current.type) {
-                const guide = guidanceRef.current;
-                let currentSnapOffset = 0;
-                // Calculate distance from original line
-                if (guide.type === 'STRAIGHT_AB' && guide.points.a && guide.points.b) {
-                   const ax = guide.points.a.x; const ay = guide.points.a.y;
-                   const bx = guide.points.b.x; const by = guide.points.b.y;
-                   const dx = bx - ax; const dy = by - ay;
-                   const len = Math.hypot(dx, dy);
-                   if (len > 0) {
-                       currentSnapOffset = ((bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax)) / len;
-                   }
-                } else if (guide.type === 'A_PLUS' && guide.points.aplus && guide.points.aplus.point) {
-                    const ax = guide.points.aplus.point.x;
-                    const ay = guide.points.aplus.point.y;
-                    const h = guide.points.aplus.heading;
-                    const rad = h * Math.PI / 180;
-                    const ux = Math.sin(rad);
-                    const uy = -Math.cos(rad);
-                    const vax = p.x - ax; const vay = p.y - ay;
-                    currentSnapOffset = vax * (-uy) + vay * (ux);
-                } else if (guide.type === 'PIVOT' && guide.points.pivot && guide.points.pivot.center && guide.points.pivot.radius) {
-                    const cx = guide.points.pivot.center.x;
-                    const cy = guide.points.pivot.center.y;
-                    const baseR = guide.points.pivot.radius;
-                    const dist = Math.hypot(p.x - cx, p.y - cy);
-                    currentSnapOffset = dist - baseR;
-                } else if (guide.type === 'CURVE' && guide.points.curve && guide.points.curve.length > 1) {
-                     // Approximate closest point for snapping
-                     let minDist = Infinity;
-                     let bestCross = 0;
-                     for(let i=0; i<guide.points.curve.length-1; i++) {
-                         const p1 = guide.points.curve[i];
-                         const p2 = guide.points.curve[i+1];
-                         const info = pointToSegmentDistance(p.x, p.y, p1.x, p1.y, p2.x, p2.y);
-                         if (info.distance < minDist) {
-                             minDist = info.distance;
-                             const segLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-                             bestCross = info.cross / segLen;
-                         }
-                     }
-                     currentSnapOffset = bestCross;
-                }
-
-                // Update state
-                actions.setManualOffset(currentSnapOffset);
-            }
-
             const guideForTelemetry = guidanceRef.current;
             const telemetry = getGuidanceMetrics(guideForTelemetry, p);
             if (telemetry.validLine) {
-                setGuidanceErrorFromPixels(getTargetRelativeXte(telemetry.xte, guideForTelemetry));
-            } else {
-                setGuidanceErrorFromPixels(0);
+                // Manual keeps selecting the nearest pass as the vehicle moves,
+                // but the displayed line error is intentionally frozen until AUTO.
+                getTargetRelativeXte(telemetry.xte, guideForTelemetry);
             }
         }
 
@@ -730,7 +772,7 @@ const App = () => {
       if (isRecording && Math.abs(speed) > 0.1) {
           intervalId = setInterval(() => {
               const speedMs = Math.abs(speed) / 3.6;
-              const width = 3.0;
+              const width = Math.max(0.1, Number(implementSettings.width) || 3);
               const dt = 0.05;
               const areaM2 = speedMs * width * dt;
               const areaHa = areaM2 / 10000;
@@ -738,21 +780,28 @@ const App = () => {
           }, 50);
       }
       return () => clearInterval(intervalId);
-  }, [isRecording, speed]);
+  }, [isRecording, speed, implementSettings.width]);
 
   useEffect(() => {
       if (!isRecording && !isRecordingCurve && !isRecordingBoundary) return;
       const newPos = worldPos;
       const newHeading = heading;
-      const shouldRecord = (prev, pt) => {
-          const last = prev[prev.length - 1];
-          if (last && Math.hypot(last.x - pt.x, last.y - pt.y) < 10) return prev;
-          return [...prev, pt];
+      const isFarEnough = (points, point) => {
+          const last = points[points.length - 1];
+          return !last || Math.hypot(last.x - point.x, last.y - point.y) >= 10;
       };
 
-      if (isRecording) actions.setCoverageTrail(prev => shouldRecord(prev, { x: newPos.x, y: newPos.y, h: newHeading }));
-      if (isRecordingCurve) actions.setCurvePoints(prev => shouldRecord(prev, { x: newPos.x, y: newPos.y }));
-      if (isRecordingBoundary) actions.setTempBoundary(prev => shouldRecord(prev, { x: newPos.x, y: newPos.y }));
+      const coveragePoint = { x: newPos.x, y: newPos.y, h: newHeading };
+      const pathPoint = { x: newPos.x, y: newPos.y };
+      if (isRecording && isFarEnough(coverageTrail, coveragePoint)) {
+          actions.setCoverageTrail(prev => [...prev, coveragePoint]);
+      }
+      if (isRecordingCurve && isFarEnough(curvePoints, pathPoint)) {
+          actions.setCurvePoints(prev => [...prev, pathPoint]);
+      }
+      if (isRecordingBoundary && isFarEnough(tempBoundary, pathPoint)) {
+          actions.setTempBoundary(prev => [...prev, pathPoint]);
+      }
   }, [worldPos, isRecording, isRecordingCurve, isRecordingBoundary, heading]);
 
   useEffect(() => {
@@ -868,6 +917,7 @@ const App = () => {
   useEffect(() => {
       if (steeringMode === 'AUTO' && rtkStatus !== 'FIX') {
           setSteeringMode('MANUAL');
+          manualLaneRef.current = activeLaneRef.current;
           activeLaneRef.current = null;
           actions.setRunStatus(prev => ({
               ...(prev || {}),
@@ -890,6 +940,7 @@ const App = () => {
   // NEW: Handler for Toggling Multi-Line Mode to calculate Offset
   const handleToggleMultiLine = () => {
       const nextMode = !isMultiLineMode;
+      manualLaneRef.current = null;
       actions.setIsMultiLineMode(nextMode);
 
       if (!nextMode) {
@@ -937,6 +988,7 @@ const App = () => {
                  activeLaneRef.current = Math.round(metrics.xte / guide.width);
              }
         }
+        manualLaneRef.current = null;
 
         // 1b. Close Action Dock & Stop Creating
         setIsCreating(false);
@@ -948,7 +1000,7 @@ const App = () => {
         setDragOffset({ x: 0, y: 0 });
         physics.current.steeringAngle = 0;
 
-        // Unlock lane (optional, or keep it until next auto engage)
+        manualLaneRef.current = activeLaneRef.current;
         activeLaneRef.current = null;
 
         showNotification("Manual Control Returned", "warning");
@@ -983,6 +1035,12 @@ const App = () => {
       setRtkStatus('FIX');
       setCrossTrackError(0);
       crossTrackErrorRef.current = 0;
+      guidanceErrorFilterRef.current = {
+          value: 0,
+          lastSampleAt: 0,
+          lastCommitAt: 0,
+          lastDisplay: 0
+      };
       setSpeed(0);
       setManualTargetSpeed(0);
       setSteeringAngle(0);
@@ -1010,6 +1068,7 @@ const App = () => {
       setBoundaryNameModalOpen(false);
       setBoundaryAlertOpen(false);
       setPreviewBoundary(null);
+      setBoundaryCaptureReady(false);
       setDeleteModalOpen(false);
       setItemToDelete(null);
       setTempLineName('');
@@ -1019,12 +1078,13 @@ const App = () => {
       setBaseSurveyState('idle');
       setCalibrationStatus({ vehicle: 'OK', implement: 'Needs Check', angle: 'OK' });
       activeLaneRef.current = null;
+      manualLaneRef.current = null;
       bootstrappedLineRef.current = false;
       turnAssistRef.current = null;
       setTurnAssistActive(false);
       setFeatureSettings(DEFAULT_FEATURE_SETTINGS);
       setSatelliteCount(12);
-      setZoomLevel(0.6);
+      setZoomLevel(DEFAULT_MAP_ZOOM);
       setDragOffset({ x: 0, y: 0 });
       setIsDraggingMap(false);
       showNotification('Factory reset complete', 'success');
@@ -1035,7 +1095,22 @@ const App = () => {
       actions.setManualOffset(prev => prev + (direction === 'left' ? -trimPixels : trimPixels));
       showNotification(`Trim ${direction === 'left' ? 'Left' : 'Right'} 1cm`, "info");
   };
-  const handleZoom = (type) => { setZoomLevel(prev => { if (type === 'in') return Math.min(prev + 0.2, 3.0); if (type === 'out') return Math.max(prev - 0.2, 0.2); return prev; }); };
+  const handleZoom = (type) => {
+      setZoomLevel((previous) => {
+          if (type === 'reset') return DEFAULT_MAP_ZOOM;
+          const next = type === 'in'
+              ? Math.min(previous + MAP_ZOOM_STEP, MAX_MAP_ZOOM)
+              : type === 'out'
+                  ? Math.max(previous - MAP_ZOOM_STEP, MIN_MAP_ZOOM)
+                  : previous;
+          return Math.round(next * 100) / 100;
+      });
+  };
+  const handleCoverageRecordingToggle = () => {
+      const nextRecording = !isRecording;
+      setIsRecording(nextRecording);
+      showNotification(nextRecording ? 'Coverage recording started' : 'Coverage recording paused', nextRecording ? 'success' : 'info');
+  };
   const handleRecenter = () => { setDragOffset({ x: 0, y: 0 }); setIsDraggingMap(false); };
   const handleSceneViewChange = (mode) => {
       if (mode === sceneViewMode) return;
@@ -1057,6 +1132,7 @@ const App = () => {
   const openFieldAssetPanel = (tab = 'lines') => {
       setMenuOpen(false);
       setFieldAssetTab(tab);
+      setFieldQuickView(null);
       actions.setViewMode('LIST');
       setFieldManagerOpen(true);
       setSettingsOpen(false);
@@ -1413,15 +1489,29 @@ const App = () => {
   };
 
   const startBoundaryCreation = () => {
+     boundaryCaptureContextRef.current = { reopenFieldManager: fieldManagerOpen };
      setFieldManagerOpen(false);
      setDockMenuOpen(false); // Close menu
      setRtkQualityOpen(false);
      setEventHistoryOpen(false);
      setProductivityOpen(false);
      setUTurnPanelOpen(false);
+     actions.setIsRecordingBoundary(false);
+     actions.setTempBoundary([]);
+     setPreviewBoundary(null);
+     setBoundaryCaptureReady(true);
+     physics.current.targetSpeed = 0;
+     setManualTargetSpeed(0);
+     showNotification("Boundary ready. Press Start when positioned at the field edge.", "info");
+  };
+
+  const beginBoundaryRecording = () => {
+     setBoundaryCaptureReady(false);
+     actions.setTempBoundary([{ x: worldPos.x, y: worldPos.y }]);
      actions.setIsRecordingBoundary(true);
-     physics.current.targetSpeed = 5;
-     showNotification("Drive to record boundary...", "info");
+     physics.current.targetSpeed = 0;
+     setManualTargetSpeed(0);
+     showNotification("Boundary recording started. Drive along the field edge.", "success");
   };
 
   // UPDATED FINISH BOUNDARY LOGIC
@@ -1553,16 +1643,28 @@ const App = () => {
       actions.setTempBoundary([]);
       setTempBoundaryName('');
       actions.setIsRecordingBoundary(false);
+      setBoundaryCaptureReady(false);
       setDockMenuOpen(false);
+      if (boundaryCaptureContextRef.current.reopenFieldManager) {
+          setFieldManagerOpen(true);
+      }
+      boundaryCaptureContextRef.current = { reopenFieldManager: false };
       showNotification("Boundary Saved & Active!", "success");
   }
 
   const cancelBoundaryRecording = () => {
+    const shouldReopenFieldManager = boundaryCaptureContextRef.current.reopenFieldManager;
+    setBoundaryCaptureReady(false);
     actions.setIsRecordingBoundary(false);
     physics.current.targetSpeed = 0;
+    setManualTargetSpeed(0);
     actions.setTempBoundary([]);
     setPreviewBoundary(null);
     setDockMenuOpen(false);
+    if (shouldReopenFieldManager) {
+        setFieldManagerOpen(true);
+    }
+    boundaryCaptureContextRef.current = { reopenFieldManager: false };
     showNotification("Recording Cancelled", "info");
   };
 
@@ -1713,7 +1815,7 @@ const App = () => {
       areaRemainingHa: liveAreaRemaining,
       etaMin: liveEtaMin,
       workRateHaHr: liveWorkRate,
-      passIndex: activeLaneRef.current ?? livePassIndex
+      passIndex: activeLaneRef.current ?? manualLaneRef.current ?? livePassIndex
   };
   const straightABPreviewEnd = pointA ? { ...worldPos } : null;
   const liveRunStatus = (() => {
@@ -1748,7 +1850,7 @@ const App = () => {
       && rtkStatus === 'FIX'
       && currentRunStatus.steeringState === 'READY'
       && !currentRunStatus.overrideDetected;
-  const autosteerStateLabel = isRecordingBoundary
+  const autosteerStateLabel = isRecordingBoundary || boundaryCaptureReady
       ? 'BOUNDARY'
       : isCreating
           ? 'CREATING'
@@ -1763,8 +1865,8 @@ const App = () => {
               : currentRunStatus.overrideDetected || rtkStatus !== 'FIX' || currentRunStatus.engageAllowed === false
                   ? 'BLOCKED'
                   : 'READY';
-  const autosteerPrimaryLabel = isRecordingBoundary
-      ? 'RECORDING'
+  const autosteerPrimaryLabel = isRecordingBoundary || boundaryCaptureReady
+      ? (isRecordingBoundary ? 'RECORDING' : 'PRESS START')
       : isCreating
           ? 'LINE SETUP'
       : turnAssistActive
@@ -1780,8 +1882,8 @@ const App = () => {
               : currentRunStatus.engageAllowed === false
                   ? 'VIEW ISSUE'
                   : 'ENGAGE';
-  const autosteerSubLabel = isRecordingBoundary
-      ? `${tempBoundary.length} points · finish from the right controls`
+  const autosteerSubLabel = isRecordingBoundary || boundaryCaptureReady
+      ? (isRecordingBoundary ? `${tempBoundary.length} points / finish from the right controls` : 'Start boundary capture from the right controls')
       : isCreating
           ? 'Complete guidance from the right controls'
       : currentRunStatus.steeringState === 'FAULT' || currentRunStatus.steeringState === 'PAUSED'
@@ -1793,7 +1895,7 @@ const App = () => {
           : currentRunStatus.overrideDetected
               ? currentRunStatus.steeringReason
           : autosteerReady
-              ? (activeLineRecord?.name || 'Guidance ready')
+              ? 'RTK FIX / guidance ready'
               : (currentRunStatus.steeringReason || 'RTK FIX required');
   const autosteerButtonTone = autosteerStateLabel === 'FAULT'
       ? 'bg-red-700 border-red-400'
@@ -1825,8 +1927,15 @@ const App = () => {
               : SteeringWheelIcon;
   const handleAutosteerPrimary = () => {
       setDockMenuOpen(false);
-      if (isRecordingBoundary || isCreating) {
-          showNotification(isRecordingBoundary ? 'Finish or cancel boundary from the right controls' : 'Complete guidance setup from the right controls', 'info');
+      if (isRecordingBoundary || boundaryCaptureReady || isCreating) {
+          showNotification(
+              isRecordingBoundary
+                  ? 'Finish or cancel boundary from the right controls'
+                  : boundaryCaptureReady
+                      ? 'Press Start in the right controls to begin boundary capture'
+                      : 'Complete guidance setup from the right controls',
+              'info'
+          );
           return;
       }
       if (turnAssistActive) {
@@ -1894,7 +2003,6 @@ const App = () => {
   const vehicleScreenOffsetX = (dragOffset.x * Math.cos(mapRotationRad) - dragOffset.y * Math.sin(mapRotationRad)) * zoomLevel;
   const vehicleScreenOffsetY = (dragOffset.x * Math.sin(mapRotationRad) + dragOffset.y * Math.cos(mapRotationRad)) * zoomLevel * (isMap3D ? 0.64 : 1);
   const vehicleScreenHeading = isHeadingUpMap ? 0 : heading;
-  const vehicleScreenScale = Math.max(0.56, Math.min(0.92, zoomLevel * (isMap3D ? 1.02 : 0.98)));
   const gridMinorSize = 160;
   const gridMajorSize = gridMinorSize * 4;
   const gridOffsetX2DMinor = (-worldPos.x + dragOffset.x) % gridMinorSize;
@@ -2003,41 +2111,77 @@ const App = () => {
   const renderGuidanceLightbar = () => {
       const abs = Math.abs(crossTrackError);
       const direction = getXteDirection();
-      const litBars = Math.min(4, Math.ceil(abs / 3));
       const barTone = abs >= 10 ? 'bg-red-500' : abs >= 4 ? 'bg-yellow-500' : 'bg-blue-500';
-      const nextPassValue = turnAssistActive
-          ? (turnAssistRef.current?.direction < 0 ? 'LEFT' : 'RIGHT')
-          : (uTurnSettings?.nextPass === 'Skip' ? `S${Math.max(1, Number(uTurnSettings?.skipPasses || 1))}` : '+1');
+      const offsetCm = manualOffset / PIXELS_PER_METER * 100;
+      const offsetValue = `${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(0)}cm`;
+      const passValue = `${currentRunKpi.passIndex >= 0 ? '+' : ''}${currentRunKpi.passIndex}`;
+      const errorTextTone = abs >= 10 ? 'text-red-500' : abs >= 4 ? 'text-yellow-600 dark:text-yellow-400' : t.textMain;
+      const meterPosition = Math.max(4, Math.min(96, 50 + (crossTrackError / 30) * 46));
+      const errorFeedLive = steeringMode === 'AUTO';
+      const meterTrack = theme === 'dark'
+          ? 'linear-gradient(90deg, rgba(239,68,68,.35) 0%, rgba(245,158,11,.25) 28%, rgba(59,130,246,.28) 50%, rgba(245,158,11,.25) 72%, rgba(239,68,68,.35) 100%)'
+          : 'linear-gradient(90deg, rgba(239,68,68,.24) 0%, rgba(245,158,11,.18) 28%, rgba(59,130,246,.20) 50%, rgba(245,158,11,.18) 72%, rgba(239,68,68,.24) 100%)';
 
       return (
-          <div className={`h-[62px] min-w-[220px] xl:min-w-[310px] max-w-[460px] w-full rounded-xl border-2 px-2 xl:px-3 flex items-center gap-2 xl:gap-3 justify-center shadow-sm ${getXteTone()}`}>
-              <div className="flex items-end gap-1.5 h-8">
-                  {[-4, -3, -2, -1, 0, 1, 2, 3, 4].map((step) => {
-                      const active = step === 0 || (direction === 'LEFT' && step < 0 && Math.abs(step) <= litBars) || (direction === 'RIGHT' && step > 0 && step <= litBars);
-                      const height = step === 0 ? 'h-8' : Math.abs(step) === 1 ? 'h-6' : Math.abs(step) === 2 ? 'h-5' : 'h-4';
-                      return (
-                          <div
-                              key={step}
-                              className={`w-2 rounded-full ${height} ${step === 0 ? 'bg-slate-900 dark:bg-white' : active ? barTone : 'bg-slate-300/70 dark:bg-slate-700'}`}
+          <div
+              data-guidance-hud
+              className={`h-full w-full ${theme === 'dark' ? 'bg-slate-900/30' : 'bg-slate-50/55'} px-2 grid grid-cols-[96px_minmax(0,1fr)_96px] items-center`}
+          >
+              <div className="min-w-0 flex flex-col items-center justify-center text-center">
+                  <span className={`text-base font-black leading-none tabular-nums ${t.textMain}`}>{passValue}</span>
+                  <span className={`mt-1 text-[9px] uppercase font-black tracking-wider leading-none ${t.textSub}`}>Pass</span>
+              </div>
+
+              <div
+                  data-error-center
+                  className="relative min-w-0 h-full px-4 flex flex-col items-center justify-center text-center"
+              >
+                  <span aria-hidden="true" className={`absolute left-0 top-1/2 h-11 -translate-y-1/2 border-l ${t.borderCard}`} />
+                  <span aria-hidden="true" className={`absolute right-0 top-1/2 h-11 -translate-y-1/2 border-r ${t.borderCard}`} />
+                  <div className="flex items-center justify-center gap-1.5">
+                      <span className={`text-[8px] uppercase font-black leading-none tracking-[0.12em] ${t.textSub}`}>Line error</span>
+                      <span className={`inline-flex items-center gap-1 text-[7px] uppercase font-black leading-none tracking-[0.08em] ${errorFeedLive ? 'text-green-500' : t.textDim}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${errorFeedLive ? 'bg-green-500' : 'bg-slate-400'}`} />
+                          {errorFeedLive ? 'Live' : 'Hold'}
+                      </span>
+                  </div>
+                  <div className="relative mt-1 h-[27px] w-full">
+                      <span data-error-value className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[27px] font-black leading-none tabular-nums ${errorTextTone}`}>
+                          {abs.toFixed(abs >= 10 ? 0 : 1)}
+                      </span>
+                      <span
+                          data-error-meta
+                          className={`absolute top-1/2 -translate-y-1/2 flex flex-col items-start text-[8px] font-black uppercase leading-[1.05] tracking-[0.06em] ${errorTextTone}`}
+                          style={{ left: 'calc(50% + 40px)' }}
+                      >
+                          <span>cm</span>
+                          <span>{direction}</span>
+                      </span>
+                  </div>
+                  <div
+                      data-error-meter
+                      role="meter"
+                      aria-label={`Cross-track error ${abs.toFixed(1)} centimeters ${direction}`}
+                      aria-valuemin="-30"
+                      aria-valuemax="30"
+                      aria-valuenow={Math.max(-30, Math.min(30, crossTrackError))}
+                      className="mt-1.5 flex w-full max-w-[220px] items-center gap-2"
+                  >
+                      <span className={`text-[8px] font-black leading-none ${t.textDim}`}>L</span>
+                      <span className="relative h-1.5 flex-1 rounded-full" style={{ background: meterTrack }}>
+                          <span className={`absolute left-1/2 top-1/2 h-3 w-px -translate-x-1/2 -translate-y-1/2 ${theme === 'dark' ? 'bg-white/70' : 'bg-slate-700/70'}`} />
+                          <span
+                              className={`absolute top-1/2 z-10 h-4 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white shadow-sm ${barTone} transition-[left] duration-300 ease-out`}
+                              style={{ left: `${meterPosition}%` }}
                           />
-                      );
-                  })}
+                      </span>
+                      <span className={`text-[8px] font-black leading-none ${t.textDim}`}>R</span>
+                  </div>
               </div>
-              <div className="flex flex-col items-center w-20">
-                  <span className="text-3xl font-black leading-none">{abs.toFixed(abs >= 10 ? 0 : 1)}</span>
-                  <span className="text-xs uppercase font-black tracking-wider opacity-80">cm {direction}</span>
-              </div>
-              <div className={`hidden xl:grid grid-cols-3 gap-1.5 pl-2 border-l ${t.borderCard}`}>
-                  {[
-                      ['ERR', `${currentRunKpi.headingErrDeg.toFixed(1)}°`],
-                      ['PASS', `${currentRunKpi.passIndex >= 0 ? '+' : ''}${currentRunKpi.passIndex}`],
-                      ['NEXT', nextPassValue]
-                  ].map(([label, value]) => (
-                      <div key={label} className="min-w-[48px] text-center">
-                          <div className={`text-xs font-black leading-none ${t.textMain}`}>{value}</div>
-                          <div className={`text-[10px] uppercase font-black ${t.textSub}`}>{label}</div>
-                      </div>
-                  ))}
+
+              <div className="min-w-0 flex flex-col items-center justify-center text-center">
+                  <span className={`text-base font-black leading-none tabular-nums ${t.textMain}`}>{offsetValue}</span>
+                  <span className={`mt-1 text-[9px] uppercase font-black tracking-wider leading-none ${t.textSub}`}>Offset</span>
               </div>
           </div>
       );
@@ -2587,8 +2731,11 @@ const App = () => {
       const lateralPerspectiveStrength = Math.max(0, Math.min(1, options.lateralPerspectiveStrength ?? 1));
       const perspectiveLateral = 1 + ((perspective - 1) * lateralPerspectiveStrength);
       const lateralScale = usePerspectiveScale ? perspectiveLateral * lateralGain : lateralGain;
-      const x = 500 + lateral * lateralScale;
-      const y = horizonY + (vehicleY - horizonY) * perspective;
+      const cameraZoom = isMap3D ? zoomLevel / MAP_ZOOM_REFERENCE : 1;
+      const projectedX = 500 + lateral * lateralScale;
+      const projectedY = horizonY + (vehicleY - horizonY) * perspective;
+      const x = 500 + (projectedX - 500) * cameraZoom;
+      const y = vehicleY + (projectedY - vehicleY) * cameraZoom;
       const screenMargin = options.screenMargin ?? 0;
       const minX = options.minX ?? -screenMargin;
       const maxX = options.maxX ?? (1000 + screenMargin);
@@ -2599,6 +2746,39 @@ const App = () => {
       if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
       return { x, y, perspective, lateralScale };
   };
+
+  const getPhysicalVehicleScreenScale3D = () => {
+      const widthMeters = Math.max(0.25, Number(implementSettings.width) || 3);
+      const halfWidthWorld = widthMeters * PIXELS_PER_METER / 2;
+      const headingRad = heading * Math.PI / 180;
+      const rightX = Math.cos(headingRad);
+      const rightY = Math.sin(headingRad);
+      const projectionOptions = {
+          lateralGain: 0.62,
+          forwardGain: 1.18,
+          usePerspectiveScale: true
+      };
+      const projectedLeft = getProjected3DPoint({
+          x: worldPos.x - rightX * halfWidthWorld,
+          y: worldPos.y - rightY * halfWidthWorld
+      }, projectionOptions);
+      const projectedRight = getProjected3DPoint({
+          x: worldPos.x + rightX * halfWidthWorld,
+          y: worldPos.y + rightY * halfWidthWorld
+      }, projectionOptions);
+
+      if (!projectedLeft || !projectedRight) return 0.2;
+
+      const screenDx = (projectedRight.x - projectedLeft.x) * mapCanvasSize.width / 1000;
+      const screenDy = (projectedRight.y - projectedLeft.y) * mapCanvasSize.height / 700;
+      const projectedImplementWidth = Math.hypot(screenDx, screenDy);
+      const implementVisualWidth = widthMeters * 48;
+      return Math.max(0.1, Math.min(1.2, projectedImplementWidth / implementVisualWidth));
+  };
+
+  const vehicleScreenScale = isMap3D
+      ? getPhysicalVehicleScreenScale3D()
+      : Math.max(0.1, Math.min(1.2, zoomLevel * PIXELS_PER_METER / 48));
 
   const getProjected3DPath = (points, options = {}) => {
       let d = '';
@@ -3188,17 +3368,170 @@ const App = () => {
       );
   };
 
+  const liveBoundaryStroke = '#f97316';
+  const liveBoundaryStrokeWidth = 4;
+  const liveBoundaryUnderlayWidth = 8;
+  const liveBoundaryUnderlayOpacity = 0.84;
+  const coverageWorldWidth = Math.max(1, Number(implementSettings.width || 3) * PIXELS_PER_METER);
+  const coverageSwathColor = theme === 'dark' ? '#22c55e' : '#16a34a';
+  const coverageSwathOpacity = theme === 'dark' ? 0.22 : 0.16;
+  const coverageLiveColor = theme === 'dark' ? '#4ade80' : '#16a34a';
+  const coverageLiveOpacity = theme === 'dark' ? 0.3 : 0.22;
+
+  const getCoverageRenderPoints = () => {
+      const points = (coverageTrail || []).filter(point => Number.isFinite(point?.x) && Number.isFinite(point?.y));
+      if (!isRecording) return points;
+      const last = points[points.length - 1];
+      if (!last || Math.hypot(last.x - worldPos.x, last.y - worldPos.y) > 0.1) {
+          return [...points, { ...worldPos, h: heading }];
+      }
+      return points;
+  };
+
+  const renderCoverage2D = () => {
+      if (isMap3D || (!isRecording && coverageTrail.length === 0)) return null;
+      const points = getCoverageRenderPoints();
+      const headingRad = heading * Math.PI / 180;
+      const forward = { x: Math.sin(headingRad), y: -Math.cos(headingRad) };
+      const footprintHalfLength = Math.max(4, Math.min(10, coverageWorldWidth * 0.22));
+
+      return (
+          <svg data-coverage-layer="2d" className="absolute inset-0 w-full h-full overflow-visible pointer-events-none z-[2]">
+              <g style={{ transform: 'translate(50%, 60%)' }}>
+                  {points.length > 1 && (
+                      <polyline
+                          data-coverage-2d="swath"
+                          points={points.map(point => `${point.x},${point.y}`).join(' ')}
+                          fill="none"
+                          stroke={coverageSwathColor}
+                          strokeWidth={coverageWorldWidth}
+                          strokeOpacity={coverageSwathOpacity}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                      />
+                  )}
+                  {isRecording && (
+                      <line
+                          data-coverage-2d="live-footprint"
+                          x1={worldPos.x - forward.x * footprintHalfLength}
+                          y1={worldPos.y - forward.y * footprintHalfLength}
+                          x2={worldPos.x + forward.x * footprintHalfLength}
+                          y2={worldPos.y + forward.y * footprintHalfLength}
+                          stroke={coverageLiveColor}
+                          strokeWidth={coverageWorldWidth}
+                          strokeOpacity={coverageLiveOpacity}
+                          strokeLinecap="round"
+                      />
+                  )}
+              </g>
+          </svg>
+      );
+  };
+
+  const renderCoverage3D = () => {
+      if (!isMap3D || (!isRecording && coverageTrail.length < 2)) return null;
+      const points = getCoverageRenderPoints();
+      const halfWidth = coverageWorldWidth / 2;
+      const projectionOptions = {
+          lateralGain: 0.62,
+          forwardGain: 1.18,
+          usePerspectiveScale: true,
+          screenMargin: 260,
+          minY: -180,
+          maxY: 880
+      };
+      const projectPolygon = (corners) => {
+          const projected = corners.map(corner => getProjected3DPoint(corner, projectionOptions));
+          return projected.every(Boolean)
+              ? projected.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ')
+              : null;
+      };
+      const segmentNodes = [];
+
+      for (let index = 1; index < points.length; index++) {
+          const start = points[index - 1];
+          const end = points[index];
+          const dx = end.x - start.x;
+          const dy = end.y - start.y;
+          const length = Math.hypot(dx, dy);
+          if (length < 0.1) continue;
+          const normal = { x: -dy / length, y: dx / length };
+          const polygon = projectPolygon([
+              { x: start.x + normal.x * halfWidth, y: start.y + normal.y * halfWidth },
+              { x: end.x + normal.x * halfWidth, y: end.y + normal.y * halfWidth },
+              { x: end.x - normal.x * halfWidth, y: end.y - normal.y * halfWidth },
+              { x: start.x - normal.x * halfWidth, y: start.y - normal.y * halfWidth }
+          ]);
+          if (!polygon) continue;
+          segmentNodes.push(
+              <polygon
+                  key={`coverage-segment-${index}`}
+                  data-coverage-3d-segment={index}
+                  points={polygon}
+                  fill={coverageSwathColor}
+                  fillOpacity={coverageSwathOpacity}
+                  stroke="none"
+                  strokeLinejoin="round"
+              />
+          );
+      }
+
+      if (isRecording) {
+          const headingRad = heading * Math.PI / 180;
+          const forward = { x: Math.sin(headingRad), y: -Math.cos(headingRad) };
+          const normal = { x: Math.cos(headingRad), y: Math.sin(headingRad) };
+          const halfLength = Math.max(4, Math.min(10, coverageWorldWidth * 0.22));
+          const polygon = projectPolygon([
+              { x: worldPos.x - forward.x * halfLength + normal.x * halfWidth, y: worldPos.y - forward.y * halfLength + normal.y * halfWidth },
+              { x: worldPos.x + forward.x * halfLength + normal.x * halfWidth, y: worldPos.y + forward.y * halfLength + normal.y * halfWidth },
+              { x: worldPos.x + forward.x * halfLength - normal.x * halfWidth, y: worldPos.y + forward.y * halfLength - normal.y * halfWidth },
+              { x: worldPos.x - forward.x * halfLength - normal.x * halfWidth, y: worldPos.y - forward.y * halfLength - normal.y * halfWidth }
+          ]);
+          if (polygon) {
+              segmentNodes.push(
+                  <polygon
+                      key="coverage-live-footprint"
+                      data-coverage-3d-live="footprint"
+                      points={polygon}
+                      fill={coverageLiveColor}
+                      fillOpacity={coverageLiveOpacity}
+                      stroke="none"
+                      strokeLinejoin="round"
+                  />
+              );
+          }
+      }
+
+      return <g data-coverage-layer="3d">{segmentNodes}</g>;
+  };
+
+  const getGuidanceLaneVisual = (isActive, laneDistance = 0) => {
+      if (isActive) {
+          return {
+              stroke: theme === 'dark' ? '#a78bfa' : '#7c3aed',
+              width: 3.4,
+              opacity: 1
+          };
+      }
+
+      return {
+          stroke: theme === 'dark' ? '#38bdf8' : '#60a5fa',
+          width: laneDistance <= 1 ? 1.35 : 1.05,
+          opacity: laneDistance <= 1 ? 0.55 : laneDistance <= 3 ? 0.4 : 0.3
+      };
+  };
+
   const renderGuidanceLine3D = () => {
       if (!isMap3D) return null;
 
       const elements = [];
+      elements.push(renderCoverage3D());
       const guide = guidanceRef.current;
       const activeGuidanceType = guidanceLine || guide?.type || activeLineRecord?.type || lineType;
       const metrics = getGuidanceMetrics(guide, { ...worldPos, heading });
       const currentLaneIndex = metrics.validLine && guide?.width > 0 ? Math.round(metrics.xte / guide.width) : 0;
-      const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
-      const activeStroke = theme === 'dark' ? '#38bdf8' : '#2563eb';
-      const laneStroke = theme === 'dark' ? '#38bdf8' : '#60a5fa';
+      const highlightedLane = activeLaneRef.current ?? manualLaneRef.current ?? currentLaneIndex;
+      const activeStroke = getGuidanceLaneVisual(true).stroke;
       const corridorEdge = theme === 'dark' ? '#67e8f9' : '#0ea5e9';
       const previewStroke = theme === 'dark' ? '#fb7185' : '#ef4444';
       const boundaryStroke = theme === 'dark' ? '#94a3b8' : '#64748b';
@@ -3259,6 +3592,27 @@ const App = () => {
           }));
       }
 
+      if (isRecordingBoundary && tempBoundary.length > 0) {
+          const liveBoundaryPath = [...tempBoundary, worldPos];
+          if (liveBoundaryPath.length > 1) {
+              elements.push(renderProjected3DPath(
+                  'boundary-recording-underlay',
+                  liveBoundaryPath,
+                  theme === 'dark' ? '#0f172a' : '#ffffff',
+                  liveBoundaryUnderlayWidth,
+                  { opacity: liveBoundaryUnderlayOpacity, maxStep: 18, solid: true, projection: { screenMargin: 96 } }
+              ));
+              elements.push(renderProjected3DPath(
+                  'boundary-recording',
+                  liveBoundaryPath,
+                  liveBoundaryStroke,
+                  liveBoundaryStrokeWidth,
+                  { opacity: 1, maxStep: 18, solid: true, projection: { screenMargin: 96 } }
+              ));
+          }
+          elements.push(render3DPointMarker('boundary-recording-start', tempBoundary[0], 'S', liveBoundaryStroke));
+      }
+
       if (!guidanceLine && !activeLineRecord && pointA && straightABPreviewEnd && lineType === 'STRAIGHT_AB') {
           elements.push(renderProjected3DPath('straight-preview', [pointA, straightABPreviewEnd], previewStroke, 3, { dash: '12 9', projection: guidanceProjection }));
       }
@@ -3305,14 +3659,15 @@ const App = () => {
               const laneSpacingPx = width;
               for (let i = highlightedLane - 4; i <= highlightedLane + 4; i++) {
                   const active = i === highlightedLane;
+                  const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane));
                   elements.push(render3DProjectedLaneLine(
                       `straight-3d-${i}`,
                       pointA,
                       unit,
                       (i * laneSpacingPx) + manualOffset,
-                      active ? activeStroke : laneStroke,
-                      active ? 3.4 : 1.05,
-                      { opacity: active ? 1 : (theme === 'dark' ? 0.42 : 0.38) }
+                      visual.stroke,
+                      visual.width,
+                      { opacity: visual.opacity }
                   ));
               }
           } else {
@@ -3322,7 +3677,7 @@ const App = () => {
                   unit,
                   manualOffset,
                   activeStroke,
-                  3.2,
+                  3.4,
                   {}
               ));
           }
@@ -3340,18 +3695,19 @@ const App = () => {
               const laneSpacingPx = width;
               for (let i = highlightedLane - 4; i <= highlightedLane + 4; i++) {
                   const active = i === highlightedLane;
+                  const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane));
                   elements.push(render3DProjectedLaneLine(
                       `aplus-3d-${i}`,
                       aPlusPoint,
                       unit,
                       (i * laneSpacingPx) + manualOffset,
-                      active ? activeStroke : laneStroke,
-                      active ? 3.4 : 1.05,
-                      { opacity: active ? 1 : (theme === 'dark' ? 0.42 : 0.38) }
+                      visual.stroke,
+                      visual.width,
+                      { opacity: visual.opacity }
                   ));
               }
           } else {
-              elements.push(render3DProjectedLaneLine('aplus-3d-target', aPlusPoint, unit, manualOffset, activeStroke, 3.2, {}));
+              elements.push(render3DProjectedLaneLine('aplus-3d-target', aPlusPoint, unit, manualOffset, activeStroke, 3.4, {}));
           }
       }
 
@@ -3362,18 +3718,19 @@ const App = () => {
                   const radius = pivotRadius + (i * width) + manualOffset;
                   if (radius <= 0) continue;
                   const active = i === highlightedLane;
+                  const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane));
                   elements.push(renderProjected3DPath(
                       `pivot-3d-${i}`,
                       sampleCirclePoints(pivotCenter, radius),
-                      active ? activeStroke : laneStroke,
-                      active ? 3.4 : 1.8,
-                      { opacity: active ? 1 : 0.62, maxStep: 34, projection: guidanceProjection }
+                      visual.stroke,
+                      visual.width,
+                      { opacity: visual.opacity, maxStep: 34, projection: guidanceProjection }
                   ));
               }
           } else {
               const radius = pivotRadius + manualOffset;
               if (radius > 0) {
-                  elements.push(renderProjected3DPath('pivot-3d-target', sampleCirclePoints(pivotCenter, radius), activeStroke, 3.8, { maxStep: 34, projection: guidanceProjection }));
+                  elements.push(renderProjected3DPath('pivot-3d-target', sampleCirclePoints(pivotCenter, radius), activeStroke, 3.4, { maxStep: 34, projection: guidanceProjection }));
               }
           }
       }
@@ -3383,13 +3740,14 @@ const App = () => {
               const width = implementSettings.width * PIXELS_PER_METER;
               for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
                   const active = i === highlightedLane;
+                  const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane));
                   const points = parsePolylinePoints(getOffsetPolyline(curvePoints, (i * width) + manualOffset));
                   elements.push(renderProjected3DPath(
                       `curve-3d-${i}`,
                       points,
-                      active ? activeStroke : laneStroke,
-                      active ? 3.4 : 1.8,
-                      { opacity: active ? 1 : 0.62, maxStep: 34, projection: guidanceProjection }
+                      visual.stroke,
+                      visual.width,
+                      { opacity: visual.opacity, maxStep: 34, projection: guidanceProjection }
                   ));
               }
           } else {
@@ -3397,7 +3755,7 @@ const App = () => {
                   'curve-3d-target',
                   parsePolylinePoints(getOffsetPolyline(curvePoints, manualOffset)),
                   activeStroke,
-                  3.8,
+                  3.4,
                   { maxStep: 34, projection: guidanceProjection }
               ));
           }
@@ -3513,26 +3871,26 @@ const App = () => {
 
       if (isMultiLineMode) {
           const w = implementSettings.width * PIXELS_PER_METER;
-          const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
+          const highlightedLane = activeLaneRef.current ?? manualLaneRef.current ?? currentLaneIndex;
 
-          for (let i = highlightedLane - 6; i <= highlightedLane + 6; i++) {
+          for (let i = highlightedLane - 4; i <= highlightedLane + 4; i++) {
               const offset = (w * i) + manualOffset;
               const isActive = i === highlightedLane;
               const laneDistance = Math.abs(i - highlightedLane);
-              const strokeColor = isActive ? "#0057ff" : "#19a8ff";
-              const strokeWidth = isActive ? "4.6" : laneDistance <= 1 ? "1.8" : "1.35";
-              const strokeOpacity = isActive ? "1" : laneDistance <= 1 ? "0.68" : laneDistance <= 3 ? "0.48" : "0.32";
+              const visual = getGuidanceLaneVisual(isActive, laneDistance);
               const segment = getGuidanceLineSegmentAroundVehicle(pointA, { x: ux, y: uy }, offset);
 
               elements.push(
                 <line
                     key={`line-${i}`}
+                    data-guidance-2d-lane={i}
                     x1={segment.start.x} y1={segment.start.y}
                     x2={segment.end.x} y2={segment.end.y}
-                    stroke={strokeColor}
-                    strokeWidth={strokeWidth}
-                    strokeOpacity={strokeOpacity}
+                    stroke={visual.stroke}
+                    strokeWidth={visual.width}
+                    strokeOpacity={visual.opacity}
                     strokeLinecap="round"
+                    vectorEffect="non-scaling-stroke"
                 />
               );
           }
@@ -3544,11 +3902,13 @@ const App = () => {
            elements.push(
                <line
                    key="target-line"
+                   data-guidance-2d-lane="target"
                    x1={segment.start.x} y1={segment.start.y}
                    x2={segment.end.x} y2={segment.end.y}
-                   stroke="#0057ff"
-                   strokeWidth="4.6"
+                   stroke={getGuidanceLaneVisual(true).stroke}
+                   strokeWidth={getGuidanceLaneVisual(true).width}
                    strokeLinecap="round"
+                   vectorEffect="non-scaling-stroke"
                />
            );
       }
@@ -3569,26 +3929,26 @@ const App = () => {
         } else {
              if (isMultiLineMode) {
                 const w = implementSettings.width * PIXELS_PER_METER;
-                const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
+                const highlightedLane = activeLaneRef.current ?? manualLaneRef.current ?? currentLaneIndex;
 
-                for (let i = highlightedLane - 6; i <= highlightedLane + 6; i++) {
+                for (let i = highlightedLane - 4; i <= highlightedLane + 4; i++) {
                     const offset = (w * i) + manualOffset;
                     const isActive = i === highlightedLane;
                     const laneDistance = Math.abs(i - highlightedLane);
-                    const strokeColor = isActive ? "#0057ff" : "#19a8ff";
-                    const strokeWidth = isActive ? "4.6" : laneDistance <= 1 ? "1.8" : "1.35";
-                    const strokeOpacity = isActive ? "1" : laneDistance <= 1 ? "0.68" : laneDistance <= 3 ? "0.48" : "0.32";
+                    const visual = getGuidanceLaneVisual(isActive, laneDistance);
                     const segment = getGuidanceLineSegmentAroundVehicle(aPlusPoint, { x: ux, y: uy }, offset);
 
                     elements.push(
                         <line
                             key={`line-${i}`}
+                            data-guidance-2d-lane={i}
                             x1={segment.start.x} y1={segment.start.y}
                             x2={segment.end.x} y2={segment.end.y}
-                            stroke={strokeColor}
-                            strokeWidth={strokeWidth}
-                            strokeOpacity={strokeOpacity}
+                            stroke={visual.stroke}
+                            strokeWidth={visual.width}
+                            strokeOpacity={visual.opacity}
                             strokeLinecap="round"
+                            vectorEffect="non-scaling-stroke"
                         />
                     );
                 }
@@ -3598,11 +3958,13 @@ const App = () => {
                 elements.push(
                    <line
                        key="target-line"
+                       data-guidance-2d-lane="target"
                        x1={segment.start.x} y1={segment.start.y}
                        x2={segment.end.x} y2={segment.end.y}
-                       stroke="#0057ff"
-                       strokeWidth="4.6"
+                       stroke={getGuidanceLaneVisual(true).stroke}
+                       strokeWidth={getGuidanceLaneVisual(true).width}
                        strokeLinecap="round"
+                       vectorEffect="non-scaling-stroke"
                    />
                );
              }
@@ -3614,7 +3976,7 @@ const App = () => {
         const elements = [];
         if (isMultiLineMode) {
             const w = implementSettings.width * PIXELS_PER_METER;
-            const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
+            const highlightedLane = activeLaneRef.current ?? manualLaneRef.current ?? currentLaneIndex;
 
             // Draw 5 lines (center + 2 each side)
             for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
@@ -3622,17 +3984,17 @@ const App = () => {
                 if (r > 0) {
                     const isActive = i === highlightedLane;
                     const laneDistance = Math.abs(i - highlightedLane);
-                    const strokeColor = isActive ? "#0057ff" : "#19a8ff";
-                    const strokeWidth = isActive ? "4.6" : laneDistance <= 1 ? "1.8" : "1.35";
-                    const strokeOpacity = isActive ? "1" : laneDistance <= 1 ? "0.68" : "0.38";
+                    const visual = getGuidanceLaneVisual(isActive, laneDistance);
                     elements.push(
                         <circle
                             key={`pivot-${i}`}
+                            data-guidance-2d-lane={i}
                             cx={pivotCenter.x} cy={pivotCenter.y} r={r}
                             fill="none"
-                            stroke={strokeColor}
-                            strokeWidth={strokeWidth}
-                            strokeOpacity={strokeOpacity}
+                            stroke={visual.stroke}
+                            strokeWidth={visual.width}
+                            strokeOpacity={visual.opacity}
+                            vectorEffect="non-scaling-stroke"
                         />
                     );
                 }
@@ -3644,11 +4006,13 @@ const App = () => {
                 elements.push(
                     <circle
                         key="target-pivot"
+                        data-guidance-2d-lane="target"
                         cx={pivotCenter.x} cy={pivotCenter.y} r={r}
                         fill="none"
-                        stroke="#2563eb"
-                        strokeWidth="4"
+                        stroke={getGuidanceLaneVisual(true).stroke}
+                        strokeWidth={getGuidanceLaneVisual(true).width}
                         strokeLinecap="round"
+                        vectorEffect="non-scaling-stroke"
                     />
                 );
             }
@@ -3661,28 +4025,28 @@ const App = () => {
 
         if (isMultiLineMode) {
             const w = implementSettings.width * PIXELS_PER_METER;
-            const highlightedLane = activeLaneRef.current !== null ? activeLaneRef.current : currentLaneIndex;
+            const highlightedLane = activeLaneRef.current ?? manualLaneRef.current ?? currentLaneIndex;
 
             // Draw 5 lines (center + 2 each side)
             for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
                 const offset = (i * w) + manualOffset;
                 const isActive = i === highlightedLane;
                 const laneDistance = Math.abs(i - highlightedLane);
-                const strokeColor = isActive ? "#0057ff" : "#19a8ff";
-                const strokeWidth = isActive ? "4.6" : laneDistance <= 1 ? "1.8" : "1.35";
-                const strokeOpacity = isActive ? "1" : laneDistance <= 1 ? "0.68" : "0.38";
+                const visual = getGuidanceLaneVisual(isActive, laneDistance);
                 const curvePointsText = getOffsetPolyline(curvePoints, offset);
 
                 elements.push(
                     <polyline
                         key={`curve-${i}`}
+                        data-guidance-2d-lane={i}
                         points={curvePointsText}
                         fill="none"
-                        stroke={strokeColor}
-                        strokeWidth={strokeWidth}
-                        strokeOpacity={strokeOpacity}
+                        stroke={visual.stroke}
+                        strokeWidth={visual.width}
+                        strokeOpacity={visual.opacity}
                         strokeLinecap="round"
                         strokeLinejoin="round"
+                        vectorEffect="non-scaling-stroke"
                     />
                 );
             }
@@ -3691,12 +4055,14 @@ const App = () => {
             elements.push(
                 <polyline
                     key="target-curve"
+                    data-guidance-2d-lane="target"
                     points={getOffsetPolyline(curvePoints, manualOffset)}
                     fill="none"
-                    stroke="#2563eb"
-                    strokeWidth="4"
+                    stroke={getGuidanceLaneVisual(true).stroke}
+                    strokeWidth={getGuidanceLaneVisual(true).width}
                     strokeLinecap="round"
                     strokeLinejoin="round"
+                    vectorEffect="non-scaling-stroke"
                 />
             );
         }
@@ -3751,13 +4117,13 @@ const App = () => {
       const renderShell = ({ status, tone = 'gray', children }) => (
           <section
               aria-label={`${status} contextual controls`}
-              className={`pointer-events-auto w-[94px] xl:w-[104px] max-h-full overflow-y-auto rounded-2xl border ${dockSurface} backdrop-blur-xl p-2 flex flex-col items-center gap-2 select-none`}
+              className={`pointer-events-auto w-[140px] xl:w-[148px] max-h-full overflow-y-auto rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl p-2 flex flex-col items-center gap-2 select-none shadow-xl`}
               onPointerDown={stopDockPointer}
               onPointerMove={stopDockPointer}
               onPointerUp={stopDockPointer}
               onClick={stopDockPointer}
           >
-              <div className={`w-full h-6 flex items-center justify-center gap-1.5 px-1 text-[10px] font-black uppercase tracking-wide ${statusTone[tone] || statusTone.gray}`}>
+              <div className={`w-full h-7 flex items-center justify-start gap-1.5 px-1 text-[10px] font-black uppercase tracking-wide ${statusTone[tone] || statusTone.gray}`}>
                   <span className={`w-2 h-2 rounded-full ${dotTone[tone] || dotTone.gray}`} />
                   <span className="truncate">{status}</span>
               </div>
@@ -3772,7 +4138,7 @@ const App = () => {
               onClick={runDockAction(onClick)}
               title={sub ? `${label}: ${sub}` : label}
               aria-label={sub ? `${label}: ${sub}` : label}
-              className={`w-full min-h-[76px] rounded-xl ${solidTone[color] || solidTone.gray} flex flex-col items-center justify-center gap-1 px-1.5 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/50 touch-manipulation ${pulse ? 'ring-2 ring-white/50' : ''}`}
+              className={`w-full min-h-[78px] rounded-xl ${solidTone[color] || solidTone.gray} flex flex-col items-center justify-center gap-1 px-2 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/50 touch-manipulation ${pulse ? 'ring-2 ring-white/50' : ''}`}
           >
               <Icon className="w-6 h-6 shrink-0" />
               <span className="max-w-full px-1 text-[12px] font-black leading-none truncate">{label}</span>
@@ -3792,10 +4158,10 @@ const App = () => {
                   aria-expanded={ariaExpanded}
                   aria-pressed={ariaPressed}
                   disabled={disabled}
-                  className={`w-full min-h-[58px] rounded-xl ${active ? (isDarkDock ? 'bg-blue-500/20 border-blue-400/50' : 'bg-blue-50 border-blue-400') : (isDarkDock ? 'bg-slate-900/60' : 'bg-white/70')} ${ghostTone[color] || ghostTone.gray} border ${active ? '' : t.borderCard} flex flex-col items-center justify-center gap-1 px-1.5 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/40 touch-manipulation disabled:opacity-40 disabled:cursor-not-allowed`}
+                  className={`w-full min-h-[50px] rounded-xl ${active ? (isDarkDock ? 'bg-blue-500/20 border-blue-400/50' : 'bg-blue-50 border-blue-400') : (isDarkDock ? 'bg-slate-900/60' : 'bg-white/70')} ${ghostTone[color] || ghostTone.gray} border ${active ? '' : t.borderCard} flex items-center justify-start gap-2 px-2 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/40 touch-manipulation disabled:opacity-40 disabled:cursor-not-allowed`}
               >
-                  <Icon className="w-5 h-5 shrink-0" />
-                  <span className="max-w-full text-center text-[11px] xl:text-xs font-black leading-none truncate">{label}</span>
+                  <Icon className="w-4 h-4 shrink-0" />
+                  <span className="min-w-0 text-left text-[11px] xl:text-xs font-black leading-none truncate">{label}</span>
               </button>
           );
       };
@@ -3819,9 +4185,15 @@ const App = () => {
           : currentRunStatus.overrideDetected
               ? { label: 'OVERRIDE', className: 'bg-orange-500 text-white' }
               : rtkStatus !== 'FIX'
-                  ? { label: rtkStatus, className: 'bg-orange-500 text-white' }
+              ? { label: rtkStatus, className: 'bg-orange-500 text-white' }
                   : { label: 'BLOCKED', className: 'bg-orange-500 text-white' };
-      const toggleDockPanel = (panel) => setDockMenuOpen(open => open === panel ? false : panel);
+      const toggleDockPanel = (panel) => {
+          setRtkQualityOpen(false);
+          setEventHistoryOpen(false);
+          setProductivityOpen(false);
+          setUTurnPanelOpen(false);
+          setDockMenuOpen(open => open === panel ? false : panel);
+      };
       const openUTurnSetup = () => {
           setDockMenuOpen(false);
           setUTurnPanelOpen(true);
@@ -3834,22 +4206,15 @@ const App = () => {
           setUTurnPanelOpen(false);
           setLineModeModalOpen(true);
       };
-      const renderToolsToggle = () => renderTinyButton({
-          icon: MoreHorizontal,
-          label: 'More',
-          color: dockMenuOpen === 'tools' ? 'blue' : 'gray',
-          active: dockMenuOpen === 'tools',
-          ariaExpanded: dockMenuOpen === 'tools',
-          onClick: () => toggleDockPanel('tools')
-      });
       const drawerTone = {
           blue: isDarkDock ? 'border-blue-500/30 bg-blue-500/10 text-blue-300' : 'border-blue-200 bg-blue-50 text-blue-700',
           orange: isDarkDock ? 'border-orange-500/30 bg-orange-500/10 text-orange-300' : 'border-orange-200 bg-orange-50 text-orange-700',
           gray: isDarkDock ? 'border-slate-700 bg-slate-900/70 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-800'
       };
+      const railDivider = isDarkDock ? 'border-slate-800' : 'border-slate-200';
       const renderDrawerShell = ({ icon: Icon, title, subtitle, children }) => (
           <section
-              className={`pointer-events-auto w-[288px] xl:w-[320px] max-h-full overflow-y-auto rounded-2xl border ${drawerSurface} backdrop-blur-xl shadow-2xl`}
+              className={`pointer-events-auto w-[272px] xl:w-[320px] max-h-full overflow-y-auto rounded-2xl border ${drawerSurface} backdrop-blur-xl shadow-2xl`}
               onPointerDown={stopDockPointer}
               onPointerMove={stopDockPointer}
               onPointerUp={stopDockPointer}
@@ -3918,7 +4283,13 @@ const App = () => {
                           {hasGuidanceToEngage && <span className={`shrink-0 px-2 py-1 rounded-lg text-[10px] font-black ${guidanceBadge.className}`}>{guidanceBadge.label}</span>}
                       </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
+                  {hasGuidanceToEngage ? (
+                      <div className="grid grid-cols-2 gap-2">
+                          {renderDrawerAction({ icon: ArrowLeftRight, label: 'Adjust Offset', detail: `${offsetCm.toFixed(1)} cm`, onClick: () => toggleDockPanel('nudge') })}
+                          {renderDrawerAction({ icon: MoreHorizontal, label: 'Run Tools', detail: 'Map and setup', onClick: () => toggleDockPanel('tools') })}
+                      </div>
+                  ) : renderDrawerAction({ icon: MoreHorizontal, label: 'Run Tools', detail: 'Map visibility, zoom and setup', onClick: () => toggleDockPanel('tools') })}
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
                       {renderDrawerAction({ icon: FolderOpen, label: 'Line Library', detail: 'Load saved guidance', onClick: openLinesLibrary })}
                       {renderDrawerAction({ icon: GitCommitHorizontal, label: 'New Line', detail: 'Choose line type', tone: 'blue', onClick: openLineTypePicker })}
                   </div>
@@ -3950,9 +4321,44 @@ const App = () => {
                   <>
                   <div className={`text-[11px] font-black uppercase ${t.textSub}`}>Map presentation</div>
                   {renderDrawerAction({ icon: showGuidanceLines ? EyeOff : Eye, label: showGuidanceLines ? 'Hide Lines' : 'Show Lines', onClick: () => actions.setShowGuidanceLines(!showGuidanceLines) })}
-                  <div className="grid grid-cols-2 gap-2">
-                      {renderDrawerAction({ icon: Plus, label: 'Zoom In', onClick: () => handleZoom('in') })}
-                      {renderDrawerAction({ icon: Minus, label: 'Zoom Out', onClick: () => handleZoom('out') })}
+                  <div className={`rounded-xl border ${t.borderCard} ${isDarkDock ? 'bg-slate-900/60' : 'bg-slate-50'} p-3`}>
+                      <div className="mb-2.5 flex items-center justify-between gap-3">
+                          <div>
+                              <div className={`text-[11px] font-black uppercase ${t.textSub}`}>Map scale</div>
+                              <div className={`mt-0.5 text-xs font-bold ${t.textMain}`}>{isMap3D ? 'Perspective view' : 'Top-down view'}</div>
+                          </div>
+                          <span className="rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-black text-white">
+                              {Math.round(zoomLevel / DEFAULT_MAP_ZOOM * 100)}%
+                          </span>
+                      </div>
+                      <div className="grid grid-cols-[1fr_1.35fr_1fr] gap-2">
+                          <button
+                              type="button"
+                              aria-label="Zoom Out"
+                              disabled={zoomLevel <= MIN_MAP_ZOOM}
+                              onClick={runDockAction(() => handleZoom('out'))}
+                              className={`h-11 rounded-lg border ${t.borderCard} ${t.textMain} flex items-center justify-center disabled:opacity-35 disabled:cursor-not-allowed hover:bg-blue-500/10`}
+                          >
+                              <Minus className="h-5 w-5" />
+                          </button>
+                          <button
+                              type="button"
+                              aria-label="Reset Zoom"
+                              onClick={runDockAction(() => handleZoom('reset'))}
+                              className={`h-11 rounded-lg border ${t.borderCard} ${t.textMain} text-[11px] font-black hover:bg-blue-500/10`}
+                          >
+                              RESET
+                          </button>
+                          <button
+                              type="button"
+                              aria-label="Zoom In"
+                              disabled={zoomLevel >= MAX_MAP_ZOOM}
+                              onClick={runDockAction(() => handleZoom('in'))}
+                              className={`h-11 rounded-lg border ${t.borderCard} ${t.textMain} flex items-center justify-center disabled:opacity-35 disabled:cursor-not-allowed hover:bg-blue-500/10`}
+                          >
+                              <Plus className="h-5 w-5" />
+                          </button>
+                      </div>
                   </div>
                   {renderDrawerAction({ icon: Crosshair, label: 'Center Vehicle', detail: 'Return the map to the live vehicle position', onClick: handleRecenter })}
                   <div className={`pt-1 text-[11px] font-black uppercase ${t.textSub}`}>Run setup</div>
@@ -3963,6 +4369,81 @@ const App = () => {
               </>
           )
       });
+      const renderActionRail = () => {
+          const offsetLabel = `${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(0)} cm`;
+          const railItems = [
+              {
+                  id: 'line',
+                  icon: Route,
+                  label: 'Guidance',
+                  detail: hasGuidanceToEngage ? activeGuideName : 'Create / load',
+                  disabled: false
+              },
+              {
+                  id: 'nudge',
+                  icon: ArrowLeftRight,
+                  label: 'Nudge',
+                  detail: hasGuidanceToEngage ? offsetLabel : 'No line',
+                  disabled: !hasGuidanceToEngage
+              },
+              {
+                  id: 'tools',
+                  icon: MapIcon,
+                  label: 'Map',
+                  detail: 'View / setup',
+                  disabled: false
+              }
+          ];
+
+          return (
+              <section
+                  aria-label="Run action dock"
+                  className={`pointer-events-auto w-[140px] xl:w-[148px] rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl py-2 shadow-xl select-none`}
+                  onPointerDown={stopDockPointer}
+                  onPointerMove={stopDockPointer}
+                  onPointerUp={stopDockPointer}
+                  onClick={stopDockPointer}
+              >
+                  <div className={`h-8 px-3 flex items-center justify-start gap-2 text-[10px] font-black uppercase tracking-wider ${t.textSub}`}>
+                      <span className="w-1 h-4 rounded-full bg-blue-500" />
+                      Run tools
+                  </div>
+                  <div className={`border-t ${railDivider}`}>
+                      {railItems.map(({ id, icon: Icon, label, detail, disabled }) => {
+                          const active = dockMenuOpen === id;
+                          return (
+                              <button
+                                  key={id}
+                                  type="button"
+                                  title={`${label}: ${detail}`}
+                                  aria-label={`${label} actions: ${detail}`}
+                                  aria-expanded={active}
+                                  disabled={disabled}
+                                  onClick={runDockAction(() => toggleDockPanel(id))}
+                                  className={`w-full min-h-[66px] px-3 flex items-center gap-2.5 border-b ${railDivider} text-left transition-all focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/50 disabled:opacity-50 disabled:cursor-not-allowed ${
+                                      active
+                                          ? 'bg-blue-600 text-white shadow-inner'
+                                          : `${isDarkDock ? 'bg-slate-900/35 text-slate-200 hover:bg-slate-800' : 'bg-white/45 text-slate-700 hover:bg-slate-100'}`
+                                  }`}
+                              >
+                                  <span className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${
+                                      active
+                                          ? 'bg-white/15 text-white'
+                                          : isDarkDock ? 'bg-slate-800 text-blue-300' : 'bg-blue-50 text-blue-600'
+                                  }`}>
+                                      <Icon className="w-5 h-5" />
+                                  </span>
+                                  <span className="min-w-0 flex-1">
+                                      <span className="block text-[11px] font-black uppercase leading-none truncate">{label}</span>
+                                      <span className="block mt-1 text-[9px] font-bold leading-none opacity-70 truncate">{detail}</span>
+                                  </span>
+                              </button>
+                          );
+                      })}
+                  </div>
+              </section>
+          );
+      };
       const renderContextDrawer = () => {
           if (dockMenuOpen === 'line') return renderLinePanel();
           if (dockMenuOpen === 'nudge') return renderNudgePanel();
@@ -3976,9 +4457,28 @@ const App = () => {
           </div>
       );
 
+      if (boundaryCaptureReady) {
+          return renderDockLayout(renderShell({
+              status: 'Boundary ready',
+              tone: 'orange',
+              children: (
+                  <>
+                      {renderMainButton({ icon: Play, label: 'Start', sub: 'Begin capture', color: 'orange', onClick: beginBoundaryRecording, pulse: true })}
+                      {renderStepLine([
+                          { label: 'Position', done: true },
+                          { label: 'Start', done: false },
+                          { label: 'Drive', done: false }
+                      ])}
+                      {renderDivider()}
+                      {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: cancelBoundaryRecording })}
+                  </>
+              )
+          }));
+      }
+
       if (isRecordingBoundary) {
           return renderDockLayout(renderShell({
-              status: 'Boundary',
+              status: 'Boundary recording',
               tone: 'orange',
               children: (
                   <>
@@ -3991,25 +4491,6 @@ const App = () => {
       }
 
       if (uTurnPanelOpen) return null;
-
-      if (steeringMode === 'AUTO') {
-          return renderDockLayout(renderShell({
-              status: autosteerStateLabel,
-              tone: autosteerStateLabel === 'FAULT' ? 'red' : autosteerStateLabel === 'PAUSED' ? 'orange' : 'green',
-              children: (
-                  <>
-                      {renderMainButton({ icon: ArrowLeftRight, label: 'Nudge', sub: `${offsetCm.toFixed(0)} cm`, color: 'blue', onClick: () => toggleDockPanel('nudge') })}
-                      {renderDivider()}
-                      {renderGrid(
-                          <>
-                              {renderTinyButton({ icon: CornerUpLeft, label: '-1 cm', color: 'blue', onClick: () => handleTrim('left') })}
-                              {renderTinyButton({ icon: CornerUpRight, label: '+1 cm', color: 'blue', onClick: () => handleTrim('right') })}
-                          </>
-                      )}
-                  </>
-              )
-          }));
-      }
 
       if (isCreating) {
           let title = compactStatus(lineType);
@@ -4137,40 +4618,7 @@ const App = () => {
           }));
       }
 
-      if (hasGuidanceToEngage && steeringMode === 'MANUAL') {
-          return renderDockLayout(renderShell({
-              status: autosteerStateLabel === 'PAUSED' ? 'Paused' : autosteerReady ? 'Ready' : 'Blocked',
-              tone: autosteerReady ? 'blue' : 'orange',
-              children: (
-                  <>
-                      {renderMainButton({ icon: Route, label: 'Line', sub: activeLineRecord?.name || compactStatus(lineType), color: 'gray', onClick: () => toggleDockPanel('line') })}
-                      {renderDivider()}
-                      {renderGrid(
-                          <>
-                              {renderTinyButton({ icon: ArrowLeftRight, label: 'Nudge', color: dockMenuOpen === 'nudge' ? 'blue' : 'gray', active: dockMenuOpen === 'nudge', ariaExpanded: dockMenuOpen === 'nudge', onClick: () => toggleDockPanel('nudge') })}
-                              {renderToolsToggle()}
-                          </>
-                      )}
-                  </>
-              )
-          }));
-      }
-
-      return renderDockLayout(renderShell({
-          status: 'Guidance',
-          tone: 'blue',
-          children: (
-              <>
-                  {renderMainButton({ icon: Route, label: 'Guidance', sub: 'Browse / create', color: 'gray', onClick: () => toggleDockPanel('line') })}
-                  {renderDivider()}
-                  {renderGrid(
-                      <>
-                          {renderToolsToggle()}
-                      </>
-                  )}
-              </>
-          )
-      }));
+      return renderDockLayout(renderActionRail());
   };
 
   const savedVehicleProfiles = vehicleProfiles || [];
@@ -5703,6 +6151,38 @@ const App = () => {
       );
   };
 
+const ManagerNewButton = ({ entity, onClick, tone = 'blue', disabled = false }) => {
+    const toneClass = {
+        blue: 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20',
+        orange: 'bg-orange-500 hover:bg-orange-400 shadow-orange-900/20',
+        green: 'bg-green-600 hover:bg-green-500 shadow-green-900/20'
+    }[tone] || 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20';
+
+    return (
+        <button
+            type="button"
+            data-manager-new={entity.toLowerCase()}
+            onClick={onClick}
+            disabled={disabled}
+            className={`h-10 px-4 rounded-lg text-white font-black flex items-center justify-center gap-2 shadow-md transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${toneClass}`}
+        >
+            <Plus className="w-4 h-4" />
+            <span className="text-xs whitespace-nowrap">New {entity}</span>
+        </button>
+    );
+};
+
+const ManagerCloseButton = ({ label, onClick }) => (
+    <button
+        type="button"
+        aria-label={`Close ${label}`}
+        onClick={onClick}
+        className={`h-10 w-10 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 transition-all flex items-center justify-center`}
+    >
+        <X className="w-5 h-5" />
+    </button>
+);
+
 const renderLinesPanel = () => {
     const activeField = fields.find(f => f.id === selectedFieldId);
     const allLines = activeField?.lines || [];
@@ -5805,7 +6285,7 @@ const renderLinesPanel = () => {
 
     return (
         <div className={`w-full h-full flex flex-col ${panelBg}`}>
-            <div className={`flex items-center justify-between gap-3 px-4 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+            <div className={`flex items-center justify-between gap-4 px-5 py-4 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
                 <div className="min-w-0 flex items-center gap-3">
                     <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${surfaceBg} flex items-center justify-center`}>
                         <Route className="w-5 h-5 text-blue-500" />
@@ -5815,12 +6295,16 @@ const renderLinesPanel = () => {
                         <div className={`text-xs ${t.textSub} truncate`}>{activeField?.name || 'No field selected'} / {activeCatalogLines.length} active lines</div>
                     </div>
                 </div>
-                <button
-                    onClick={() => setLinesPanelOpen(false)}
-                    className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 transition-all`}
-                >
-                    <X className="w-5 h-5" />
-                </button>
+                <div className="shrink-0 flex items-center gap-2">
+                    <ManagerNewButton
+                        entity="Line"
+                        onClick={() => {
+                            setLinesPanelOpen(false);
+                            setLineModeModalOpen(true);
+                        }}
+                    />
+                    <ManagerCloseButton label="guidance lines" onClick={() => setLinesPanelOpen(false)} />
+                </div>
             </div>
 
             <div className={`shrink-0 px-4 py-2 border-b ${t.divider} ${theme === 'dark' ? 'bg-blue-950/14' : 'bg-blue-50/65'}`}>
@@ -5853,17 +6337,6 @@ const renderLinesPanel = () => {
                                         <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-blue-600/10 text-blue-500 text-[10px] font-black">{activeCatalogLines.length}</span>
                                     </div>
                                 </div>
-                                <button
-                                    aria-label="Create new guidance line"
-                                    onClick={() => {
-                                        setLinesPanelOpen(false);
-                                        setLineModeModalOpen(true);
-                                    }}
-                                    className="shrink-0 h-8 px-2.5 rounded-lg bg-blue-600 text-white font-black hover:bg-blue-500 transition-colors flex items-center gap-1.5 shadow-sm shadow-blue-900/20"
-                                >
-                                    <Plus className="w-3.5 h-3.5" />
-                                    <span className="text-[11px]">New</span>
-                                </button>
                             </div>
 
                             <div className="mt-2 flex items-center gap-1.5 overflow-x-auto pb-1">
@@ -6123,6 +6596,196 @@ const renderLinesPanel = () => {
           return [];
       };
 
+      const renderFieldQuickView = () => {
+          if (!activeField || !fieldQuickView) return null;
+
+          const quickBoundaries = activeField.boundaries || [];
+          const quickLines = (activeField.lines || []).filter(line => !line.archived);
+          const quickTasks = activeField.tasks || [];
+          const quickViewMeta = {
+              boundaries: {
+                  eyebrow: 'Field edge',
+                  title: 'Boundaries',
+                  detail: `${quickBoundaries.length} saved for ${activeField.name}`,
+                  icon: MapPin,
+                  tone: 'text-orange-500',
+                  iconBg: 'bg-orange-500/12'
+              },
+              lines: {
+                  eyebrow: 'Guidance',
+                  title: 'Guidance lines',
+                  detail: `${quickLines.length} available for ${activeField.name}`,
+                  icon: Route,
+                  tone: 'text-blue-500',
+                  iconBg: 'bg-blue-500/12'
+              },
+              tasks: {
+                  eyebrow: 'Field work',
+                  title: 'Tasks',
+                  detail: `${quickTasks.length} jobs for ${activeField.name}`,
+                  icon: FileText,
+                  tone: 'text-green-500',
+                  iconBg: 'bg-green-500/12'
+              }
+          };
+          const meta = quickViewMeta[fieldQuickView];
+          const QuickIcon = meta.icon;
+
+          const closeQuickView = () => setFieldQuickView(null);
+
+          return (
+              <div
+                  className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/25 backdrop-blur-[2px] p-4 lg:p-8"
+                  onMouseDown={closeQuickView}
+              >
+                  <section
+                      role="dialog"
+                      aria-modal="true"
+                      aria-label={`${meta.title} quick view`}
+                      onMouseDown={(event) => event.stopPropagation()}
+                      className={`w-full max-w-[520px] max-h-[62vh] overflow-hidden rounded-2xl border ${t.borderCard} ${panelBg} shadow-2xl flex flex-col`}
+                  >
+                      <div className={`shrink-0 px-4 py-3 border-b ${t.divider} flex items-center justify-between gap-4`}>
+                          <div className="min-w-0 flex items-center gap-3">
+                              <div className={`shrink-0 w-10 h-10 rounded-xl ${meta.iconBg} ${meta.tone} flex items-center justify-center`}>
+                                  <QuickIcon className="w-5 h-5" />
+                              </div>
+                              <div className="min-w-0">
+                                  <div className={`text-[9px] font-black uppercase tracking-[0.18em] ${t.textSub}`}>{meta.eyebrow} / Quick select</div>
+                                  <h3 className={`text-lg leading-tight font-black ${t.textMain}`}>{meta.title}</h3>
+                                  <div className={`mt-0.5 text-xs truncate ${t.textSub}`}>{meta.detail}</div>
+                              </div>
+                          </div>
+                          <button
+                              type="button"
+                              onClick={closeQuickView}
+                              className={`shrink-0 p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}
+                              aria-label="Close quick view"
+                          >
+                              <X className="w-5 h-5" />
+                          </button>
+                      </div>
+
+                      <div className="min-h-0 flex-1 overflow-y-auto p-4 lg:p-5">
+                          {fieldQuickView === 'boundaries' && (
+                              <div className="space-y-3">
+                                  {quickBoundaries.length > 0 ? quickBoundaries.map((boundary, index) => {
+                                      const pointCount = getBoundaryPoints(boundary).length;
+                                      const active = index === activeBoundaryIdx;
+                                      return (
+                                          <button
+                                              type="button"
+                                              key={boundary.id || boundary.name || index}
+                                              onClick={() => { actions.setActiveBoundaryIdx(index); closeQuickView(); }}
+                                              className={`w-full rounded-xl border p-3 flex items-center gap-3 text-left ${active ? 'border-orange-500 bg-orange-500/10' : `${t.borderCard} ${mutedPanelBg} hover:border-orange-400`}`}
+                                          >
+                                              <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-orange-500 text-white' : `${softPanelBg} text-orange-500 border ${t.borderCard}`}`}>
+                                                  <MapPin className="w-5 h-5" />
+                                              </div>
+                                              <div className="min-w-0 flex-1">
+                                                  <div className={`font-black truncate ${t.textMain}`}>{boundary.name || `Boundary ${index + 1}`}</div>
+                                                  <div className={`mt-0.5 text-xs ${t.textSub}`}>{pointCount} recorded points</div>
+                                              </div>
+                                              <span className={`shrink-0 px-2 py-1 rounded-md text-[9px] font-black uppercase ${active ? 'bg-orange-500/15 text-orange-500' : `${softPanelBg} ${t.textSub}`}`}>
+                                                  {active ? 'Selected' : 'Select'}
+                                              </span>
+                                          </button>
+                                      );
+                                  }) : (
+                                      <div className={`rounded-xl border border-dashed ${t.borderCard} p-8 text-center`}>
+                                          <MapPin className={`w-9 h-9 mx-auto ${t.textDim}`} />
+                                          <div className={`mt-3 font-black ${t.textMain}`}>No boundary yet</div>
+                                          <div className={`mt-1 text-sm ${t.textSub}`}>Open Bound from the left menu to create one.</div>
+                                      </div>
+                                  )}
+                              </div>
+                          )}
+
+                          {fieldQuickView === 'lines' && (
+                              <div className="space-y-3">
+                                  {quickLines.length > 0 ? quickLines.map(line => {
+                                      const active = activeLineId === line.id;
+                                      const LineIcon = getLineIcon(line);
+                                      return (
+                                          <div key={line.id} className={`rounded-xl border p-3.5 flex items-center gap-3 ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${mutedPanelBg}`}`}>
+                                              <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${softPanelBg} text-blue-500 border ${t.borderCard}`}`}>
+                                                  <LineIcon className="w-5 h-5" />
+                                              </div>
+                                              <div className="min-w-0 flex-1">
+                                                  <div className={`font-black truncate ${t.textMain}`}>{line.name}</div>
+                                                  <div className={`mt-0.5 text-xs ${t.textSub}`}>{(line.type || 'LINE').replaceAll('_', ' ')} / {line.isMulti ? 'Parallel passes' : 'Single path'}</div>
+                                              </div>
+                                              {active ? (
+                                                  <span className="shrink-0 px-2.5 py-1.5 rounded-lg bg-green-500/15 text-green-500 text-[9px] font-black uppercase">Loaded</span>
+                                              ) : (
+                                                  <button
+                                                      type="button"
+                                                      onClick={() => { handleLoadLine(line); closeQuickView(); }}
+                                                      className="shrink-0 px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-black hover:bg-blue-500"
+                                                  >
+                                                      Load
+                                                  </button>
+                                              )}
+                                          </div>
+                                      );
+                                  }) : (
+                                      <div className={`rounded-xl border border-dashed ${t.borderCard} p-8 text-center`}>
+                                          <Route className={`w-9 h-9 mx-auto ${t.textDim}`} />
+                                          <div className={`mt-3 font-black ${t.textMain}`}>No guidance line</div>
+                                          <div className={`mt-1 text-sm ${t.textSub}`}>Open Lines from the left menu to create one.</div>
+                                      </div>
+                                  )}
+                              </div>
+                          )}
+
+                          {fieldQuickView === 'tasks' && (
+                              <div className="space-y-3">
+                                      {quickTasks.length > 0 ? quickTasks.map(task => {
+                                          const active = activeTaskId === task.id;
+                                          const TaskIcon = getTaskIcon(task);
+                                          return (
+                                              <div key={task.id} className={`rounded-xl border p-3.5 flex items-center gap-3 ${active ? 'border-green-500 bg-green-500/10' : `${t.borderCard} ${mutedPanelBg}`}`}>
+                                                  <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-green-600 text-white' : `${softPanelBg} text-green-500 border ${t.borderCard}`}`}>
+                                                      <TaskIcon className="w-5 h-5" />
+                                                  </div>
+                                                  <div className="min-w-0 flex-1">
+                                                      <div className={`font-black truncate ${t.textMain}`}>{task.name}</div>
+                                                      <div className={`mt-0.5 text-xs ${t.textSub}`}>{task.type || 'Field work'} / {task.status || 'Pending'}</div>
+                                                  </div>
+                                                  <div className="shrink-0 flex items-center gap-2">
+                                                      {active ? (
+                                                          <span className="px-2.5 py-1.5 rounded-lg bg-green-500/15 text-green-500 text-[9px] font-black uppercase">Selected</span>
+                                                      ) : task.status !== 'Done' ? (
+                                                          <button type="button" onClick={() => { handleTaskAction(task, 'start'); closeQuickView(); }} className="px-3 py-2 rounded-lg bg-green-600 text-white text-xs font-black hover:bg-green-500">
+                                                              Select
+                                                          </button>
+                                                      ) : (
+                                                          <span className={`px-2.5 py-1.5 rounded-lg ${mutedPanelBg} text-[9px] font-black uppercase ${t.textSub}`}>Done</span>
+                                                      )}
+                                                  </div>
+                                              </div>
+                                          );
+                                      }) : (
+                                          <div className={`rounded-xl border border-dashed ${t.borderCard} p-7 text-center`}>
+                                              <FileText className={`w-9 h-9 mx-auto ${t.textDim}`} />
+                                              <div className={`mt-3 font-black ${t.textMain}`}>No task yet</div>
+                                              <div className={`mt-1 text-sm ${t.textSub}`}>Open Tasks from the left menu to create one.</div>
+                                          </div>
+                                      )}
+                              </div>
+                          )}
+                      </div>
+
+                      <div className={`shrink-0 px-4 py-3 border-t ${t.divider} flex items-center justify-end ${theme === 'dark' ? 'bg-slate-950/70' : 'bg-slate-50'}`}>
+                          <button type="button" onClick={closeQuickView} className={`px-4 py-2 rounded-lg border ${t.borderCard} ${t.textMain} text-xs font-black hover:brightness-95`}>
+                              Close
+                          </button>
+                      </div>
+                  </section>
+              </div>
+          );
+      };
+
       const createPreviewMapper = (field, draftBoundaries = []) => {
           const boundaries = draftBoundaries.length > 0 ? draftBoundaries : (field?.boundaries || []);
           const linePoints = (field?.lines || []).flatMap(getLinePoints);
@@ -6161,7 +6824,7 @@ const renderLinesPanel = () => {
           });
       };
 
-      const MiniFieldPreview = ({ field, draftBoundaries = [] }) => {
+      const MiniFieldPreview = ({ field, draftBoundaries = [], compact = false }) => {
           const boundaries = draftBoundaries.length > 0 ? draftBoundaries : (field?.boundaries || []);
           const lines = field?.lines || [];
           const boundaryShapes = boundaries.map((boundary, index) => ({
@@ -6179,8 +6842,8 @@ const renderLinesPanel = () => {
           const inactiveBoundaryStroke = theme === 'dark' ? '#fbbf24' : '#f59e0b';
 
           return (
-              <div className={`relative overflow-hidden rounded-xl border ${t.borderCard} ${mutedPanelBg} h-full min-h-[230px]`}>
-                  <svg viewBox="0 0 360 230" className="w-full h-full min-h-[230px] block" role="img" aria-label="Field preview">
+              <div className={`relative overflow-hidden rounded-xl border ${t.borderCard} ${mutedPanelBg} h-full ${compact ? 'min-h-[180px]' : 'min-h-[230px]'}`}>
+                  <svg viewBox="0 0 360 230" className={`w-full h-full block ${compact ? 'min-h-[180px]' : 'min-h-[230px]'}`} role="img" aria-label="Field preview">
                       <defs>
                           <pattern id={`field-grid-${fieldId}`} width="24" height="24" patternUnits="userSpaceOnUse">
                               <path d="M 24 0 L 0 0 0 24" fill="none" stroke={gridStroke} strokeWidth="0.7" opacity={theme === 'dark' ? '0.26' : '0.42'} />
@@ -6348,19 +7011,20 @@ const renderLinesPanel = () => {
 
           return (
               <div className={`w-full h-full flex flex-col ${panelBg}`}>
-                  <div className={`flex items-center justify-between gap-4 px-6 py-5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+                  <div className={`flex items-center justify-between gap-4 px-5 py-4 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
                       <div className="min-w-0 flex items-center gap-3">
-                          <div className={`shrink-0 w-11 h-11 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
-                              <MapPin className="w-6 h-6 text-orange-500" />
+                          <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
+                              <MapPin className="w-5 h-5 text-orange-500" />
                           </div>
                           <div className="min-w-0">
-                              <h2 className={`text-xl font-black ${t.textMain}`}>Boundary Manager</h2>
+                              <h2 className={`text-lg font-black ${t.textMain}`}>Boundary Manager</h2>
                               <div className={`text-xs ${t.textSub} truncate`}>{activeField?.name || 'No field selected'} / {boundaries.length} saved loops</div>
                           </div>
                       </div>
-                      <button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 transition-all`}>
-                          <X className="w-5 h-5" />
-                      </button>
+                      <div className="shrink-0 flex items-center gap-2">
+                          <ManagerNewButton entity="Boundary" tone="orange" onClick={startBoundaryCreation} />
+                          <ManagerCloseButton label="boundary manager" onClick={() => setFieldManagerOpen(false)} />
+                      </div>
                   </div>
 
                   <div className={`shrink-0 px-5 lg:px-6 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-orange-950/18' : 'bg-orange-50/80'}`}>
@@ -6385,7 +7049,7 @@ const renderLinesPanel = () => {
                   <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6">
                       <div className="grid grid-cols-1 lg:grid-cols-[minmax(360px,0.95fr)_minmax(0,1.05fr)] gap-5 h-full min-h-[520px]">
                           <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-4 flex flex-col min-h-0`}>
-                              <SectionTitle icon={MapPin} title="Boundary Map" actionLabel="Record" onAction={startBoundaryCreation} />
+                              <SectionTitle icon={MapPin} title="Boundary Map" />
                               <div className="grid grid-cols-3 gap-2 mb-4">
                                   <StatCard icon={MapPin} label="Loops" value={boundaries.length} sub="Saved" tone="text-orange-500" />
                                   <StatCard icon={Target} label="Active" value={activeIndex >= 0 ? activeIndex + 1 : '--'} sub={activeBoundary?.name || 'None'} tone="text-yellow-500" />
@@ -6402,10 +7066,6 @@ const renderLinesPanel = () => {
                                       <div className={`text-[10px] uppercase font-black tracking-widest ${t.textSub}`}>Boundary list</div>
                                       <div className={`text-sm font-bold ${t.textMain}`}>{activeField?.name || 'Select a field'}</div>
                                   </div>
-                                  <button onClick={startBoundaryCreation} className="h-10 px-4 rounded-lg bg-orange-500 text-white font-black hover:bg-orange-400 flex items-center gap-2">
-                                      <Plus className="w-4 h-4" />
-                                      Record Boundary
-                                  </button>
                               </div>
                               <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
                                   {boundaries.length > 0 ? boundaries.map((boundary, index) => {
@@ -6512,19 +7172,20 @@ const renderLinesPanel = () => {
 
           return (
               <div className={`w-full h-full flex flex-col ${panelBg}`}>
-                  <div className={`flex items-center justify-between gap-4 px-6 py-5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+                  <div className={`flex items-center justify-between gap-4 px-5 py-4 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
                       <div className="min-w-0 flex items-center gap-3">
-                          <div className={`shrink-0 w-11 h-11 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
-                              <FileText className="w-6 h-6 text-green-500" />
+                          <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
+                              <FileText className="w-5 h-5 text-green-500" />
                           </div>
                           <div className="min-w-0">
-                              <h2 className={`text-xl font-black ${t.textMain}`}>Task Board</h2>
+                              <h2 className={`text-lg font-black ${t.textMain}`}>Task Board</h2>
                               <div className={`text-xs ${t.textSub} truncate`}>{activeField?.name || 'No field selected'} / {tasks.length} tasks</div>
                           </div>
                       </div>
-                      <button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 transition-all`}>
-                          <X className="w-5 h-5" />
-                      </button>
+                      <div className="shrink-0 flex items-center gap-2">
+                          <ManagerNewButton entity="Task" tone="green" onClick={startTaskCreation} disabled={viewMode === 'CREATE_TASK'} />
+                          <ManagerCloseButton label="task board" onClick={() => setFieldManagerOpen(false)} />
+                      </div>
                   </div>
 
                   <div className={`shrink-0 px-5 lg:px-6 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-green-950/18' : 'bg-green-50/80'}`}>
@@ -6579,14 +7240,10 @@ const renderLinesPanel = () => {
                       </div>
                   ) : (
                       <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6">
-                          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-5">
+                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
                               <StatCard icon={Activity} label="Active" value={activeTask ? 1 : 0} sub={activeTask?.name || 'None'} tone="text-green-500" />
                               <StatCard icon={FileText} label="Pending" value={pendingTasks.length} sub="Ready jobs" tone="text-blue-500" />
                               <StatCard icon={CheckSquare} label="Done" value={doneTasks.length} sub="Completed" tone="text-slate-500" />
-                              <button onClick={startTaskCreation} className="rounded-xl bg-green-600 text-white font-black hover:bg-green-500 shadow-lg shadow-green-900/20 flex items-center justify-center gap-2 min-h-[92px]">
-                                  <Plus className="w-5 h-5" />
-                                  New Task
-                              </button>
                           </div>
 
                           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -6621,6 +7278,14 @@ const renderLinesPanel = () => {
           );
       };
 
+      if (viewMode === 'LIST' && activeField && fieldAssetTab === 'boundaries') {
+          return renderBoundaryManager();
+      }
+
+      if ((viewMode === 'LIST' || viewMode === 'CREATE_TASK') && activeField && fieldAssetTab === 'tasks') {
+          return renderTaskManager();
+      }
+
       let rightContent;
       if (viewMode === 'CREATE_FIELD') {
           const draftField = {
@@ -6630,99 +7295,141 @@ const renderLinesPanel = () => {
               lines: [],
               tasks: []
           };
+          const hasFieldName = newFieldName.trim().length > 0;
+          const boundaryCount = currentFieldBoundaries.length;
+          const estimatedArea = (currentFieldBoundaries.reduce((acc, boundary) => acc + (boundary.points?.length || 0), 0) * 0.05).toFixed(1);
 
           rightContent = (
               <div className="flex-1 min-h-0 flex flex-col">
-                  <div className={`px-5 lg:px-6 py-4 border-b ${t.divider} flex items-center justify-between gap-4 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
+                  <div className={`shrink-0 px-4 lg:px-5 py-3 border-b ${t.divider} flex items-center justify-between gap-4 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
                       <div className="flex items-center gap-3 min-w-0">
                           <button onClick={() => actions.setViewMode('LIST')} className={`shrink-0 p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}>
                               <ArrowLeftRight className="w-5 h-5 rotate-180" />
                           </button>
                           <div className="min-w-0">
                               <div className={`text-[10px] font-black uppercase tracking-widest ${t.textSub}`}>Field setup</div>
-                              <h3 className={`text-xl font-black ${t.textMain} truncate`}>Create Field</h3>
+                              <h3 className={`text-lg font-black ${t.textMain} truncate`}>Create new field</h3>
+                              <div className={`text-[11px] ${t.textSub}`}>Name the field, then add a boundary when available.</div>
                           </div>
                       </div>
-                      <button onClick={() => setFieldManagerOpen(false)} className="hidden">
-                          <X className="w-5 h-5" />
-                      </button>
+                      <div className={`shrink-0 h-9 px-3 rounded-lg border ${hasFieldName ? 'border-green-500/30 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`} flex items-center gap-2 text-[10px] font-black uppercase`}>
+                          {hasFieldName ? <CheckCircle2 className="w-4 h-4" /> : <CircleDashed className="w-4 h-4" />}
+                          {hasFieldName ? 'Ready to save' : 'Name required'}
+                      </div>
                   </div>
 
-                  <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6 pb-28">
-                      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)] gap-5 max-w-6xl">
-                          <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-5 space-y-5`}>
-                              <div>
-                                  <label className={`block text-[11px] font-black uppercase tracking-wider mb-2 ${t.textSub}`}>Field name</label>
-                                  <input
-                                      type="text"
-                                      value={newFieldName}
-                                      onChange={e => actions.setNewFieldName(e.target.value)}
-                                      placeholder="Ex: South Farm 02"
-                                      className={`w-full p-4 rounded-xl border ${t.borderCard} ${t.bgInput} ${t.textMain} focus:border-blue-500 outline-none`}
-                                  />
-                              </div>
-
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                  <div className={`rounded-xl border ${t.borderCard} ${mutedPanelBg} p-4`}>
-                                      <div className="flex items-start justify-between gap-3">
-                                          <div>
-                                              <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Boundary capture</div>
-                                              <div className={`mt-1 text-sm ${t.textMain}`}>{currentFieldBoundaries.length} loop saved</div>
+                  <div className={`flex-1 min-h-0 p-3 lg:p-4 ${theme === 'dark' ? 'bg-slate-950/45' : 'bg-slate-50'} overflow-y-auto xl:overflow-hidden`}>
+                      <div className="h-full min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1.05fr)_minmax(280px,0.95fr)] gap-3 lg:gap-4">
+                          <section className="min-w-0 flex flex-col gap-3">
+                              <div className={`rounded-xl border ${hasFieldName ? 'border-blue-500/40' : t.borderCard} ${softPanelBg} p-3`}>
+                                  <div className="flex items-center justify-between gap-3 mb-2">
+                                      <div className="flex items-center gap-3 min-w-0">
+                                          <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-black ${hasFieldName ? 'bg-blue-600 text-white' : `${mutedPanelBg} ${t.textSub} border ${t.borderCard}`}`}>1</div>
+                                          <div className="min-w-0">
+                                              <div className={`font-black ${t.textMain}`}>Field identity</div>
+                                              <div className={`text-[11px] ${t.textSub}`}>Use a name that is easy to find later.</div>
                                           </div>
-                                          <MapPin className="w-5 h-5 text-orange-500" />
                                       </div>
-                                      <button onClick={startBoundaryCreation} className="mt-4 w-full py-3 rounded-xl border-2 border-dashed border-blue-500/50 text-blue-500 font-black hover:bg-blue-500/10 flex items-center justify-center gap-2">
-                                          <Tractor className="w-5 h-5" />
-                                          {currentFieldBoundaries.length > 0 ? 'Record Another' : 'Record Boundary'}
-                                      </button>
+                                      <span className="shrink-0 text-[9px] font-black uppercase text-blue-500">Required</span>
                                   </div>
-
-                                  <div className={`rounded-xl border ${t.borderCard} ${mutedPanelBg} p-4`}>
-                                      <div className="flex items-start justify-between gap-3">
-                                          <div>
-                                              <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Setup status</div>
-                                              <div className={`mt-1 text-sm ${t.textMain}`}>{currentFieldBoundaries.length > 0 ? 'Ready to save' : 'Boundary optional'}</div>
-                                          </div>
-                                          <CheckCircle2 className={`w-5 h-5 ${currentFieldBoundaries.length > 0 ? 'text-green-500' : t.textDim}`} />
-                                      </div>
-                                      <div className="mt-4 grid grid-cols-2 gap-2 text-center">
-                                          <div className={`rounded-lg border ${t.borderCard} p-3`}>
-                                              <div className={`text-xl font-black ${t.textMain}`}>{currentFieldBoundaries.length}</div>
-                                              <div className={`text-[10px] uppercase font-bold ${t.textSub}`}>Boundaries</div>
-                                          </div>
-                                          <div className={`rounded-lg border ${t.borderCard} p-3`}>
-                                              <div className={`text-xl font-black ${t.textMain}`}>0</div>
-                                              <div className={`text-[10px] uppercase font-bold ${t.textSub}`}>Tasks</div>
-                                          </div>
-                                      </div>
+                                  <label className={`block text-[9px] font-black uppercase tracking-wider mb-1 ${t.textSub}`}>Field name</label>
+                                  <div className="relative">
+                                      <MapIcon className={`absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 ${hasFieldName ? 'text-blue-500' : t.textDim}`} />
+                                      <input
+                                          type="text"
+                                          value={newFieldName}
+                                          onChange={e => actions.setNewFieldName(e.target.value)}
+                                          placeholder="e.g. South Farm 02"
+                                          className={`w-full h-11 pl-11 pr-11 rounded-xl border ${hasFieldName ? 'border-blue-500' : t.borderCard} ${t.bgInput} ${t.textMain} font-bold focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 outline-none`}
+                                          autoFocus
+                                      />
+                                      {hasFieldName && <CheckCircle2 className="absolute right-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-green-500" />}
                                   </div>
                               </div>
 
-                              <div className={`pt-4 border-t ${t.divider} flex flex-wrap justify-end gap-3`}>
-                                  <button onClick={() => actions.setViewMode('LIST')} className={`px-5 py-3 rounded-lg border ${t.borderCard} ${t.textMain} font-bold hover:brightness-95`}>Cancel</button>
-                                  <button onClick={saveNewField} className="px-7 py-3 rounded-lg bg-blue-600 text-white font-black hover:bg-blue-500 shadow-lg shadow-blue-900/20 flex items-center gap-2">
-                                      <Save className="w-5 h-5" />
-                                      Save Field
+                              <div className={`rounded-xl border ${boundaryCount > 0 ? 'border-orange-500/40' : t.borderCard} ${softPanelBg} p-3`}>
+                                  <div className="flex items-center justify-between gap-3">
+                                      <div className="flex items-center gap-3 min-w-0">
+                                          <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-black ${boundaryCount > 0 ? 'bg-orange-500 text-white' : `${mutedPanelBg} ${t.textSub} border ${t.borderCard}`}`}>2</div>
+                                          <div className="min-w-0">
+                                              <div className={`font-black ${t.textMain}`}>Field boundary</div>
+                                              <div className={`text-[11px] ${t.textSub}`}>{boundaryCount > 0 ? `${boundaryCount} loop saved / ${estimatedArea} ha estimated` : 'You can add this now or later.'}</div>
+                                          </div>
+                                      </div>
+                                      <span className={`shrink-0 text-[9px] font-black uppercase ${boundaryCount > 0 ? 'text-orange-500' : t.textSub}`}>{boundaryCount > 0 ? 'Captured' : 'Optional'}</span>
+                                  </div>
+                                  <button
+                                      type="button"
+                                      onClick={startBoundaryCreation}
+                                      className={`mt-2 w-full min-h-12 px-3 rounded-xl border flex items-center justify-between gap-3 text-left transition-all ${boundaryCount > 0 ? 'border-orange-500/35 bg-orange-500/10 hover:bg-orange-500/15' : `${t.borderCard} ${mutedPanelBg} hover:border-blue-400 hover:bg-blue-500/5`}`}
+                                  >
+                                      <div className="min-w-0 flex items-center gap-3">
+                                          <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${boundaryCount > 0 ? 'bg-orange-500 text-white' : 'bg-blue-500/10 text-blue-500'}`}>
+                                              <MapPin className="w-5 h-5" />
+                                          </div>
+                                          <div className="min-w-0">
+                                              <div className={`text-sm font-black ${t.textMain}`}>{boundaryCount > 0 ? 'Record another boundary' : 'Record boundary'}</div>
+                                              <div className={`text-[10px] ${t.textSub}`}>Drive the perimeter to capture the field edge</div>
+                                          </div>
+                                      </div>
+                                      <ArrowLeftRight className={`shrink-0 w-4 h-4 ${t.textDim}`} />
                                   </button>
                               </div>
-                          </section>
 
-                          <section className="space-y-4">
-                              <MiniFieldPreview field={draftField} draftBoundaries={currentFieldBoundaries} />
-                              <div className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-4`}>
-                                  <SectionTitle icon={Layers} title="Create flow" />
-                                  <div className="space-y-3">
-                                      {['Name field', 'Record or import boundary', 'Save to field library'].map((step, index) => (
-                                          <div key={step} className="flex items-center gap-3">
-                                              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black ${index === 0 || (index === 1 && currentFieldBoundaries.length > 0) ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textSub}`}`}>
-                                                  {index + 1}
-                                              </div>
-                                              <span className={`text-sm font-bold ${t.textMain}`}>{step}</span>
-                                          </div>
-                                      ))}
+                              <div className={`rounded-xl border ${hasFieldName ? 'border-green-500/30 bg-green-500/5' : t.borderCard} ${!hasFieldName ? softPanelBg : ''} p-3 flex items-center gap-3`}>
+                                  <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-black ${hasFieldName ? 'bg-green-600 text-white' : `${mutedPanelBg} ${t.textSub} border ${t.borderCard}`}`}>3</div>
+                                  <div className="min-w-0 flex-1">
+                                      <div className={`font-black ${t.textMain}`}>Review and save</div>
+                                      <div className={`text-[11px] ${t.textSub}`}>{hasFieldName ? `${newFieldName.trim()} is ready for the field library.` : 'Enter a field name to continue.'}</div>
                                   </div>
+                                  {hasFieldName && <CheckCircle2 className="shrink-0 w-5 h-5 text-green-500" />}
                               </div>
                           </section>
+
+                          <section className={`min-w-0 min-h-[300px] rounded-xl border ${t.borderCard} ${softPanelBg} p-3 flex flex-col`}>
+                              <div className="shrink-0 px-1 pb-3 flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                      <div className={`text-[9px] font-black uppercase tracking-wider ${t.textSub}`}>Live preview</div>
+                                      <div className={`font-black truncate ${t.textMain}`}>{newFieldName.trim() || 'Untitled field'}</div>
+                                  </div>
+                                  <span className={`shrink-0 px-2 py-1 rounded-md text-[9px] font-black uppercase ${boundaryCount > 0 ? 'bg-orange-500/15 text-orange-500' : `${mutedPanelBg} ${t.textSub}`}`}>
+                                      {boundaryCount > 0 ? `${boundaryCount} boundary` : 'No boundary'}
+                                  </span>
+                              </div>
+                              <div className="flex-1 min-h-[220px]">
+                                  <MiniFieldPreview field={draftField} draftBoundaries={currentFieldBoundaries} compact />
+                              </div>
+                              <div className="shrink-0 pt-3 grid grid-cols-3 gap-2">
+                                  {[
+                                      ['Area', boundaryCount > 0 ? `${estimatedArea} ha` : '--'],
+                                      ['Boundaries', boundaryCount],
+                                      ['Status', hasFieldName ? 'Ready' : 'Draft']
+                                  ].map(([label, value]) => (
+                                      <div key={label} className={`min-w-0 rounded-lg border ${t.borderCard} ${mutedPanelBg} p-2 text-center`}>
+                                          <div className={`text-xs font-black truncate ${label === 'Status' && hasFieldName ? 'text-green-500' : t.textMain}`}>{value}</div>
+                                          <div className={`mt-0.5 text-[8px] font-black uppercase ${t.textSub}`}>{label}</div>
+                                      </div>
+                                  ))}
+                              </div>
+                          </section>
+                      </div>
+                  </div>
+
+                  <div className={`shrink-0 px-4 lg:px-5 py-3 border-t ${t.divider} ${theme === 'dark' ? 'bg-slate-950/85' : 'bg-white/90'} flex items-center justify-between gap-3`}>
+                      <div className={`hidden sm:flex items-center gap-2 text-[10px] ${t.textSub}`}>
+                          <CheckCircle2 className={`w-4 h-4 ${hasFieldName ? 'text-green-500' : t.textDim}`} />
+                          Boundary is optional and can be added later.
+                      </div>
+                      <div className="ml-auto flex items-center gap-2">
+                          <button onClick={() => actions.setViewMode('LIST')} className={`h-10 px-4 rounded-lg border ${t.borderCard} ${t.textMain} text-xs font-black hover:brightness-95`}>Cancel</button>
+                          <button
+                              onClick={saveNewField}
+                              disabled={!hasFieldName}
+                              className={`h-10 px-5 rounded-lg text-xs font-black flex items-center gap-2 transition-all ${hasFieldName ? 'bg-blue-600 text-white hover:bg-blue-500 shadow-lg shadow-blue-900/20' : `${mutedPanelBg} ${t.textDim} border ${t.borderCard} cursor-not-allowed`}`}
+                          >
+                              <Save className="w-4 h-4" />
+                              Save field
+                          </button>
                       </div>
                   </div>
               </div>
@@ -6786,228 +7493,198 @@ const renderLinesPanel = () => {
           const boundaries = activeField.boundaries || [];
           const lines = (activeField.lines || []).filter(line => !line.archived);
           const tasks = activeField.tasks || [];
-          const assetTabs = [
-              { id: 'lines', label: 'Lines', title: 'Guidance Lines', count: lines.length, icon: Route, actionLabel: 'New Line', tone: 'blue' },
-              { id: 'boundaries', label: 'Bounds', title: 'Boundaries', count: boundaries.length, icon: MapPin, actionLabel: 'Record Boundary', tone: 'orange' },
-              { id: 'tasks', label: 'Tasks', title: 'Tasks', count: tasks.length, icon: FileText, actionLabel: 'New Task', tone: 'green' }
-          ];
-          const activeAssetTab = assetTabs.some(tab => tab.id === fieldAssetTab) ? fieldAssetTab : 'lines';
-          const activeAssetMeta = assetTabs.find(tab => tab.id === activeAssetTab) || assetTabs[0];
-          const ActiveAssetIcon = activeAssetMeta.icon;
-          const activeAssetIconClass = activeAssetMeta.tone === 'orange'
-              ? 'text-orange-500'
-              : activeAssetMeta.tone === 'green'
-                  ? 'text-green-500'
-                  : 'text-blue-500';
-          const activeAssetActionLabel = activeAssetMeta.actionLabel;
-          const activeAssetActionClass = activeAssetMeta.tone === 'orange'
-              ? 'bg-orange-500 hover:bg-orange-400 shadow-orange-900/20'
-              : activeAssetMeta.tone === 'green'
-                  ? 'bg-green-600 hover:bg-green-500 shadow-green-900/20'
-                  : 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20';
-          const getAssetTabClass = (id, tone) => {
-              if (activeAssetTab !== id) {
-                  return `${t.textSub} border-transparent hover:bg-blue-500/10`;
-              }
-              if (tone === 'orange') return 'bg-orange-500 text-white border-orange-400 shadow-sm';
-              if (tone === 'green') return 'bg-green-600 text-white border-green-500 shadow-sm';
-              return 'bg-blue-600 text-white border-blue-500 shadow-sm';
-          };
-          const handleAssetAction = () => {
-              if (activeAssetTab === 'boundaries') {
-                  startBoundaryCreation();
-                  return;
-              }
-              if (activeAssetTab === 'tasks') {
-                  startTaskCreation();
-                  return;
-              }
+          const activeBoundary = boundaries[Math.min(Math.max(activeBoundaryIdx || 0, 0), Math.max(boundaries.length - 1, 0))] || null;
+          const activeLine = lines.find(line => line.id === activeLineId) || lines[0] || null;
+          const activeTask = tasks.find(task => task.id === activeTaskId) || tasks.find(task => task.status !== 'Done') || tasks[0] || null;
+          const implementLabel = cleanProfileLabel(implementSettings.name, activeImplementProfile.label);
+          const fieldArea = activeField.area || '--';
+          const fieldSetupReady = Boolean(activeBoundary || activeLine);
+
+          const openImplementSetup = () => {
+              setFieldQuickView(null);
               setFieldManagerOpen(false);
-              setLineModeModalOpen(true);
+              setSettingsTab('implement');
+              setSettingsOpen(true);
+          };
+
+          const OverviewSetupButton = ({ id, icon: Icon, label, value, detail, status, onClick, disabled = false }) => {
+              const selected = fieldQuickView === id;
+              return (
+                  <button
+                      type="button"
+                      onClick={onClick}
+                      disabled={disabled}
+                      aria-label={`${label}: ${value}. ${detail}. ${status}`}
+                      className={`w-full min-w-0 min-h-[96px] rounded-xl border text-left overflow-hidden transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed ${
+                          selected
+                              ? 'border-blue-500 bg-blue-500/5 shadow-sm'
+                              : `${t.borderCard} ${softPanelBg} hover:border-blue-400 hover:bg-blue-500/5`
+                      }`}
+                  >
+                      <div className={`h-9 px-3 flex items-center justify-between gap-2 border-b ${selected ? 'border-blue-500/30 bg-blue-500/10' : t.divider}`}>
+                          <div className="min-w-0 flex items-center gap-2">
+                              <Icon className={`w-4 h-4 shrink-0 ${selected ? 'text-blue-500' : t.textSub}`} />
+                              <span className={`text-[11px] font-black uppercase tracking-wider truncate ${selected ? 'text-blue-600' : t.textSub}`}>{label}</span>
+                          </div>
+                          <div className="shrink-0 flex items-center gap-2" title={status}>
+                              <span className={`w-2 h-2 rounded-full ${status === 'Ready' || status === 'Active' ? 'bg-green-500' : status === 'No data' ? 'bg-slate-300' : 'bg-blue-400'}`} />
+                              <ArrowLeftRight className={`w-4 h-4 ${selected ? 'text-blue-500' : t.textDim}`} />
+                          </div>
+                      </div>
+                      <div className="px-3 py-2.5 flex items-center gap-3">
+                          <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${selected ? 'bg-blue-600 text-white' : theme === 'dark' ? 'bg-slate-800 text-blue-300' : 'bg-blue-50 text-blue-600'}`}>
+                              <Icon className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                              <div className={`font-black leading-tight truncate ${t.textMain}`}>{value}</div>
+                              <div className={`mt-1 text-[11px] leading-tight truncate ${t.textSub}`}>{detail}</div>
+                          </div>
+                      </div>
+                  </button>
+              );
           };
 
           rightContent = (
               <div className="flex-1 min-h-0 flex flex-col">
-                  <div className={`px-4 lg:px-5 py-3 border-b ${t.divider} flex items-center justify-between gap-4 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
+                  <div className="shrink-0 px-4 lg:px-5 py-3 bg-gradient-to-r from-blue-700 to-blue-500 text-white flex items-center justify-between gap-4">
                       <div className="min-w-0 flex items-center gap-3">
-                          <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
-                              <MapIcon className="w-5 h-5 text-blue-500" />
+                          <div className="shrink-0 w-10 h-10 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center">
+                              <MapIcon className="w-5 h-5 text-white" />
                           </div>
                           <div className="min-w-0">
+                              <div className="text-[9px] font-black uppercase tracking-[0.18em] text-blue-100">Field overview</div>
                               <div className="flex items-center gap-2 min-w-0">
-                                  <h3 className={`text-lg font-black ${t.textMain} truncate`}>{activeField.name}</h3>
-                                  {isLoadedActiveField && <span className="shrink-0 px-2 py-1 rounded-md bg-green-500/15 text-green-500 text-[10px] font-black uppercase">Loaded</span>}
+                                  <h3 className="text-lg font-black truncate">{activeField.name}</h3>
+                                  {isLoadedActiveField && <span className="shrink-0 px-2 py-1 rounded-md bg-white/15 text-white text-[9px] font-black uppercase">Loaded</span>}
                               </div>
-                              <div className={`mt-0.5 flex flex-wrap items-center gap-2 text-xs ${t.textSub}`}>
-                                  <span>{activeField.area}</span>
-                                  <span className={t.textDim}>/</span>
+                              <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-blue-100">
+                                  <span>{fieldArea}</span>
+                                  <span className="text-blue-200">/</span>
                                   <span>Last used {activeField.lastUsed || '--'}</span>
                               </div>
                           </div>
                       </div>
-                      <button onClick={() => setFieldManagerOpen(false)} className="hidden">
-                          <X className="w-5 h-5" />
-                      </button>
+                      <div className="shrink-0 flex items-center gap-2">
+                          <span className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase ${fieldSetupReady ? 'bg-green-500 text-white' : 'bg-white/15 text-white'}`}>
+                              {fieldSetupReady ? 'Setup ready' : 'Needs setup'}
+                          </span>
+                      </div>
                   </div>
 
-                  <div className="flex-1 min-h-0 overflow-hidden p-4 lg:p-5 flex flex-col">
-                      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(230px,0.92fr)_minmax(340px,1.08fr)] xl:grid-cols-[minmax(0,0.95fr)_minmax(380px,1.05fr)] gap-4 overflow-hidden">
-                          <section className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${softPanelBg} p-3 flex flex-col`}>
-                              <SectionTitle icon={MapIcon} title="Field Map" />
-                              <div className="min-h-0 flex-1">
-                                  <MiniFieldPreview field={activeField} />
+                  <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(250px,0.86fr)_minmax(340px,1.14fr)] overflow-hidden">
+                      <section className={`min-w-0 min-h-0 p-4 border-r ${t.border} ${theme === 'dark' ? 'bg-slate-950/55' : 'bg-slate-50'} flex flex-col`}>
+                          <div className="flex items-center justify-between gap-3 mb-3">
+                              <div className="flex items-center gap-2 min-w-0">
+                                  <MapIcon className="w-4 h-4 text-blue-500 shrink-0" />
+                                  <span className={`text-[11px] font-black uppercase tracking-wider ${t.textSub}`}>Field map</span>
                               </div>
-                          </section>
-
-                          <section className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${softPanelBg} flex flex-col overflow-hidden`}>
-                              <div className={`shrink-0 p-3 border-b ${t.divider}`}>
-                                  <div className="flex items-center justify-between gap-3">
-                                      <div className="flex items-center gap-2 min-w-0">
-                                          <ActiveAssetIcon className={`w-4 h-4 ${activeAssetIconClass} shrink-0`} />
-                                          <h4 className={`font-black uppercase tracking-wider text-xs ${t.textSub} truncate`}>{activeAssetMeta.title}</h4>
+                              <span className={`text-[10px] font-black ${t.textSub}`}>{boundaries.length} boundary</span>
+                          </div>
+                          <div className="min-h-[180px] flex-1">
+                                  <MiniFieldPreview field={activeField} compact />
+                          </div>
+                          <div className={`mt-3 rounded-xl border ${t.borderCard} ${softPanelBg} p-3`}>
+                              <div className="flex items-end justify-between gap-3">
+                                  <div>
+                                      <div className={`text-[10px] font-black uppercase tracking-wider ${t.textSub}`}>Total area</div>
+                                      <div className={`mt-1 text-3xl font-black leading-none ${t.textMain}`}>{fieldArea}</div>
+                                  </div>
+                                  <div className={`text-right text-[11px] ${t.textSub}`}>
+                                      <div>Last used</div>
+                                      <div className={`font-black ${t.textMain}`}>{activeField.lastUsed || '--'}</div>
+                                  </div>
+                              </div>
+                              <div className="mt-3 grid grid-cols-3 gap-2">
+                                  {[
+                                      ['Bounds', boundaries.length],
+                                      ['Lines', lines.length],
+                                      ['Tasks', tasks.length]
+                                  ].map(([label, value]) => (
+                                      <div key={label} className={`rounded-lg border ${t.borderCard} ${mutedPanelBg} px-2 py-2.5 text-center`}>
+                                          <div className={`text-lg font-black leading-none ${t.textMain}`}>{value}</div>
+                                          <div className={`mt-1 text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
                                       </div>
-                                      <span className={`shrink-0 h-6 px-2 rounded-md ${mutedPanelBg} border ${t.borderCard} ${t.textMain} text-xs font-black flex items-center`}>{activeAssetMeta.count}</span>
-                                  </div>
-                                  <div className={`mt-2.5 grid grid-cols-3 gap-1 rounded-lg ${mutedPanelBg} p-1 border ${t.borderCard}`}>
-                                      {assetTabs.map(({ id, label, count, icon: Icon, tone }) => (
-                                          <button
-                                              key={id}
-                                              onClick={() => setFieldAssetTab(id)}
-                                              className={`min-w-0 h-9 rounded-md px-2 transition-all border flex items-center justify-center gap-1.5 ${getAssetTabClass(id, tone)}`}
-                                          >
-                                              <Icon className="w-3.5 h-3.5 shrink-0" />
-                                              <span className="text-[10px] uppercase font-black truncate">{label}</span>
-                                              <span className="text-[10px] font-black">{count}</span>
-                                          </button>
-                                      ))}
-                                  </div>
+                                  ))}
                               </div>
+                          </div>
+                      </section>
 
-                              <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2">
-                                  {activeAssetTab === 'lines' && (
-                                      lines.length > 0 ? (
-                                          lines.map((line) => {
-                                              const Icon = getLineIcon(line);
-                                              const active = activeLineId === line.id;
-                                              return (
-                                                  <div key={line.id} className={`relative flex items-center justify-between gap-3 p-3 rounded-lg border transition-all ${active ? 'border-blue-600 bg-blue-600/10 shadow-sm ring-1 ring-blue-500/20' : `${t.borderCard} ${mutedPanelBg} hover:border-blue-400`}`}>
-                                                      {active && <div className="absolute left-0 top-3 bottom-3 w-1 rounded-r bg-blue-600" />}
-                                                      <div className="flex items-center gap-3 min-w-0">
-                                                          <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-blue-500`}`}>
-                                                              <Icon className="w-4 h-4" />
-                                                          </div>
-                                                          <div className="min-w-0">
-                                                              <div
-                                                                  className={`font-bold ${t.textMain} leading-tight`}
-                                                                  title={line.name || 'Guidance line'}
-                                                                  style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
-                                                              >
-                                                                  {line.name || 'Guidance line'}
-                                                              </div>
-                                                              <div className={`text-xs ${t.textSub}`}>{(line.type || 'LINE').replaceAll('_', ' ')} / {line.quality || 'Good'} / {line.date || '--'}</div>
-                                                          </div>
-                                                      </div>
-                                                      <div className="shrink-0 flex items-center gap-2">
-                                                          <button onClick={() => confirmDelete('line', line.id)} className="p-2 rounded-lg text-red-500 hover:bg-red-500/10">
-                                                              <Trash2 className="w-4 h-4" />
-                                                          </button>
-                                                          <button onClick={() => handleLoadLine(line)} className={`px-3 py-2 rounded-lg text-xs font-black ${active ? 'bg-blue-600 text-white' : `border ${t.borderCard} ${t.textMain} hover:brightness-95`}`}>
-                                                              {active ? 'Active' : 'Load'}
-                                                          </button>
-                                                      </div>
-                                                  </div>
-                                              );
-                                          })
-                                      ) : <EmptyState label="No saved guidance line for this field." />
-                                  )}
+                      <section className={`min-w-0 min-h-0 overflow-y-auto p-3 ${panelBg}`}>
+                          <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                              <OverviewSetupButton
+                                  id="boundaries"
+                                  icon={MapPin}
+                                  label="Boundary"
+                                  value={activeBoundary?.name || 'No boundary'}
+                                  detail={activeBoundary ? `${getBoundaryPoints(activeBoundary).length} recorded points` : 'Record the field edge'}
+                                  status={activeBoundary ? 'Ready' : 'No data'}
+                                  onClick={() => setFieldQuickView('boundaries')}
+                              />
+                              <OverviewSetupButton
+                                  id="lines"
+                                  icon={Route}
+                                  label="Guidance line"
+                                  value={activeLine?.name || 'No guidance line'}
+                                  detail={activeLine ? (activeLine.type || 'LINE').replaceAll('_', ' ') : 'Create or load a saved line'}
+                                  status={activeLineId === activeLine?.id ? 'Active' : activeLine ? 'Saved' : 'No data'}
+                                  onClick={() => setFieldQuickView('lines')}
+                              />
+                          </div>
 
-                                  {activeAssetTab === 'boundaries' && (
-                                      boundaries.length > 0 ? (
-                                          boundaries.map((boundary, index) => (
-                                              <div
-                                                  key={`${boundary.name || 'boundary'}-${index}`}
-                                                  role="button"
-                                                  tabIndex={0}
-                                                  onClick={() => actions.setActiveBoundaryIdx(index)}
-                                                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); actions.setActiveBoundaryIdx(index); } }}
-                                                  className={`w-full flex items-center justify-between gap-3 p-3 rounded-lg border text-left transition-all ${activeBoundaryIdx === index ? 'border-orange-500 bg-orange-500/10 shadow-sm ring-1 ring-orange-500/20' : `${t.borderCard} ${mutedPanelBg} hover:brightness-95`}`}
-                                              >
-                                                  <div className="flex items-center gap-3 min-w-0">
-                                                      <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${activeBoundaryIdx === index ? 'bg-orange-500 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-orange-500`}`}>
-                                                          <MapPin className="w-4 h-4" />
-                                                      </div>
-                                                      <div className="min-w-0">
-                                                          <div className={`font-bold ${t.textMain} truncate`}>{boundary.name || `Boundary ${index + 1}`}</div>
-                                                          <div className={`text-xs ${t.textSub}`}>{getBoundaryPoints(boundary).length} points</div>
-                                                      </div>
-                                                  </div>
-                                                  <div className="shrink-0 flex items-center gap-2">
-                                                      {activeBoundaryIdx === index && <span className="hidden sm:inline px-2 py-1 rounded-md bg-orange-500 text-white text-[10px] font-black uppercase">Active</span>}
-                                                      <button
-                                                          onClick={(e) => { e.stopPropagation(); confirmDelete('boundary', null, index); }}
-                                                          className="p-2 rounded-lg text-red-500 hover:bg-red-500/10"
-                                                      >
-                                                          <Trash2 className="w-4 h-4" />
-                                                      </button>
+                          <div className="mt-2">
+                              <OverviewSetupButton
+                                  id="tasks"
+                                  icon={activeTask ? getTaskIcon(activeTask) : FileText}
+                                  label="Task"
+                                  value={activeTask?.name || 'No task selected'}
+                                  detail={activeTask ? `${activeTask.type || 'Field work'} / ${activeTask.status || 'Pending'}` : 'Create a job for this field'}
+                                  status={activeTaskId === activeTask?.id ? 'Active' : activeTask ? activeTask.status : 'No data'}
+                                  onClick={() => setFieldQuickView('tasks')}
+                              />
+                          </div>
+
+                          <section className={`mt-2 rounded-xl border ${t.borderCard} ${softPanelBg} overflow-hidden`}>
+                              <button
+                                  type="button"
+                                  onClick={openImplementSetup}
+                                  aria-label={`Implement setup: ${implementLabel}`}
+                                  className={`w-full h-11 px-3 border-b ${t.divider} flex items-center justify-between gap-3 text-left hover:bg-blue-500/5 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500`}
+                              >
+                                  <div className="min-w-0 flex items-center gap-2">
+                                      <Ruler className="w-4 h-4 text-blue-500 shrink-0" />
+                                      <span className={`text-[11px] font-black uppercase tracking-wider ${t.textSub}`}>Implement</span>
+                                      <span className={`font-black truncate ${t.textMain}`}>{implementLabel}</span>
+                                  </div>
+                                  <ArrowLeftRight className={`w-4 h-4 shrink-0 ${t.textDim}`} />
+                              </button>
+                              <div className="p-3 grid grid-cols-[80px_minmax(0,1fr)] gap-3 items-center">
+                                  <div className={`h-[84px] rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-blue-500/10' : 'bg-gradient-to-b from-blue-50 to-slate-100'} flex flex-col items-center justify-center text-blue-600`}>
+                                      <Tractor className="w-8 h-8" />
+                                      <span className="mt-1.5 text-[8px] font-black uppercase">{implementSettings.type || 'Implement'}</span>
+                                  </div>
+                                  <div className="min-w-0">
+                                      <div className="grid grid-cols-2 gap-2">
+                                          {[
+                                              ['Working width', `${Number(implementSettings.width || 0).toFixed(3)} m`],
+                                              ['Skip / overlap', `${Number(implementSettings.overlap || 0).toFixed(3)} m`]
+                                          ].map(([label, value]) => (
+                                              <div key={label} className="min-w-0">
+                                                  <div className={`mb-1 text-[9px] font-bold truncate ${t.textSub}`}>{label}</div>
+                                                  <div className={`h-9 rounded-lg border ${t.borderCard} ${mutedPanelBg} px-2 flex items-center`}>
+                                                      <span className={`font-mono text-sm font-black truncate ${t.textMain}`}>{value}</span>
                                                   </div>
                                               </div>
-                                          ))
-                                      ) : <EmptyState label="No boundary saved. Record one to lock field shape." />
-                                  )}
-
-                                  {activeAssetTab === 'tasks' && (
-                                      tasks.length > 0 ? (
-                                          tasks.map((task) => {
-                                              const Icon = getTaskIcon(task);
-                                              const active = activeTaskId === task.id;
-                                              return (
-                                                  <div key={task.id} className={`flex items-center justify-between gap-3 p-3 rounded-lg border ${active ? 'border-green-500 bg-green-500/10' : `${t.borderCard} ${mutedPanelBg}`}`}>
-                                                      <div className="flex items-center gap-3 min-w-0">
-                                                          <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${active ? 'bg-green-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-green-500`}`}>
-                                                              <Icon className="w-4 h-4" />
-                                                          </div>
-                                                          <div className="min-w-0">
-                                                              <div className={`font-bold ${t.textMain} truncate`}>{task.name}</div>
-                                                              <div className={`text-xs ${t.textSub}`}>{task.date} / {task.status}</div>
-                                                          </div>
-                                                      </div>
-                                                      <div className="shrink-0 flex items-center gap-2">
-                                                          {active ? (
-                                                              <>
-                                                                  <button onClick={() => handleTaskAction(task, 'pause')} className="p-2 rounded-lg bg-orange-500/15 text-orange-500 hover:bg-orange-500/25">
-                                                                      <Pause className="w-4 h-4" />
-                                                                  </button>
-                                                                  <button onClick={() => handleTaskAction(task, 'finish')} className="p-2 rounded-lg bg-green-500/15 text-green-500 hover:bg-green-500/25">
-                                                                      <CheckSquare className="w-4 h-4" />
-                                                                  </button>
-                                                              </>
-                                                          ) : (
-                                                              <>
-                                                                  {task.status !== 'Done' && (
-                                                                      <button onClick={() => handleTaskAction(task, 'start')} className="p-2 rounded-lg bg-blue-500/15 text-blue-500 hover:bg-blue-500/25">
-                                                                          <PlayCircle className="w-4 h-4" />
-                                                                      </button>
-                                                                  )}
-                                                                  <button onClick={() => confirmDelete('task', task.id)} className="p-2 rounded-lg text-red-500 hover:bg-red-500/10">
-                                                                      <Trash2 className="w-4 h-4" />
-                                                                  </button>
-                                                              </>
-                                                          )}
-                                                      </div>
-                                                  </div>
-                                              );
-                                          })
-                                      ) : <EmptyState label="No task created yet." />
-                                  )}
-                              </div>
-                              <div className={`shrink-0 p-3 border-t ${t.divider} ${theme === 'dark' ? 'bg-slate-950/40' : 'bg-white/70'}`}>
-                                  <button onClick={handleAssetAction} className={`w-full h-10 rounded-lg text-white font-black active:scale-[0.99] transition-all shadow-lg ${activeAssetActionClass} flex items-center justify-center gap-2`}>
-                                      <Plus className="w-4 h-4" />
-                                      {activeAssetActionLabel}
-                                  </button>
+                                          ))}
+                                      </div>
+                                      <div className={`mt-2 flex items-center gap-2 text-[9px] font-bold ${t.textSub}`}>
+                                          <span>{implementSettings.sections || 1} sections</span>
+                                          <span className={t.textDim}>/</span>
+                                          <span className="truncate">{implementSettings.controlMode || 'Manual control'}</span>
+                                      </div>
+                                  </div>
                               </div>
                           </section>
-                      </div>
+                      </section>
                   </div>
 
                   <div className={`px-5 py-3 border-t ${t.divider} flex flex-wrap items-center justify-between gap-3 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
@@ -7037,7 +7714,7 @@ const renderLinesPanel = () => {
       }
 
       return (
-          <div className={`w-full h-full flex flex-col ${panelBg}`}>
+          <div className={`relative w-full h-full flex flex-col ${panelBg}`}>
               <div className={`flex items-center justify-between gap-4 px-5 py-4 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
                   <div className="min-w-0 flex items-center gap-3">
                       <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
@@ -7048,9 +7725,16 @@ const renderLinesPanel = () => {
                           <div className={`text-xs ${t.textSub} truncate`}>{fields.length} saved fields / {loadedField ? `${loadedField.name} loaded` : 'No field loaded'}</div>
                       </div>
                   </div>
-                  <button onClick={() => setFieldManagerOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 transition-all`}>
-                      <X className="w-5 h-5" />
-                  </button>
+                  <div className="shrink-0 flex items-center gap-2">
+                      <ManagerNewButton entity="Field" onClick={startFieldCreation} />
+                      <ManagerCloseButton
+                          label="field library"
+                          onClick={() => {
+                              setFieldQuickView(null);
+                              setFieldManagerOpen(false);
+                          }}
+                      />
+                  </div>
               </div>
 
               <div className="flex-1 min-h-0 flex overflow-hidden">
@@ -7061,13 +7745,6 @@ const renderLinesPanel = () => {
                                       <div className={`text-[9px] font-black uppercase tracking-wider ${t.textSub}`}>Library</div>
                                       <div className={`text-base font-black ${t.textMain}`}>Fields</div>
                                   </div>
-                                  <button
-                                      onClick={startFieldCreation}
-                                      className="shrink-0 h-9 px-3 bg-blue-600 text-white rounded-lg font-black flex justify-center items-center gap-1.5 hover:bg-blue-500 shadow-md shadow-blue-900/20"
-                                  >
-                                      <Plus className="w-4 h-4" />
-                                      <span className="text-xs">New</span>
-                                  </button>
                               </div>
                               <div className={`mt-3 h-10 rounded-lg border flex items-center px-2 ${theme === 'dark' ? 'bg-blue-500/10 border-blue-500/20' : 'bg-blue-50 border-blue-200'}`}>
                                   {[
@@ -7093,7 +7770,7 @@ const renderLinesPanel = () => {
                                   return (
                                       <button
                                           key={f.id}
-                                          onClick={() => { actions.setSelectedFieldId(f.id); actions.setViewMode('LIST'); }}
+                                          onClick={() => { setFieldQuickView(null); setFieldAssetTab('lines'); actions.setSelectedFieldId(f.id); actions.setViewMode('LIST'); }}
                                           title={f.name}
                                           className={`relative w-full text-left p-3 rounded-lg border transition-all ${selected ? `${t.selectedItem} shadow-sm` : `${softPanelBg} ${t.borderCard} hover:brightness-95`}`}
                                       >
@@ -7138,17 +7815,18 @@ const renderLinesPanel = () => {
                       </section>
                       </div>
               </div>
+              {renderFieldQuickView()}
           </div>
       );
   };
 
   return (
     <div className="w-full h-screen bg-neutral-900 flex items-center justify-center p-4 overflow-hidden">
-        <div className={`relative ${t.deviceFrame} shadow-2xl overflow-hidden flex border-[12px] rounded-2xl ring-4 ring-black/50 transition-colors duration-500`} style={{ width: '100%', maxWidth: '1280px', height: 'min(800px, calc(100vh - 32px))', maxHeight: '100%' }}>
+        <div className={`relative ${t.deviceFrame} shadow-2xl flex border-[12px] rounded-2xl ring-4 ring-black/50 transition-colors duration-500`} style={{ width: '100%', maxWidth: '1280px', height: 'min(800px, calc(100vh - 32px))', maxHeight: '100%', overflow: 'clip' }}>
             {/* LEFT RAIL */}
-            <aside className={`w-[8.5%] min-w-[82px] flex-shrink-0 ${t.bgPanel} border-r ${t.border} flex flex-col items-center py-[2%] z-30 shadow-2xl`}>
-                <div className="mb-[15%]"><div className="w-10 h-10 xl:w-12 xl:h-12 bg-blue-600 rounded-xl flex items-center justify-center font-black text-xl xl:text-2xl italic shadow-blue-900/50 shadow-lg text-white">F</div></div>
-                <nav className="flex-1 w-full flex flex-col items-center gap-2 pt-3">
+            <aside className={`w-[8.5%] min-w-[82px] flex-shrink-0 ${t.bgPanel} border-r ${t.border} flex flex-col items-center py-3 overflow-hidden z-30 shadow-2xl`}>
+                <div className="mb-3"><div className="w-10 h-10 xl:w-12 xl:h-12 bg-blue-600 rounded-xl flex items-center justify-center font-black text-xl xl:text-2xl italic shadow-blue-900/50 shadow-lg text-white">F</div></div>
+                <nav className="flex-1 min-h-0 w-full flex flex-col items-center gap-1.5 pt-2">
                     <RailButton theme={t} icon={MapIcon} label="Run" active={!settingsOpen && !fieldManagerOpen && !linesPanelOpen} onClick={openRunScreen} />
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
                     <RailButton theme={t} icon={LayoutGrid} label="Field" active={fieldManagerOpen && fieldAssetTab === 'lines'} onClick={() => openFieldAssetPanel('lines')} />
@@ -7182,7 +7860,7 @@ const renderLinesPanel = () => {
                 <button
                     type="button"
                     onClick={openWifiPanel}
-                    className={`mb-4 flex flex-col items-center gap-1 rounded-xl px-2 py-1.5 active:scale-95 hover:brightness-95 ${settingsOpen && settingsTab === 'wifi' ? 'bg-blue-600/12' : ''}`}
+                    className={`mb-1 flex flex-col items-center gap-1 rounded-xl px-2 py-1.5 active:scale-95 hover:brightness-95 ${settingsOpen && settingsTab === 'wifi' ? 'bg-blue-600/12' : ''}`}
                     title="WiFi / Network"
                     aria-label="Open WiFi and network settings"
                 >
@@ -7195,7 +7873,7 @@ const renderLinesPanel = () => {
             {/* MAIN AREA */}
             <main className={`flex-1 relative flex flex-col ${t.textMain} font-sans select-none`}>
                 {/* 2B) MAP CANVAS */}
-                <div className={`absolute inset-x-0 top-[72px] bottom-[98px] ${t.bgMain} z-0 overflow-hidden transition-colors duration-500`}
+                <div ref={mapCanvasRef} data-map-canvas className={`absolute inset-x-0 top-[88px] bottom-[88px] ${t.bgMain} z-0 overflow-hidden transition-colors duration-500`}
                      onPointerDown={handleMapPointerDown}
                      onPointerMove={handleMapPointerMove}
                      onPointerUp={handleMapPointerUp}
@@ -7263,20 +7941,70 @@ const renderLinesPanel = () => {
                                 willChange: 'transform'
                             }}
                         >
-                            {/* RENDER TEMP BOUNDARY WHILE RECORDING */}
-                            {!isMap3D && isRecordingBoundary && tempBoundary.map((pt, i) => <div key={i} className="absolute w-2 h-2 bg-orange-500 rounded-full" style={{ left: `calc(50% + ${pt.x}px)`, top: `calc(60% + ${pt.y}px)` }} />)}
-
                             {/* RENDER SAVED BOUNDARIES (LOADED FIELD & NEW FIELD CREATION) */}
-                            {!isMap3D && <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none">
+                            {!isMap3D && <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" shapeRendering="geometricPrecision">
                                 <g style={{ transform: 'translate(50%, 60%)' }}>
+                                    {isRecordingBoundary && tempBoundary.length > 0 && (
+                                        <g data-boundary-recording-2d="live-path">
+                                            <polyline
+                                                points={[...tempBoundary, worldPos].map(point => `${point.x},${point.y}`).join(' ')}
+                                                fill="none"
+                                                stroke={theme === 'dark' ? '#0f172a' : '#ffffff'}
+                                                strokeWidth={liveBoundaryUnderlayWidth}
+                                                strokeOpacity={liveBoundaryUnderlayOpacity}
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                                vectorEffect="non-scaling-stroke"
+                                            />
+                                            <polyline
+                                                points={[...tempBoundary, worldPos].map(point => `${point.x},${point.y}`).join(' ')}
+                                                fill="none"
+                                                stroke={liveBoundaryStroke}
+                                                strokeWidth={liveBoundaryStrokeWidth}
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                                vectorEffect="non-scaling-stroke"
+                                            />
+                                            <circle
+                                                cx={tempBoundary[0].x}
+                                                cy={tempBoundary[0].y}
+                                                r="11"
+                                                fill={theme === 'dark' ? '#0f172a' : '#ffffff'}
+                                                fillOpacity="0.9"
+                                            />
+                                            <circle
+                                                cx={tempBoundary[0].x}
+                                                cy={tempBoundary[0].y}
+                                                r="8"
+                                                fill={liveBoundaryStroke}
+                                                stroke="white"
+                                                strokeWidth="2"
+                                                vectorEffect="non-scaling-stroke"
+                                            />
+                                            <text
+                                                x={tempBoundary[0].x}
+                                                y={tempBoundary[0].y + 3.5}
+                                                textAnchor="middle"
+                                                fontSize="9"
+                                                fontWeight="900"
+                                                fill="white"
+                                            >
+                                                S
+                                            </text>
+                                        </g>
+                                    )}
                                     {(loadedField?.boundaries || []).concat(viewMode === 'CREATE_FIELD' ? currentFieldBoundaries : []).map((bound, bIdx) => (
                                         <polygon
                                             key={bIdx}
                                             points={(bound.points || bound).map(p => `${p.x},${p.y}`).join(' ')}
                                             fill={bIdx === activeBoundaryIdx ? "rgba(234, 179, 8, 0.2)" : "rgba(100, 116, 139, 0.2)"}
                                             stroke={bIdx === activeBoundaryIdx ? "#eab308" : "#64748b"}
-                                            strokeWidth="2"
+                                            strokeWidth={bIdx === activeBoundaryIdx ? 2.8 : 2}
+                                            strokeOpacity={bIdx === activeBoundaryIdx ? 0.9 : 0.55}
                                             strokeDasharray="5,5"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            vectorEffect="non-scaling-stroke"
                                         />
                                     ))}
                                     {previewBoundary && (
@@ -7285,27 +8013,18 @@ const renderLinesPanel = () => {
                                             fill="rgba(34, 197, 94, 0.3)"
                                             stroke="#22c55e"
                                             strokeWidth="3"
+                                            strokeOpacity="0.9"
                                             strokeDasharray="5,5"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            vectorEffect="non-scaling-stroke"
                                         />
                                     )}
                                 </g>
                             </svg>}
 
 
-                            {!isMap3D && coverageTrail.map((point, i) => <div key={i} className="absolute bg-green-500/30" style={{ left: `calc(50% + ${point.x}px)`, top: `calc(60% + ${point.y}px)`, width: '20px', height: '20px', transform: `translate(-50%, -50%) rotate(${point.h}deg) scale(6, 1)` }}></div>)}
-
-                            {/* CLOSING LOOP LINE (Visual Guide) */}
-                            {!isMap3D && isRecordingBoundary && tempBoundary.length > 0 && (
-                                <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none">
-                                    <line
-                                        x1={`calc(50% + ${tempBoundary[0].x}px)`}
-                                        y1={`calc(60% + ${tempBoundary[0].y}px)`}
-                                        x2={`calc(50% + ${worldPos.x}px)`}
-                                        y2={`calc(60% + ${worldPos.y}px)`}
-                                        stroke="orange" strokeWidth="2" strokeDasharray="10,5" strokeOpacity="0.7"
-                                    />
-                                </svg>
-                            )}
+                            {renderCoverage2D()}
 
                             {/* DYNAMIC DRAWING LAYER (RED LINES) & GUIDANCE LINES (BLUE) */}
                             <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none">
@@ -7376,6 +8095,9 @@ const renderLinesPanel = () => {
                     {/* Vehicle anchor: screen-stable in heading-up, independent from the pitched map plane. */}
                     <div
                         data-vehicle-anchor
+                        data-vehicle-scale={vehicleScreenScale.toFixed(4)}
+                        data-implement-width-m={Number(implementSettings.width || 0).toFixed(3)}
+                        data-vehicle-width-m={Math.max(Number(vehicleSettings.frontAxleWidth) || 0, Number(vehicleSettings.rearAxleWidth) || 0).toFixed(3)}
                         className="absolute flex flex-col items-center pointer-events-none z-[15]"
                         style={{
                             left: `calc(50% + ${vehicleScreenOffsetX}px)`,
@@ -7407,27 +8129,27 @@ const renderLinesPanel = () => {
                 </div>
 
                 {/* ... rest of the app ... */}
-                <header className={`h-[72px] min-h-[72px] ${t.bgHeader} backdrop-blur-md grid grid-cols-[minmax(140px,1fr)_minmax(210px,430px)_minmax(190px,auto)] items-center gap-2 xl:gap-4 px-3 xl:px-[3%] z-20 border-b ${t.border}`}>
-                    <div className="min-w-0 flex items-center gap-3">
+                <header data-top-bar className={`relative h-[88px] min-h-[88px] ${t.bgHeader} backdrop-blur-md flex items-center justify-between gap-3 px-3 xl:px-[3%] z-20 border-b ${t.border}`}>
+                    <div className="relative z-20 min-w-0 max-w-[34%] flex items-center gap-3">
                         <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-100'} flex items-center justify-center`}>
                             <MapIcon className="w-5 h-5 text-blue-500" />
                         </div>
                         <div className="min-w-0">
-                            <div className={`flex items-center gap-2 text-[10px] xl:text-xs ${t.textSub} uppercase tracking-wider font-black`}>
+                            <div className={`flex items-center gap-1.5 text-[10px] ${t.textSub} uppercase tracking-[0.06em] font-bold leading-none`}>
                                 <Layers className="w-3 h-3 shrink-0" />
                                 <span className="truncate">Run / {activeTaskRecord?.name || 'No Task'} / {Number(implementSettings.width || 0).toFixed(1)} m</span>
                             </div>
-                            <div className="min-w-0 flex items-center gap-1.5 xl:gap-2">
-                                <span className={`${t.textMain} font-black text-xs xl:text-base truncate`}>{activeFieldRecord?.name || 'No Field Loaded'}</span>
-                                <span className={`${t.textDim} shrink-0`}>/</span>
-                                <span className="text-blue-500 font-black text-xs xl:text-base truncate">{activeLineRecord?.name || getGuidanceModeLabel()}</span>
+                            <div className="mt-1 min-w-0 flex items-center gap-1.5 text-sm leading-none">
+                                <span className={`${t.textMain} font-bold truncate`}>{activeFieldRecord?.name || 'No Field Loaded'}</span>
+                                <span className={`${t.textDim} shrink-0 font-medium`}>/</span>
+                                <span className="text-blue-500 font-bold truncate">{activeLineRecord?.name || getGuidanceModeLabel()}</span>
                             </div>
                         </div>
                     </div>
-                    <div className="flex justify-center">
+                    <div className="absolute left-1/2 top-0 z-10 h-full w-[480px] max-w-[46%] -translate-x-1/2">
                         {renderGuidanceLightbar()}
                     </div>
-                    <div className="min-w-0">
+                    <div className="relative z-20 min-w-0 ml-auto">
                         {renderRunSafetyCluster()}
                     </div>
                 </header>
@@ -7438,65 +8160,81 @@ const renderLinesPanel = () => {
                 {renderProductivityPanel()}
 
                 {/* BOTTOM BAR */}
-                <div className={`absolute bottom-0 left-0 right-0 h-[98px] min-h-[92px] ${t.bgBottom} backdrop-blur-xl border-t ${t.border} grid grid-cols-[minmax(170px,0.75fr)_minmax(260px,1.2fr)_minmax(200px,0.9fr)] xl:grid-cols-[minmax(304px,0.95fr)_minmax(260px,1.15fr)_minmax(220px,0.9fr)] items-center gap-2 xl:gap-4 px-2 xl:px-[3%] z-30`}>
-                    <div className="min-w-0 h-full py-3 grid grid-cols-2 xl:grid-cols-[88px_104px_92px] gap-2 xl:gap-2.5 justify-start">
-                        <button onClick={handleUTurn} className={`h-[74px] w-full px-2 rounded-xl border ${turnAssistActive ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'}`} flex flex-col items-center justify-center active:scale-95`}>
-                            <CornerUpLeft className={`w-7 h-7 ${turnAssistActive ? 'text-blue-500' : t.textDim}`}/>
-                            <span className={`text-[11px] font-black ${turnAssistActive ? 'text-blue-500' : t.textSub}`}>U-TURN</span>
-                        </button>
-                        <button onClick={() => setIsRecording(!isRecording)} className={`h-[74px] w-full px-2 rounded-xl border flex flex-col items-center justify-center ${isRecording?'bg-red-900/20 border-red-500 text-red-500':`${theme==='dark'?'bg-slate-900 border-slate-700':'bg-gray-100 border-gray-300'} ${t.textDim}`}`}>
-                            <div className={`w-4 h-4 rounded-full ${isRecording?'bg-red-500 motion-safe:animate-pulse':'bg-slate-500'}`}/>
-                            <span className="text-[11px] font-black tracking-widest">{isRecording?'REC':'COVERAGE'}</span>
+                <div data-bottom-bar className={`absolute bottom-0 left-0 right-0 h-[88px] min-h-[88px] ${t.bgBottom} backdrop-blur-xl border-t ${t.border} grid grid-cols-[minmax(170px,1fr)_minmax(300px,480px)_minmax(170px,1fr)] xl:grid-cols-[minmax(280px,1fr)_480px_minmax(280px,1fr)] items-stretch gap-0 px-0 z-30`}>
+                    <div className="min-w-0 h-full grid grid-cols-2 gap-0">
+                        <button data-bottom-action="uturn" onClick={handleUTurn} className={`h-full w-full px-4 border-0 border-r ${t.borderCard} ${turnAssistActive ? 'bg-blue-500/8' : 'bg-transparent'} flex items-center justify-center gap-2.5 text-left active:bg-blue-500/10 hover:bg-blue-500/5 transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/35`}>
+                            <span className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${turnAssistActive ? 'bg-blue-500/15 text-blue-500' : `${theme === 'dark' ? 'bg-slate-800/80' : 'bg-slate-100'} ${t.textDim}`}`}>
+                                <CornerUpLeft className="w-5 h-5"/>
+                            </span>
+                            <span className="min-w-0">
+                                <span className={`block text-[10px] font-bold tracking-[0.06em] ${turnAssistActive ? 'text-blue-500' : t.textMain}`}>U-TURN</span>
+                                <span className={`mt-0.5 block text-[9px] font-bold leading-none ${turnAssistActive ? 'text-blue-500' : t.textSub}`}>{turnAssistActive ? 'ACTIVE' : 'TURN SETUP'}</span>
+                            </span>
                         </button>
                         <button
+                            data-bottom-action="coverage"
                             type="button"
-                            aria-label={`Productivity summary: ${workedArea.toFixed(2)} hectares done`}
-                            onClick={() => { setProductivityOpen(prev => !prev); setRtkQualityOpen(false); setEventHistoryOpen(false); }}
+                            aria-pressed={isRecording}
+                            aria-label={isRecording ? 'Pause coverage recording' : 'Start coverage recording'}
                             disabled={isRecordingBoundary}
-                            className={`hidden xl:flex h-[74px] w-full px-2 rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900':'bg-gray-100'} flex-col items-center justify-center focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed`}
+                            onClick={handleCoverageRecordingToggle}
+                            className={`h-full w-full px-4 border-0 border-r ${t.borderCard} flex items-center justify-center gap-2.5 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-inset ${isRecording ? 'bg-red-500/8 text-red-500 focus:ring-red-500/35' : `bg-transparent ${t.textMain} hover:bg-blue-500/5 focus:ring-blue-500/35`}`}
                         >
-                            <span className={`text-[10px] font-black uppercase ${t.textSub}`}>Area</span>
-                            <span className={`text-2xl font-black leading-none ${t.textMain}`}>{workedArea.toFixed(2)}</span>
-                            <span className={`text-[10px] font-black uppercase ${t.textSub}`}>ha</span>
+                            <span className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${isRecording ? 'bg-red-500/15 text-red-500' : theme === 'dark' ? 'bg-slate-800/80 text-slate-400' : 'bg-slate-100 text-slate-500'}`}>
+                                <Disc className={`w-5 h-5 ${isRecording ? 'motion-safe:animate-pulse' : ''}`}/>
+                            </span>
+                            <span className="min-w-0">
+                                <span className="block text-[10px] font-bold tracking-[0.06em]">COVERAGE</span>
+                                <span className={`mt-0.5 block text-[9px] font-bold leading-none ${isRecording ? 'text-red-500' : t.textSub}`}>{isRecording ? 'RECORDING' : 'READY'}</span>
+                            </span>
                         </button>
                     </div>
 
-                    <div className={`h-[74px] w-full rounded-xl border ${t.borderCard} ${theme==='dark'?'bg-slate-900/80':'bg-gray-100/90'} px-3 shadow-sm`}>
+                    <div data-bottom-telemetry className={`h-full w-full border-0 border-r ${t.borderCard} bg-transparent px-2`}>
                         <div className="grid grid-cols-3 h-full items-center text-center">
-                            <div className="min-w-0 flex flex-col items-center justify-center">
-                                <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Speed</div>
-                                <div className={`text-[34px] font-black leading-none ${t.textMain}`}>{Math.abs(speed).toFixed(1)}</div>
-                                <div className={`text-[11px] ${t.textSub} uppercase font-black`}>km/h</div>
+                            <button
+                                type="button"
+                                aria-label={`Productivity summary: ${workedArea.toFixed(2)} hectares done`}
+                                onClick={() => { setProductivityOpen(prev => !prev); setRtkQualityOpen(false); setEventHistoryOpen(false); }}
+                                disabled={isRecordingBoundary}
+                                className="min-w-0 h-12 flex flex-col items-center justify-center transition-colors hover:bg-blue-500/5 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <div className={`text-[9px] uppercase font-bold tracking-[0.06em] leading-none ${t.textSub}`}>Area</div>
+                                <div className={`mt-1 text-xl font-black leading-none tabular-nums ${t.textMain}`}>{workedArea.toFixed(2)}</div>
+                                <div className={`mt-1 text-[10px] uppercase font-bold leading-none ${t.textSub}`}>ha</div>
+                            </button>
+                            <div className={`min-w-0 h-12 border-x ${t.borderCard} flex flex-col items-center justify-center text-center`}>
+                                <div className={`text-[9px] uppercase font-bold tracking-[0.06em] leading-none ${t.textSub}`}>Speed</div>
+                                <div className={`mt-1 text-xl font-black leading-none tabular-nums ${t.textMain}`}>{Math.abs(speed).toFixed(1)}</div>
+                                <div className={`mt-1 text-[10px] uppercase font-bold leading-none ${t.textSub}`}>km/h</div>
                             </div>
-                            <div className={`min-w-0 h-[52px] border-x ${t.borderCard} flex flex-col items-center justify-center`}>
-                                <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Steer Cmd</div>
-                                <div className={`text-xl font-black ${Math.abs(steeringAngle) > 1 ? 'text-blue-500' : t.textMain}`}>{steeringAngle.toFixed(1)}°</div>
-                                <div className={`text-[11px] ${t.textSub} uppercase font-black`}>{steeringMode}</div>
-                            </div>
-                            <div className="min-w-0 flex flex-col items-center justify-center">
-                                <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Heading</div>
-                                <div className={`text-xl font-black ${t.textMain}`}>{heading.toFixed(1)}°</div>
-                                <div className={`text-[11px] ${t.textSub} uppercase font-black`}>{getCardinalShortDirection(heading)}</div>
+                            <div className="min-w-0 h-12 flex flex-col items-center justify-center text-center">
+                                <div className={`text-[9px] uppercase font-bold tracking-[0.06em] leading-none ${t.textSub}`}>Heading</div>
+                                <div className={`mt-1 text-xl font-black leading-none tabular-nums ${t.textMain}`}>{heading.toFixed(1)}&deg;</div>
+                                <div className={`mt-1 text-[10px] uppercase font-bold leading-none ${t.textSub}`}>{getCardinalShortDirection(heading)}</div>
                             </div>
                         </div>
                     </div>
 
-                    <div className="min-w-0 h-full py-3 flex items-center justify-end">
-                        <button
-                            type="button"
-                            onClick={handleAutosteerPrimary}
-                            aria-label={`Autosteer ${autosteerStateLabel}. ${autosteerPrimaryLabel}. ${autosteerSubLabel}`}
-                            className={`h-[74px] w-full max-w-[300px] rounded-xl flex items-center justify-between px-4 xl:px-5 shadow-xl active:scale-95 border transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 ${autosteerButtonTone}`}
-                        >
-                            <div className="flex flex-col items-start min-w-0">
-                                <span className={`text-[11px] font-black uppercase tracking-wide ${autosteerAccentText}`}>Autosteer / {autosteerStateLabel}</span>
-                                <span className="text-xl xl:text-2xl font-black text-white truncate">{autosteerPrimaryLabel}</span>
-                                <span className={`max-w-[190px] text-[10px] font-bold truncate ${autosteerStateLabel === 'BLOCKED' ? 'text-slate-300' : 'text-white/90'}`}>{autosteerSubLabel}</span>
-                            </div>
-                            <div className={`shrink-0 w-11 h-11 xl:w-12 xl:h-12 rounded-full flex items-center justify-center ${autosteerIconTone}`}>
-                                <AutosteerStatusIcon className="w-8 h-8"/>
-                            </div>
-                        </button>
+                    <div className="min-w-0 h-full flex items-stretch justify-end">
+                        <div className="h-full w-full">
+                            <button
+                                data-bottom-autosteer
+                                type="button"
+                                onClick={handleAutosteerPrimary}
+                                aria-label={`Autosteer ${autosteerStateLabel}. ${autosteerPrimaryLabel}. ${autosteerSubLabel}`}
+                                className={`w-full min-w-0 h-full rounded-none border-0 flex items-center justify-between px-5 active:brightness-95 transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-white/40 ${autosteerButtonTone}`}
+                            >
+                                <div className="flex flex-col items-start min-w-0">
+                                    <span className={`text-[9px] font-bold uppercase tracking-[0.06em] ${autosteerAccentText}`}>Autosteer / {autosteerStateLabel}</span>
+                                    <span className="max-w-full text-xl xl:text-[22px] font-black text-white leading-none truncate">{autosteerPrimaryLabel}</span>
+                                    <span className={`max-w-[170px] text-[8px] font-bold truncate ${autosteerStateLabel === 'BLOCKED' ? 'text-slate-300' : 'text-white/90'}`}>{autosteerSubLabel}</span>
+                                </div>
+                                <div className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${autosteerIconTone}`}>
+                                    <AutosteerStatusIcon className="w-6 h-6"/>
+                                </div>
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -7576,7 +8314,7 @@ const renderLinesPanel = () => {
                                 autoFocus
                             />
                             <div className="flex justify-end gap-3">
-                                <button onClick={() => {setBoundaryNameModalOpen(false); setDockMenuOpen(false); actions.setIsRecordingBoundary(false); actions.setTempBoundary([])}} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Cancel</button>
+                                <button onClick={() => { setBoundaryNameModalOpen(false); cancelBoundaryRecording(); }} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Cancel</button>
                                 <button onClick={handleSaveBoundary} className="px-6 py-2 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500">Save</button>
                             </div>
                         </div>
@@ -7709,7 +8447,7 @@ const renderLinesPanel = () => {
                     <aside
                         data-run-dock
                         aria-label="Contextual run controls"
-                        className="absolute right-3 top-[84px] bottom-[112px] z-[35] pointer-events-none flex items-start"
+                        className="absolute right-0 top-[104px] bottom-[112px] z-[35] pointer-events-none"
                     >
                         {renderActionDock()}
                     </aside>

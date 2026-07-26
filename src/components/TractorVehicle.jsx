@@ -10,7 +10,20 @@ const TractorVehicle2D = ({ mode, steeringAngle, implementWidth, vehicleSettings
   const implementY = 205;
   const rearTrack = clamp((vehicleSettings?.rearAxleWidth || 2.65) * 42, 96, 118);
   const frontTrack = clamp((vehicleSettings?.frontAxleWidth || 1.95) * 40, 72, 94);
-  const implementVisualWidth = clamp((implementWidth || 3) * 48, 126, 194);
+  const metersToVisualUnits = 48;
+  const implementVisualWidth = Math.max(0.25, Number(implementWidth) || 3) * metersToVisualUnits;
+  const physicalVehicleWidth = Math.max(
+    0.6,
+    Number(vehicleSettings?.frontAxleWidth) || 0,
+    Number(vehicleSettings?.rearAxleWidth) || 0
+  );
+  const unscaledVehicleWidth = Math.max(rearTrack + 24, frontTrack + 18, 96);
+  const tractorWidthScale = clamp(
+    physicalVehicleWidth * metersToVisualUnits / unscaledVehicleWidth,
+    0.32,
+    1.4
+  );
+  const tractorWidthTransform = `translate(${cx} 0) scale(${tractorWidthScale} 1) translate(${-cx} 0)`;
   const bodyColor = mode === 'AUTO' ? '#22c55e' : '#2563eb';
   const bodyDark = mode === 'AUTO' ? '#15803d' : '#1d4ed8';
   const bodyLight = mode === 'AUTO' ? '#86efac' : '#60a5fa';
@@ -41,7 +54,9 @@ const TractorVehicle2D = ({ mode, steeringAngle, implementWidth, vehicleSettings
         </linearGradient>
       </defs>
 
-      <ellipse cx={cx} cy="141" rx="62" ry="94" fill="#0f172a" opacity="0.12" />
+      <g transform={tractorWidthTransform}>
+        <ellipse cx={cx} cy="141" rx="62" ry="94" fill="#0f172a" opacity="0.12" />
+      </g>
 
       <path d={`M${cx - 6} ${rearY + 18} L${cx + 6} ${rearY + 18} L${cx + 4} ${hitchY} L${cx - 4} ${hitchY} Z`} fill="#475569" />
       <rect x={cx - implementVisualWidth / 2} y={implementY} width={implementVisualWidth} height="10" rx="2" fill="#f59e0b" stroke="#b45309" strokeWidth="2" />
@@ -50,8 +65,9 @@ const TractorVehicle2D = ({ mode, steeringAngle, implementWidth, vehicleSettings
         return <line key={i} x1={x} y1={implementY + 2} x2={x} y2={implementY + 15} stroke="#78350f" strokeWidth="2" opacity="0.75" />;
       })}
 
-      <rect x={cx - rearTrack / 2} y={rearY - 4} width={rearTrack} height="8" rx="4" fill="#334155" />
-      <rect x={cx - frontTrack / 2} y={frontY - 3} width={frontTrack} height="6" rx="3" fill="#334155" />
+      <g transform={tractorWidthTransform}>
+        <rect x={cx - rearTrack / 2} y={rearY - 4} width={rearTrack} height="8" rx="4" fill="#334155" />
+        <rect x={cx - frontTrack / 2} y={frontY - 3} width={frontTrack} height="6" rx="3" fill="#334155" />
 
       <Tire x={cx - rearTrack / 2} y={rearY} width={24} height={66} hub={7} />
       <Tire x={cx + rearTrack / 2} y={rearY} width={24} height={66} hub={7} />
@@ -69,7 +85,8 @@ const TractorVehicle2D = ({ mode, steeringAngle, implementWidth, vehicleSettings
       <path d={`M${cx + 47} 120 Q${cx + 48} 147 ${cx + 37} 171 L${cx + 29} 168 L${cx + 30} 126 Z`} fill={bodyColor} stroke={bodyDark} strokeWidth="3" />
       <line x1={cx} y1="58" x2={cx} y2="177" stroke="#93c5fd" strokeWidth="2" opacity="0.45" />
 
-      <path d={`M${cx} 23 L${cx + 14} 45 L${cx} 40 L${cx - 14} 45 Z`} fill="#ef4444" stroke="#991b1b" strokeWidth="2" />
+        <path d={`M${cx} 23 L${cx + 14} 45 L${cx} 40 L${cx - 14} 45 Z`} fill="#ef4444" stroke="#991b1b" strokeWidth="2" />
+      </g>
     </svg>
   );
 };
@@ -82,7 +99,20 @@ const TractorVehicle3DStyled = ({ mode, steeringAngle, implementWidth, vehicleSe
   const bodyLight = mode === 'AUTO' ? '#bbf7d0' : '#93c5fd';
   const rearTrack = clamp((vehicleSettings?.rearAxleWidth || 2.65) * 40, 96, 118);
   const frontTrack = clamp((vehicleSettings?.frontAxleWidth || 1.95) * 38, 72, 92);
-  const implementVisualWidth = clamp((implementWidth || 3) * 48, 126, 194);
+  const metersToVisualUnits = 48;
+  const implementVisualWidth = Math.max(0.25, Number(implementWidth) || 3) * metersToVisualUnits;
+  const physicalVehicleWidth = Math.max(
+    0.6,
+    Number(vehicleSettings?.frontAxleWidth) || 0,
+    Number(vehicleSettings?.rearAxleWidth) || 0
+  );
+  const unscaledVehicleWidth = Math.max(rearTrack + 42, frontTrack + 29, 110);
+  const tractorWidthScale = clamp(
+    physicalVehicleWidth * metersToVisualUnits / unscaledVehicleWidth,
+    0.32,
+    1.4
+  );
+  const tractorWidthTransform = `translate(${cx} 0) scale(${tractorWidthScale} 1) translate(${-cx} 0)`;
 
   const Tire3D = ({ x, y, width, height, steer = false, hub = 7, rear = false }) => (
     <g transform={steer ? `rotate(${steeringAngle}, ${x}, ${y})` : undefined}>
@@ -117,7 +147,9 @@ const TractorVehicle3DStyled = ({ mode, steeringAngle, implementWidth, vehicleSe
         </linearGradient>
       </defs>
 
-      <ellipse cx={cx} cy="152" rx="68" ry="84" fill="#0f172a" opacity="0.14" />
+      <g transform={tractorWidthTransform}>
+        <ellipse cx={cx} cy="152" rx="68" ry="84" fill="#0f172a" opacity="0.14" />
+      </g>
       <path d={`M${cx - 7} 174 L${cx + 7} 174 L${cx + 4} 205 L${cx - 4} 205 Z`} fill="#475569" />
       <circle cx={cx} cy="212" r="4" fill="#f59e0b" stroke="#b45309" strokeWidth="2" />
       <rect x={cx - implementVisualWidth / 2} y="222" width={implementVisualWidth} height="10" rx="2" fill="#f59e0b" stroke="#b45309" strokeWidth="2" />
@@ -126,25 +158,27 @@ const TractorVehicle3DStyled = ({ mode, steeringAngle, implementWidth, vehicleSe
         return <line key={i} x1={x} y1="224" x2={x} y2="237" stroke="#78350f" strokeWidth="2" opacity="0.75" />;
       })}
 
-      <rect x={cx - rearTrack / 2} y="147" width={rearTrack} height="10" rx="5" fill="#334155" />
-      <rect x={cx - frontTrack / 2} y="88" width={frontTrack} height="7" rx="4" fill="#334155" />
+      <g transform={tractorWidthTransform}>
+        <rect x={cx - rearTrack / 2} y="147" width={rearTrack} height="10" rx="5" fill="#334155" />
+        <rect x={cx - frontTrack / 2} y="88" width={frontTrack} height="7" rx="4" fill="#334155" />
 
-      <Tire3D x={cx - rearTrack / 2} y={155} width={28} height={76} hub={8} rear />
-      <Tire3D x={cx + rearTrack / 2} y={155} width={28} height={76} hub={8} rear />
-      <Tire3D x={cx - frontTrack / 2} y={89} width={19} height={50} hub={5} steer />
-      <Tire3D x={cx + frontTrack / 2} y={89} width={19} height={50} hub={5} steer />
+        <Tire3D x={cx - rearTrack / 2} y={155} width={28} height={76} hub={8} rear />
+        <Tire3D x={cx + rearTrack / 2} y={155} width={28} height={76} hub={8} rear />
+        <Tire3D x={cx - frontTrack / 2} y={89} width={19} height={50} hub={5} steer />
+        <Tire3D x={cx + frontTrack / 2} y={89} width={19} height={50} hub={5} steer />
 
-      <path d={`M${cx - 29} 59 L${cx + 29} 59 L${cx + 39} 117 L${cx - 39} 117 Z`} fill="url(#tractor3d-body)" stroke={bodyDark} strokeWidth="3" strokeLinejoin="round" />
-      <path d={`M${cx - 42} 112 L${cx + 42} 112 L${cx + 31} 181 L${cx - 31} 181 Z`} fill="url(#tractor3d-body)" stroke={bodyDark} strokeWidth="3" strokeLinejoin="round" />
-      <path d={`M${cx - 51} 124 Q${cx - 55} 150 ${cx - 39} 180 L${cx - 29} 174 L${cx - 33} 120 Z`} fill={bodyColor} stroke={bodyDark} strokeWidth="3" />
-      <path d={`M${cx + 51} 124 Q${cx + 55} 150 ${cx + 39} 180 L${cx + 29} 174 L${cx + 33} 120 Z`} fill={bodyColor} stroke={bodyDark} strokeWidth="3" />
+        <path d={`M${cx - 29} 59 L${cx + 29} 59 L${cx + 39} 117 L${cx - 39} 117 Z`} fill="url(#tractor3d-body)" stroke={bodyDark} strokeWidth="3" strokeLinejoin="round" />
+        <path d={`M${cx - 42} 112 L${cx + 42} 112 L${cx + 31} 181 L${cx - 31} 181 Z`} fill="url(#tractor3d-body)" stroke={bodyDark} strokeWidth="3" strokeLinejoin="round" />
+        <path d={`M${cx - 51} 124 Q${cx - 55} 150 ${cx - 39} 180 L${cx - 29} 174 L${cx - 33} 120 Z`} fill={bodyColor} stroke={bodyDark} strokeWidth="3" />
+        <path d={`M${cx + 51} 124 Q${cx + 55} 150 ${cx + 39} 180 L${cx + 29} 174 L${cx + 33} 120 Z`} fill={bodyColor} stroke={bodyDark} strokeWidth="3" />
 
-      <rect x={cx - 26} y="103" width="52" height="50" rx="8" fill="url(#tractor3d-glass)" stroke={bodyDark} strokeWidth="3" />
-      <path d={`M${cx - 38} 88 L${cx + 38} 88 L${cx + 30} 107 L${cx - 30} 107 Z`} fill={bodyDark} stroke="#0f172a" strokeWidth="2" />
-      <path d={`M${cx - 23} 66 L${cx + 23} 66 L${cx + 18} 102 L${cx - 18} 102 Z`} fill={bodyColor} stroke={bodyDark} strokeWidth="2" />
-      <line x1={cx} y1="64" x2={cx} y2="179" stroke="#bfdbfe" strokeWidth="2" opacity="0.5" />
-      <path d={`M${cx - 18} 153 L${cx + 18} 153 L${cx + 13} 182 L${cx - 13} 182 Z`} fill="#1e293b" opacity="0.52" />
-      <path d={`M${cx} 30 L${cx + 13} 51 L${cx} 46 L${cx - 13} 51 Z`} fill="#ef4444" stroke="#991b1b" strokeWidth="2" />
+        <rect x={cx - 26} y="103" width="52" height="50" rx="8" fill="url(#tractor3d-glass)" stroke={bodyDark} strokeWidth="3" />
+        <path d={`M${cx - 38} 88 L${cx + 38} 88 L${cx + 30} 107 L${cx - 30} 107 Z`} fill={bodyDark} stroke="#0f172a" strokeWidth="2" />
+        <path d={`M${cx - 23} 66 L${cx + 23} 66 L${cx + 18} 102 L${cx - 18} 102 Z`} fill={bodyColor} stroke={bodyDark} strokeWidth="2" />
+        <line x1={cx} y1="64" x2={cx} y2="179" stroke="#bfdbfe" strokeWidth="2" opacity="0.5" />
+        <path d={`M${cx - 18} 153 L${cx + 18} 153 L${cx + 13} 182 L${cx - 13} 182 Z`} fill="#1e293b" opacity="0.52" />
+        <path d={`M${cx} 30 L${cx + 13} 51 L${cx} 46 L${cx - 13} 51 Z`} fill="#ef4444" stroke="#991b1b" strokeWidth="2" />
+      </g>
     </svg>
   );
 };
