@@ -135,6 +135,8 @@ const App = () => {
   const [showArchivedLines, setShowArchivedLines] = useState(false);
   const [lineCatalogFilter, setLineCatalogFilter] = useState('ALL');
   const [selectedCatalogLineId, setSelectedCatalogLineId] = useState(null);
+  const [selectedBoundaryIndex, setSelectedBoundaryIndex] = useState(null);
+  const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [rtkTestState, setRtkTestState] = useState('idle');
   const [baseSurveyState, setBaseSurveyState] = useState('idle');
   const readUiLocalState = () => {
@@ -547,6 +549,33 @@ const App = () => {
       if (!raw) return 'Not saved';
       const parsed = new Date(raw);
       return Number.isNaN(parsed.getTime()) ? raw : parsed.toLocaleDateString();
+  };
+
+  const getCreatedDateTime = (entity) => {
+      const raw = entity?.createdAt || entity?.date;
+      if (!raw) return { date: 'Not recorded', time: 'Time unavailable', exact: false };
+
+      const parsed = new Date(raw);
+      if (Number.isNaN(parsed.getTime())) {
+          return { date: String(raw), time: 'Time unavailable', exact: false };
+      }
+
+      const hasExactTime = Boolean(entity?.createdAt);
+      return {
+          date: parsed.toLocaleDateString([], { year: 'numeric', month: 'short', day: '2-digit' }),
+          time: hasExactTime
+              ? parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+              : 'Time unavailable',
+          exact: hasExactTime
+      };
+  };
+
+  const getCreatedLocation = (entity, field) => entity?.createdLocation || entity?.location || field?.name || 'Location unavailable';
+
+  const getCreatedPosition = (entity) => {
+      const position = entity?.createdPosition;
+      if (!Number.isFinite(position?.x) || !Number.isFinite(position?.y)) return 'Position unavailable';
+      return `X ${position.x.toFixed(1)} m / Y ${position.y.toFixed(1)} m`;
   };
 
   // --- 1. CLOCK ---
@@ -1250,15 +1279,26 @@ const App = () => {
   const startFieldCreation = () => { actions.setViewMode('CREATE_FIELD'); actions.setNewFieldName(''); actions.setCurrentFieldBoundaries([]); };
   const handleTaskAction = (task, action) => {
         const newStatus = action === 'start' ? 'In Progress' : action === 'pause' ? 'Paused' : 'Done';
+        const actionTime = new Date().toISOString();
         const updatedFields = fields.map(f => {
             if (f.id === selectedFieldId) {
-                const newTasks = (f.tasks || []).map(t => t.id === task.id ? { ...t, status: newStatus } : t);
+                const newTasks = (f.tasks || []).map(t => t.id === task.id ? {
+                    ...t,
+                    status: newStatus,
+                    updatedAt: actionTime,
+                    ...(action === 'start' ? { startedAt: actionTime } : {}),
+                    ...(action === 'pause' ? { pausedAt: actionTime } : {}),
+                    ...(action === 'finish' ? { completedAt: actionTime } : {})
+                } : t);
                 return { ...f, tasks: newTasks };
             } return f;
         });
         actions.setFields(updatedFields);
+        if (loadedField?.id === selectedFieldId) {
+            actions.setLoadedField(updatedFields.find(field => field.id === selectedFieldId));
+        }
         if (action === 'start') actions.setActiveTaskId(task.id);
-        else if (action === 'finish') actions.setActiveTaskId(null);
+        else actions.setActiveTaskId(null);
   }
 
   const updateSelectedFieldLines = (updater) => {
@@ -1369,12 +1409,17 @@ const App = () => {
 
   const handleSaveLine = () => {
     if (!tempLineName.trim()) { showNotification("Please enter line name", "warning"); return; }
+    const createdAt = new Date();
+    const lineField = fields.find(field => field.id === selectedFieldId);
     const newLine = {
         id: Date.now(),
         name: tempLineName,
         type: lineType,
         isMulti: isMultiLineMode,
-        date: new Date().toISOString().split('T')[0],
+        date: createdAt.toISOString().split('T')[0],
+        createdAt: createdAt.toISOString(),
+        createdLocation: lineField?.name || loadedField?.name || 'Location unavailable',
+        createdPosition: { x: worldPos.x, y: worldPos.y },
         quality: 'Good',
         archived: false,
         points: { a: pointA, b: pointB, curve: curvePoints, pivot: { center: pivotCenter, radius: pivotRadius }, aplus: { point: aPlusPoint, heading: aPlusHeading } }
@@ -1609,7 +1654,16 @@ const App = () => {
       // Use preview boundary as final data
       const finalPoints = previewBoundary || tempBoundary;
 
-      const newBoundaryObj = { name: tempBoundaryName, points: finalPoints };
+      const boundaryField = fields.find(field => field.id === selectedFieldId);
+      const newBoundaryObj = {
+          name: tempBoundaryName,
+          points: finalPoints,
+          createdAt: new Date().toISOString(),
+          createdLocation: viewMode === 'CREATE_FIELD'
+              ? (newFieldName.trim() || 'New field draft')
+              : (boundaryField?.name || loadedField?.name || 'Location unavailable'),
+          createdPosition: { x: worldPos.x, y: worldPos.y }
+      };
       let updatedBoundaries = [];
 
       if (viewMode === 'CREATE_FIELD') {
@@ -1618,6 +1672,7 @@ const App = () => {
           actions.setCurrentFieldBoundaries(updatedBoundaries);
           // Set as active immediately for preview
           actions.setActiveBoundaryIdx(updatedBoundaries.length - 1);
+          setSelectedBoundaryIndex(updatedBoundaries.length - 1);
       } else {
           // Update existing field
           const activeField = fields.find(f => f.id === selectedFieldId);
@@ -1636,6 +1691,7 @@ const App = () => {
           actions.setLoadedField(updatedActiveField);
 
           actions.setActiveBoundaryIdx(updatedBoundaries.length - 1);
+          setSelectedBoundaryIndex(updatedBoundaries.length - 1);
       }
 
       setBoundaryNameModalOpen(false);
@@ -1693,6 +1749,7 @@ const App = () => {
                 actions.setLoadedField({...loadedField, boundaries: newBounds});
             }
             if (activeBoundaryIdx === index) actions.setActiveBoundaryIdx(0);
+            setSelectedBoundaryIndex(null);
             showNotification("Boundary Deleted", "info");
       } else if (type === 'line') {
             const updatedFields = fields.map(f => {
@@ -1727,6 +1784,7 @@ const App = () => {
             if (activeTaskId === id) {
                 actions.setActiveTaskId(null);
             }
+            setSelectedTaskId(prev => prev === id ? null : prev);
             showNotification("Task Deleted", "info");
       }
       setDeleteModalOpen(false);
@@ -1746,14 +1804,43 @@ const App = () => {
   const saveNewField = () => {
       if (!newFieldName) return showNotification("Enter field name", "warning");
       const area = (currentFieldBoundaries.reduce((acc, b) => acc + b.points.length, 0) * 0.05).toFixed(1);
-      const newField = { id: Date.now(), name: newFieldName, area: area + " ha", lastUsed: "Just now", boundaries: currentFieldBoundaries, lines: [], tasks: [] };
+      const normalizedBoundaries = currentFieldBoundaries.map(boundary => ({
+          ...boundary,
+          createdLocation: !boundary?.createdLocation || boundary.createdLocation === 'New field draft'
+              ? newFieldName
+              : boundary.createdLocation
+      }));
+      const newField = { id: Date.now(), name: newFieldName, area: area + " ha", lastUsed: "Just now", boundaries: normalizedBoundaries, lines: [], tasks: [] };
       actions.setFields(prev => [...prev, newField]);
       actions.setSelectedFieldId(newField.id);
       actions.setViewMode('LIST');
       showNotification("Field Saved Successfully", "success");
   };
   const startTaskCreation = () => actions.setViewMode('CREATE_TASK');
-  const saveNewTask = (type) => { const newTask = { id: Date.now(), name: `${type} ${new Date().getFullYear()}`, type, date: "Today", status: "Pending" }; const updatedFields = fields.map(f => { if (f.id === selectedFieldId) return { ...f, tasks: [newTask, ...(f.tasks || [])] }; return f; }); actions.setFields(updatedFields); actions.setViewMode('LIST'); showNotification(`Task "${newTask.name}" Created`, "success"); };
+  const saveNewTask = (type) => {
+      const createdAt = new Date();
+      const taskField = fields.find(field => field.id === selectedFieldId);
+      const newTask = {
+          id: Date.now(),
+          name: `${type} ${createdAt.getFullYear()}`,
+          type,
+          date: createdAt.toISOString(),
+          createdAt: createdAt.toISOString(),
+          createdLocation: taskField?.name || loadedField?.name || 'Location unavailable',
+          createdPosition: { x: worldPos.x, y: worldPos.y },
+          status: "Pending"
+      };
+      const updatedFields = fields.map(f => f.id === selectedFieldId
+          ? { ...f, tasks: [newTask, ...(f.tasks || [])] }
+          : f);
+      actions.setFields(updatedFields);
+      if (loadedField?.id === selectedFieldId) {
+          actions.setLoadedField(updatedFields.find(field => field.id === selectedFieldId));
+      }
+      setSelectedTaskId(newTask.id);
+      actions.setViewMode('LIST');
+      showNotification(`Task "${newTask.name}" Created`, "success");
+  };
 
   const handleLoadField = () => {
       const field = fields.find(f => f.id === selectedFieldId);
@@ -3448,33 +3535,112 @@ const App = () => {
       };
       const segmentNodes = [];
 
-      for (let index = 1; index < points.length; index++) {
-          const start = points[index - 1];
-          const end = points[index];
+      const smoothCoverageCenterline = (sourcePoints) => {
+          if (sourcePoints.length < 3) return sourcePoints;
+          const smoothed = [];
+          const subdivisions = 3;
+
+          for (let index = 0; index < sourcePoints.length - 1; index++) {
+              const p0 = sourcePoints[Math.max(0, index - 1)];
+              const p1 = sourcePoints[index];
+              const p2 = sourcePoints[index + 1];
+              const p3 = sourcePoints[Math.min(sourcePoints.length - 1, index + 2)];
+
+              for (let step = 0; step < subdivisions; step++) {
+                  const tValue = step / subdivisions;
+                  const t2 = tValue * tValue;
+                  const t3 = t2 * tValue;
+                  smoothed.push({
+                      x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * tValue + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+                      y: 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * tValue + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3)
+                  });
+              }
+          }
+
+          smoothed.push(sourcePoints[sourcePoints.length - 1]);
+          return smoothed;
+      };
+
+      const getUnitDirection = (start, end) => {
+          if (!start || !end) return null;
           const dx = end.x - start.x;
           const dy = end.y - start.y;
           const length = Math.hypot(dx, dy);
-          if (length < 0.1) continue;
-          const normal = { x: -dy / length, y: dx / length };
-          const polygon = projectPolygon([
-              { x: start.x + normal.x * halfWidth, y: start.y + normal.y * halfWidth },
-              { x: end.x + normal.x * halfWidth, y: end.y + normal.y * halfWidth },
-              { x: end.x - normal.x * halfWidth, y: end.y - normal.y * halfWidth },
-              { x: start.x - normal.x * halfWidth, y: start.y - normal.y * halfWidth }
-          ]);
-          if (!polygon) continue;
+          return length > 0.001 ? { x: dx / length, y: dy / length } : null;
+      };
+
+      const centerline = smoothCoverageCenterline(points);
+      const ribbonSamples = centerline.map((point, index) => {
+          const previousDirection = index > 0
+              ? getUnitDirection(centerline[index - 1], point)
+              : getUnitDirection(point, centerline[index + 1]);
+          const nextDirection = index < centerline.length - 1
+              ? getUnitDirection(point, centerline[index + 1])
+              : getUnitDirection(centerline[index - 1], point);
+          const fallbackDirection = previousDirection || nextDirection || { x: 0, y: -1 };
+          const incoming = previousDirection || fallbackDirection;
+          const outgoing = nextDirection || fallbackDirection;
+          const incomingNormal = { x: -incoming.y, y: incoming.x };
+          const outgoingNormal = { x: -outgoing.y, y: outgoing.x };
+          const normalSum = {
+              x: incomingNormal.x + outgoingNormal.x,
+              y: incomingNormal.y + outgoingNormal.y
+          };
+          const normalSumLength = Math.hypot(normalSum.x, normalSum.y);
+          const joinNormal = normalSumLength > 0.001
+              ? { x: normalSum.x / normalSumLength, y: normalSum.y / normalSumLength }
+              : outgoingNormal;
+          const joinDot = Math.abs(joinNormal.x * outgoingNormal.x + joinNormal.y * outgoingNormal.y);
+          const miterLength = Math.min(halfWidth * 1.7, halfWidth / Math.max(0.36, joinDot));
+
+          return {
+              left: {
+                  x: point.x + joinNormal.x * miterLength,
+                  y: point.y + joinNormal.y * miterLength
+              },
+              right: {
+                  x: point.x - joinNormal.x * miterLength,
+                  y: point.y - joinNormal.y * miterLength
+              }
+          };
+      });
+
+      const projectedRibbonChunks = [];
+      let currentChunk = [];
+      const flushRibbonChunk = () => {
+          if (currentChunk.length > 1) projectedRibbonChunks.push(currentChunk);
+          currentChunk = [];
+      };
+
+      ribbonSamples.forEach(sample => {
+          const left = getProjected3DPoint(sample.left, projectionOptions);
+          const right = getProjected3DPoint(sample.right, projectionOptions);
+          if (!left || !right) {
+              flushRibbonChunk();
+              return;
+          }
+          currentChunk.push({ left, right });
+      });
+      flushRibbonChunk();
+
+      projectedRibbonChunks.forEach((chunk, chunkIndex) => {
+          const polygon = [
+              ...chunk.map(sample => sample.left),
+              ...chunk.slice().reverse().map(sample => sample.right)
+          ].map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
+
           segmentNodes.push(
               <polygon
-                  key={`coverage-segment-${index}`}
-                  data-coverage-3d-segment={index}
+                  key={`coverage-ribbon-${chunkIndex}`}
+                  data-coverage-3d-ribbon={chunkIndex}
                   points={polygon}
                   fill={coverageSwathColor}
                   fillOpacity={coverageSwathOpacity}
                   stroke="none"
-                  strokeLinejoin="round"
+                  shapeRendering="geometricPrecision"
               />
           );
-      }
+      });
 
       if (isRecording) {
           const headingRad = heading * Math.PI / 180;
@@ -3502,7 +3668,7 @@ const App = () => {
           }
       }
 
-      return <g data-coverage-layer="3d">{segmentNodes}</g>;
+      return <g key="coverage-layer-3d" data-coverage-layer="3d">{segmentNodes}</g>;
   };
 
   const getGuidanceLaneVisual = (isActive, laneDistance = 0) => {
@@ -4398,17 +4564,17 @@ const App = () => {
           return (
               <section
                   aria-label="Run action dock"
-                  className={`pointer-events-auto w-[140px] xl:w-[148px] rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl py-2 shadow-xl select-none`}
+                  className={`pointer-events-auto w-[184px] xl:w-[196px] rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl p-2 shadow-xl select-none`}
                   onPointerDown={stopDockPointer}
                   onPointerMove={stopDockPointer}
                   onPointerUp={stopDockPointer}
                   onClick={stopDockPointer}
               >
-                  <div className={`h-8 px-3 flex items-center justify-start gap-2 text-[10px] font-black uppercase tracking-wider ${t.textSub}`}>
+                  <div className={`h-9 px-1.5 flex items-center justify-start gap-2 text-[10px] font-black uppercase tracking-wider ${t.textSub}`}>
                       <span className="w-1 h-4 rounded-full bg-blue-500" />
-                      Run tools
+                      Run controls
                   </div>
-                  <div className={`border-t ${railDivider}`}>
+                  <div className="space-y-1">
                       {railItems.map(({ id, icon: Icon, label, detail, disabled }) => {
                           const active = dockMenuOpen === id;
                           return (
@@ -4420,10 +4586,10 @@ const App = () => {
                                   aria-expanded={active}
                                   disabled={disabled}
                                   onClick={runDockAction(() => toggleDockPanel(id))}
-                                  className={`w-full min-h-[66px] px-3 flex items-center gap-2.5 border-b ${railDivider} text-left transition-all focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/50 disabled:opacity-50 disabled:cursor-not-allowed ${
+                                  className={`w-full min-h-[58px] rounded-xl px-2.5 flex items-center gap-2.5 text-left transition-all focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/50 disabled:opacity-45 disabled:cursor-not-allowed ${
                                       active
-                                          ? 'bg-blue-600 text-white shadow-inner'
-                                          : `${isDarkDock ? 'bg-slate-900/35 text-slate-200 hover:bg-slate-800' : 'bg-white/45 text-slate-700 hover:bg-slate-100'}`
+                                          ? 'bg-blue-600 text-white shadow-md shadow-blue-900/20'
+                                          : `${isDarkDock ? 'bg-slate-900/45 text-slate-200 hover:bg-slate-800' : 'bg-slate-50/85 text-slate-700 hover:bg-blue-50'}`
                                   }`}
                               >
                                   <span className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${
@@ -4431,11 +4597,11 @@ const App = () => {
                                           ? 'bg-white/15 text-white'
                                           : isDarkDock ? 'bg-slate-800 text-blue-300' : 'bg-blue-50 text-blue-600'
                                   }`}>
-                                      <Icon className="w-5 h-5" />
+                                      <Icon className="w-[18px] h-[18px]" />
                                   </span>
                                   <span className="min-w-0 flex-1">
-                                      <span className="block text-[11px] font-black uppercase leading-none truncate">{label}</span>
-                                      <span className="block mt-1 text-[9px] font-bold leading-none opacity-70 truncate">{detail}</span>
+                                      <span className="block text-[11px] font-black uppercase leading-tight truncate">{label}</span>
+                                      <span className="block mt-0.5 text-[9px] font-bold leading-tight opacity-70 truncate">{detail}</span>
                                   </span>
                               </button>
                           );
@@ -4457,37 +4623,116 @@ const App = () => {
           </div>
       );
 
+      const renderBoundaryCaptureDock = () => {
+          const recording = Boolean(isRecordingBoundary);
+          const capturedLengthMeters = tempBoundary.length > 1
+              ? calculatePathLength(tempBoundary) / PIXELS_PER_METER
+              : 0;
+          const CaptureIcon = recording ? Radio : MapPin;
+
+          return (
+              <section
+                  aria-label={`${recording ? 'Boundary recording' : 'Boundary ready'} contextual controls`}
+                  className={`pointer-events-auto w-[184px] xl:w-[196px] overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl shadow-xl select-none`}
+                  onPointerDown={stopDockPointer}
+                  onPointerMove={stopDockPointer}
+                  onPointerUp={stopDockPointer}
+                  onClick={stopDockPointer}
+              >
+                  <div className={`px-3 py-3 border-b ${railDivider} flex items-center gap-2.5`}>
+                      <span className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${recording ? 'bg-red-500/12 text-red-500' : 'bg-orange-500/12 text-orange-500'}`}>
+                          <CaptureIcon className="w-[18px] h-[18px]" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                          <span className={`block text-[10px] font-black uppercase tracking-wide ${recording ? 'text-red-500' : 'text-orange-600'}`}>
+                              Boundary capture
+                          </span>
+                          <span className={`block mt-0.5 text-[11px] font-black leading-tight ${t.textMain}`}>
+                              {recording ? 'Recording field edge' : 'Ready to record'}
+                          </span>
+                      </span>
+                      <span className={`shrink-0 w-2 h-2 rounded-full ${recording ? 'bg-red-500 animate-pulse' : 'bg-orange-500'}`} />
+                  </div>
+
+                  <div className="p-2.5 space-y-2.5">
+                      {recording ? (
+                          <>
+                              <button
+                                  type="button"
+                                  onClick={runDockAction(finishBoundaryRecording)}
+                                  className="w-full min-h-[58px] rounded-xl bg-green-600 hover:bg-green-500 text-white px-3 flex items-center gap-2.5 text-left shadow-md shadow-green-900/20 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-green-500/40"
+                              >
+                                  <span className="shrink-0 w-8 h-8 rounded-lg bg-white/15 flex items-center justify-center">
+                                      <Square className="w-4 h-4" />
+                                  </span>
+                                  <span className="min-w-0">
+                                      <span className="block text-xs font-black leading-tight">Finish recording</span>
+                                      <span className="block mt-0.5 text-[9px] font-bold opacity-80">Close and review boundary</span>
+                                  </span>
+                              </button>
+
+                              <div className="grid grid-cols-2 gap-1.5">
+                                  <div className={`rounded-lg ${isDarkDock ? 'bg-slate-900/65' : 'bg-slate-50'} p-2`}>
+                                      <div className={`text-[8px] font-black uppercase ${t.textSub}`}>Points</div>
+                                      <div className={`mt-0.5 text-sm font-black ${t.textMain}`}>{tempBoundary.length}</div>
+                                  </div>
+                                  <div className={`rounded-lg ${isDarkDock ? 'bg-slate-900/65' : 'bg-slate-50'} p-2`}>
+                                      <div className={`text-[8px] font-black uppercase ${t.textSub}`}>Distance</div>
+                                      <div className={`mt-0.5 text-sm font-black ${t.textMain}`}>{capturedLengthMeters.toFixed(1)} m</div>
+                                  </div>
+                              </div>
+
+                              <div className={`rounded-lg px-2.5 py-2 text-[10px] font-bold leading-snug ${isDarkDock ? 'bg-orange-500/10 text-orange-200' : 'bg-orange-50 text-orange-800'}`}>
+                                  Drive the full field edge, then return near the start point.
+                              </div>
+                          </>
+                      ) : (
+                          <>
+                              <button
+                                  type="button"
+                                  onClick={runDockAction(beginBoundaryRecording)}
+                                  className="w-full min-h-[58px] rounded-xl bg-orange-500 hover:bg-orange-400 text-white px-3 flex items-center gap-2.5 text-left shadow-md shadow-orange-900/20 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-orange-500/40"
+                              >
+                                  <span className="shrink-0 w-8 h-8 rounded-lg bg-white/15 flex items-center justify-center">
+                                      <Play className="w-4 h-4" />
+                                  </span>
+                                  <span className="min-w-0">
+                                      <span className="block text-xs font-black leading-tight">Start recording</span>
+                                      <span className="block mt-0.5 text-[9px] font-bold opacity-80">Begin boundary capture</span>
+                                  </span>
+                              </button>
+
+                              <div className={`rounded-xl ${isDarkDock ? 'bg-slate-900/65' : 'bg-slate-50'} p-2.5 flex items-start gap-2`}>
+                                  <span className="shrink-0 w-6 h-6 rounded-full bg-orange-500 text-white flex items-center justify-center text-[10px] font-black">1</span>
+                                  <span className="min-w-0">
+                                      <span className={`block text-[11px] font-black ${t.textMain}`}>Position vehicle</span>
+                                      <span className={`block mt-0.5 text-[9px] font-bold leading-snug ${t.textSub}`}>Move to the field edge before starting.</span>
+                                  </span>
+                              </div>
+                          </>
+                      )}
+                  </div>
+
+                  <div className={`px-2.5 py-2 border-t ${railDivider}`}>
+                      <button
+                          type="button"
+                          onClick={runDockAction(cancelBoundaryRecording)}
+                          className={`w-full h-10 rounded-lg flex items-center justify-center gap-2 text-[11px] font-black ${ghostTone.red}`}
+                      >
+                          <X className="w-4 h-4" />
+                          Cancel capture
+                      </button>
+                  </div>
+              </section>
+          );
+      };
+
       if (boundaryCaptureReady) {
-          return renderDockLayout(renderShell({
-              status: 'Boundary ready',
-              tone: 'orange',
-              children: (
-                  <>
-                      {renderMainButton({ icon: Play, label: 'Start', sub: 'Begin capture', color: 'orange', onClick: beginBoundaryRecording, pulse: true })}
-                      {renderStepLine([
-                          { label: 'Position', done: true },
-                          { label: 'Start', done: false },
-                          { label: 'Drive', done: false }
-                      ])}
-                      {renderDivider()}
-                      {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: cancelBoundaryRecording })}
-                  </>
-              )
-          }));
+          return renderDockLayout(renderBoundaryCaptureDock());
       }
 
       if (isRecordingBoundary) {
-          return renderDockLayout(renderShell({
-              status: 'Boundary recording',
-              tone: 'orange',
-              children: (
-                  <>
-                      {renderMainButton({ icon: Square, label: 'Finish', sub: `${tempBoundary.length} pts`, color: 'green', onClick: finishBoundaryRecording })}
-                      {renderDivider()}
-                      {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: cancelBoundaryRecording })}
-                  </>
-              )
-          }));
+          return renderDockLayout(renderBoundaryCaptureDock());
       }
 
       if (uTurnPanelOpen) return null;
@@ -6218,6 +6463,36 @@ const renderLinesPanel = () => {
     const panelBg = theme === 'dark' ? 'bg-slate-950' : 'bg-white';
     const surfaceBg = theme === 'dark' ? 'bg-slate-900/80' : 'bg-white';
     const mutedBg = theme === 'dark' ? 'bg-slate-900/55' : 'bg-slate-50';
+    const selectedLineCreated = selectedLine ? getCreatedDateTime(selectedLine) : null;
+    const selectedLineLocation = selectedLine ? getCreatedLocation(selectedLine, activeField) : '--';
+    const workingWidthMeters = Math.max(0, Number(implementSettings.width) || 0);
+    const overlapMeters = Math.max(0, Number(implementSettings.overlap) || 0);
+    const passSpacingMeters = Math.max(0, workingWidthMeters - overlapMeters);
+
+    const getLineHeadingDegrees = (line) => {
+        const storedHeading = Number(line?.heading ?? line?.points?.aplus?.heading);
+        if (Number.isFinite(storedHeading)) return (storedHeading + 360) % 360;
+
+        const points = line?.points || {};
+        let start = points.a;
+        let end = points.b;
+        const path = Array.isArray(points.curve) ? points.curve : [];
+        if ((!start || !end) && path.length > 1) {
+            start = path[0];
+            end = path[path.length - 1];
+        }
+        if (!start || !end) return null;
+
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        if (Math.hypot(dx, dy) < 0.001) return null;
+        return (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
+    };
+
+    const selectedLineHeading = selectedLine ? getLineHeadingDegrees(selectedLine) : null;
+    const selectedLineHeadingLabel = selectedLineHeading === null
+        ? 'Not available'
+        : `${selectedLineHeading.toFixed(1)}° ${getCardinalShortDirection(selectedLineHeading)}`;
 
     const getLineIconFor = (line) => {
         if (line?.type === 'CURVE') return Spline;
@@ -6471,35 +6746,49 @@ const renderLinesPanel = () => {
                                         {renderLinePreview(selectedLine)}
                                         <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
                                             {[
-                                                ['Type', (selectedLine.type || 'LINE').replace(/_/g, ' ')],
-                                                ['Length', activeLineLength !== null ? `${activeLineLength.toFixed(1)} m` : '--'],
-                                                ['Created', formatLineDate(selectedLine)],
-                                                ['Quality', selectedLine.archived ? 'Archived' : (selectedLine.quality || 'Good')]
-                                            ].map(([label, value]) => (
+                                                { label: 'Length', value: activeLineLength !== null ? `${activeLineLength.toFixed(1)} m` : '--' },
+                                                { label: 'Created', value: selectedLineCreated?.date || 'Not recorded', sub: selectedLineCreated?.exact ? selectedLineCreated.time : null },
+                                                { label: 'Location', value: selectedLineLocation },
+                                                { label: 'Quality', value: selectedLine.archived ? 'Archived' : (selectedLine.quality || 'Good') }
+                                            ].map(({ label, value, sub }) => (
                                                 <div key={label} className={`${mutedBg} border ${t.borderCard} rounded-lg p-2.5 min-w-0`}>
                                                     <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
-                                                    <div className={`mt-1 text-xs leading-tight font-black ${t.textMain} break-words`}>{value}</div>
+                                                    <div className={`mt-1 text-xs leading-tight font-black ${t.textMain} truncate`} title={value}>{value}</div>
+                                                    {sub && <div className={`mt-0.5 text-[9px] font-bold ${t.textSub}`}>{sub}</div>}
                                                 </div>
                                             ))}
                                         </div>
                                     </div>
 
-                                    <div className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${mutedBg} p-2.5 lg:p-3 flex flex-col overflow-y-auto`}>
-                                        <div className="flex items-center gap-2 mb-2">
-                                            <Settings className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                                            <h4 className={`font-black uppercase tracking-wider text-[11px] ${t.textSub}`}>Line Setup</h4>
+                                    <div className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${mutedBg} p-3 lg:p-3.5 flex flex-col overflow-y-auto`}>
+                                        <div className="flex items-start gap-2.5">
+                                            <div className="shrink-0 w-8 h-8 rounded-lg bg-blue-600/10 text-blue-500 flex items-center justify-center">
+                                                <Settings className="w-4 h-4" />
+                                            </div>
+                                            <div className="min-w-0">
+                                                <h4 className={`font-black uppercase tracking-wider text-[11px] ${t.textMain}`}>Guidance setup</h4>
+                                                <div className={`mt-0.5 text-[10px] leading-tight ${t.textSub}`}>Spacing generated from the active implement.</div>
+                                            </div>
                                         </div>
-                                        <div className="space-y-2">
+
+                                        <div className={`mt-3 rounded-xl border border-blue-500/25 ${theme === 'dark' ? 'bg-blue-950/25' : 'bg-blue-50'} p-3`}>
+                                            <div className={`text-[9px] font-black uppercase tracking-wider ${t.textSub}`}>Pass spacing</div>
+                                            <div className="mt-1 flex items-end justify-between gap-3">
+                                                <div className="text-2xl leading-none font-black text-blue-600">{passSpacingMeters.toFixed(2)} <span className="text-sm">m</span></div>
+                                                <div className={`text-[9px] font-bold text-right ${t.textSub}`}>Width − overlap</div>
+                                            </div>
+                                        </div>
+
+                                        <div className="mt-2 grid grid-cols-2 gap-2">
                                             {[
-                                                ['Field', activeField?.name || 'No field'],
-                                                ['Mode', (selectedLine.type || 'LINE').replace(/_/g, ' ')],
-                                                ['Run status', activeLineId === selectedLine.id ? 'Loaded' : 'Not loaded'],
-                                                ['Path', selectedLine.isMulti ? 'Parallel guidance' : 'Single guidance'],
-                                                ['Lock', activeLineId === selectedLine.id ? 'Lane locked on engage' : 'Unlocked']
+                                                ['Working width', `${workingWidthMeters.toFixed(2)} m`],
+                                                ['Overlap', `${overlapMeters.toFixed(2)} m`],
+                                                ['Heading', selectedLineHeadingLabel],
+                                                ['Pass layout', selectedLine.isMulti ? 'Parallel' : 'Single']
                                             ].map(([label, value]) => (
-                                                <div key={label} className={`${surfaceBg} border ${t.borderCard} rounded-lg p-2 min-w-0`}>
+                                                <div key={label} className={`${surfaceBg} border ${t.borderCard} rounded-lg p-2.5 min-w-0`}>
                                                     <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
-                                                    <div className={`mt-0.5 text-xs font-black ${value === 'Loaded' ? 'text-green-500' : t.textMain} truncate`}>{value}</div>
+                                                    <div className={`mt-1 text-xs leading-tight font-black ${t.textMain} truncate`} title={value}>{value}</div>
                                                 </div>
                                             ))}
                                         </div>
@@ -6609,7 +6898,9 @@ const renderLinesPanel = () => {
                   detail: `${quickBoundaries.length} saved for ${activeField.name}`,
                   icon: MapPin,
                   tone: 'text-orange-500',
-                  iconBg: 'bg-orange-500/12'
+                  iconBg: 'bg-orange-500/12',
+                  createLabel: 'New Boundary',
+                  createClass: 'bg-orange-500 hover:bg-orange-400 shadow-orange-900/15'
               },
               lines: {
                   eyebrow: 'Guidance',
@@ -6617,7 +6908,9 @@ const renderLinesPanel = () => {
                   detail: `${quickLines.length} available for ${activeField.name}`,
                   icon: Route,
                   tone: 'text-blue-500',
-                  iconBg: 'bg-blue-500/12'
+                  iconBg: 'bg-blue-500/12',
+                  createLabel: 'New Line',
+                  createClass: 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/15'
               },
               tasks: {
                   eyebrow: 'Field work',
@@ -6625,13 +6918,52 @@ const renderLinesPanel = () => {
                   detail: `${quickTasks.length} jobs for ${activeField.name}`,
                   icon: FileText,
                   tone: 'text-green-500',
-                  iconBg: 'bg-green-500/12'
+                  iconBg: 'bg-green-500/12',
+                  createLabel: 'New Task',
+                  createClass: 'bg-green-600 hover:bg-green-500 shadow-green-900/15'
               }
           };
           const meta = quickViewMeta[fieldQuickView];
           const QuickIcon = meta.icon;
+          const renderQuickAssetMeta = (asset) => {
+              const created = getCreatedDateTime(asset);
+              const location = getCreatedLocation(asset, activeField);
+              const createdLabel = created.exact ? `${created.date} · ${created.time}` : created.date;
+
+              return (
+                  <div className={`mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold ${t.textSub}`}>
+                      <span className="inline-flex min-w-0 items-center gap-1.5">
+                          <Calendar className="w-3 h-3 shrink-0 opacity-70" />
+                          <span className="truncate">{createdLabel}</span>
+                      </span>
+                      <span className="inline-flex min-w-0 items-center gap-1.5">
+                          <MapPin className="w-3 h-3 shrink-0 opacity-70" />
+                          <span className="truncate">{location}</span>
+                      </span>
+                  </div>
+              );
+          };
 
           const closeQuickView = () => setFieldQuickView(null);
+          const createFromQuickView = () => {
+              const assetType = fieldQuickView;
+              setFieldQuickView(null);
+
+              if (assetType === 'boundaries') {
+                  startBoundaryCreation();
+                  return;
+              }
+
+              if (assetType === 'lines') {
+                  setFieldManagerOpen(false);
+                  setLinesPanelOpen(false);
+                  setLineModeModalOpen(true);
+                  return;
+              }
+
+              setFieldAssetTab('tasks');
+              actions.setViewMode('CREATE_TASK');
+          };
 
           return (
               <div
@@ -6685,6 +7017,7 @@ const renderLinesPanel = () => {
                                               <div className="min-w-0 flex-1">
                                                   <div className={`font-black truncate ${t.textMain}`}>{boundary.name || `Boundary ${index + 1}`}</div>
                                                   <div className={`mt-0.5 text-xs ${t.textSub}`}>{pointCount} recorded points</div>
+                                                  {renderQuickAssetMeta(boundary)}
                                               </div>
                                               <span className={`shrink-0 px-2 py-1 rounded-md text-[9px] font-black uppercase ${active ? 'bg-orange-500/15 text-orange-500' : `${softPanelBg} ${t.textSub}`}`}>
                                                   {active ? 'Selected' : 'Select'}
@@ -6695,7 +7028,7 @@ const renderLinesPanel = () => {
                                       <div className={`rounded-xl border border-dashed ${t.borderCard} p-8 text-center`}>
                                           <MapPin className={`w-9 h-9 mx-auto ${t.textDim}`} />
                                           <div className={`mt-3 font-black ${t.textMain}`}>No boundary yet</div>
-                                          <div className={`mt-1 text-sm ${t.textSub}`}>Open Bound from the left menu to create one.</div>
+                                          <div className={`mt-1 text-sm ${t.textSub}`}>Create a boundary for this field directly below.</div>
                                       </div>
                                   )}
                               </div>
@@ -6707,32 +7040,30 @@ const renderLinesPanel = () => {
                                       const active = activeLineId === line.id;
                                       const LineIcon = getLineIcon(line);
                                       return (
-                                          <div key={line.id} className={`rounded-xl border p-3.5 flex items-center gap-3 ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${mutedPanelBg}`}`}>
+                                          <button
+                                              type="button"
+                                              key={line.id}
+                                              onClick={() => { handleLoadLine(line); closeQuickView(); }}
+                                              className={`w-full rounded-xl border p-3 flex items-center gap-3 text-left transition-all ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${mutedPanelBg} hover:border-blue-400`}`}
+                                          >
                                               <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${softPanelBg} text-blue-500 border ${t.borderCard}`}`}>
                                                   <LineIcon className="w-5 h-5" />
                                               </div>
                                               <div className="min-w-0 flex-1">
                                                   <div className={`font-black truncate ${t.textMain}`}>{line.name}</div>
                                                   <div className={`mt-0.5 text-xs ${t.textSub}`}>{(line.type || 'LINE').replaceAll('_', ' ')} / {line.isMulti ? 'Parallel passes' : 'Single path'}</div>
+                                                  {renderQuickAssetMeta(line)}
                                               </div>
-                                              {active ? (
-                                                  <span className="shrink-0 px-2.5 py-1.5 rounded-lg bg-green-500/15 text-green-500 text-[9px] font-black uppercase">Loaded</span>
-                                              ) : (
-                                                  <button
-                                                      type="button"
-                                                      onClick={() => { handleLoadLine(line); closeQuickView(); }}
-                                                      className="shrink-0 px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-black hover:bg-blue-500"
-                                                  >
-                                                      Load
-                                                  </button>
-                                              )}
-                                          </div>
+                                              <span className={`shrink-0 px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase ${active ? 'bg-blue-500/15 text-blue-500' : `${softPanelBg} ${t.textSub}`}`}>
+                                                  {active ? 'Selected' : 'Select'}
+                                              </span>
+                                          </button>
                                       );
                                   }) : (
                                       <div className={`rounded-xl border border-dashed ${t.borderCard} p-8 text-center`}>
                                           <Route className={`w-9 h-9 mx-auto ${t.textDim}`} />
                                           <div className={`mt-3 font-black ${t.textMain}`}>No guidance line</div>
-                                          <div className={`mt-1 text-sm ${t.textSub}`}>Open Lines from the left menu to create one.</div>
+                                          <div className={`mt-1 text-sm ${t.textSub}`}>Create a guidance line for this field directly below.</div>
                                       </div>
                                   )}
                               </div>
@@ -6751,6 +7082,7 @@ const renderLinesPanel = () => {
                                                   <div className="min-w-0 flex-1">
                                                       <div className={`font-black truncate ${t.textMain}`}>{task.name}</div>
                                                       <div className={`mt-0.5 text-xs ${t.textSub}`}>{task.type || 'Field work'} / {task.status || 'Pending'}</div>
+                                                      {renderQuickAssetMeta(task)}
                                                   </div>
                                                   <div className="shrink-0 flex items-center gap-2">
                                                       {active ? (
@@ -6769,16 +7101,25 @@ const renderLinesPanel = () => {
                                           <div className={`rounded-xl border border-dashed ${t.borderCard} p-7 text-center`}>
                                               <FileText className={`w-9 h-9 mx-auto ${t.textDim}`} />
                                               <div className={`mt-3 font-black ${t.textMain}`}>No task yet</div>
-                                              <div className={`mt-1 text-sm ${t.textSub}`}>Open Tasks from the left menu to create one.</div>
+                                              <div className={`mt-1 text-sm ${t.textSub}`}>Create a task for this field directly below.</div>
                                           </div>
                                       )}
                               </div>
                           )}
                       </div>
 
-                      <div className={`shrink-0 px-4 py-3 border-t ${t.divider} flex items-center justify-end ${theme === 'dark' ? 'bg-slate-950/70' : 'bg-slate-50'}`}>
+                      <div className={`shrink-0 px-4 py-3 border-t ${t.divider} flex items-center justify-end gap-2 ${theme === 'dark' ? 'bg-slate-950/70' : 'bg-slate-50'}`}>
                           <button type="button" onClick={closeQuickView} className={`px-4 py-2 rounded-lg border ${t.borderCard} ${t.textMain} text-xs font-black hover:brightness-95`}>
                               Close
+                          </button>
+                          <button
+                              type="button"
+                              onClick={createFromQuickView}
+                              aria-label={`${meta.createLabel} for ${activeField.name}`}
+                              className={`px-4 py-2 rounded-lg text-white text-xs font-black shadow-lg flex items-center gap-2 ${meta.createClass}`}
+                          >
+                              <Plus className="w-4 h-4" />
+                              {meta.createLabel}
                           </button>
                       </div>
                   </section>
@@ -7006,8 +7347,24 @@ const renderLinesPanel = () => {
           const boundaries = activeField?.boundaries || [];
           const activeIndex = boundaries.length > 0 ? Math.min(Math.max(activeBoundaryIdx || 0, 0), boundaries.length - 1) : -1;
           const activeBoundary = activeIndex >= 0 ? boundaries[activeIndex] : null;
-          const activePoints = (activeBoundary?.points || activeBoundary || []).length;
-          const totalPoints = boundaries.reduce((total, boundary) => total + getBoundaryPoints(boundary).length, 0);
+          const selectedIndex = Number.isInteger(selectedBoundaryIndex) && selectedBoundaryIndex >= 0 && selectedBoundaryIndex < boundaries.length
+              ? selectedBoundaryIndex
+              : activeIndex;
+          const selectedBoundary = selectedIndex >= 0 ? boundaries[selectedIndex] : null;
+          const activePoints = getBoundaryPoints(activeBoundary).length;
+          const selectedPoints = getBoundaryPoints(selectedBoundary);
+          const selectedCreated = getCreatedDateTime(selectedBoundary);
+          const selectedLocation = getCreatedLocation(selectedBoundary, activeField);
+          const selectedPosition = getCreatedPosition(selectedBoundary);
+          const selectedPerimeter = selectedPoints.length > 1
+              ? calculatePathLength(selectedPoints) / PIXELS_PER_METER
+              : 0;
+          const selectedArea = selectedPoints.length > 2
+              ? Math.abs(selectedPoints.reduce((sum, point, index) => {
+                  const next = selectedPoints[(index + 1) % selectedPoints.length];
+                  return sum + (point.x * next.y) - (next.x * point.y);
+              }, 0)) / 2 / (PIXELS_PER_METER * PIXELS_PER_METER) / 10000
+              : 0;
 
           return (
               <div className={`w-full h-full flex flex-col ${panelBg}`}>
@@ -7027,86 +7384,176 @@ const renderLinesPanel = () => {
                       </div>
                   </div>
 
-                  <div className={`shrink-0 px-5 lg:px-6 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-orange-950/18' : 'bg-orange-50/80'}`}>
+                  <div className={`shrink-0 px-4 py-2 border-b ${t.divider} ${theme === 'dark' ? 'bg-orange-950/14' : 'bg-orange-50/65'}`}>
                       <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div className="min-w-0 flex items-center gap-3">
-                              <div className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${activeBoundary ? 'bg-orange-500 text-white' : `${softPanelBg} ${t.textSub} border ${t.borderCard}`}`}>
-                                  <MapPin className="w-5 h-5" />
+                          <div className="min-w-0 flex items-center gap-2.5">
+                              <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${activeBoundary ? 'bg-orange-500 text-white' : `${softPanelBg} ${t.textSub} border ${t.borderCard}`}`}>
+                                  <MapPin className="w-4 h-4" />
                               </div>
                               <div className="min-w-0">
-                                  <div className={`text-[10px] uppercase font-black tracking-widest ${t.textSub}`}>Active boundary</div>
-                                  <div className={`text-base font-black truncate ${activeBoundary ? t.textMain : t.textSub}`}>{activeBoundary?.name || 'No boundary active'}</div>
+                                  <div className={`text-[9px] uppercase font-black tracking-widest ${t.textSub}`}>Active boundary</div>
+                                  <div className={`text-sm font-black truncate ${activeBoundary ? t.textMain : t.textSub}`}>{activeBoundary?.name || 'No boundary active'}</div>
                               </div>
                           </div>
-                          <div className="flex flex-wrap items-center gap-2 text-xs font-black">
-                              <span className={`px-3 py-1.5 rounded-lg border ${activeBoundary ? 'border-orange-500/35 bg-orange-500/10 text-orange-500' : `${t.borderCard} ${t.textSub}`}`}>{activeBoundary ? `LOOP ${activeIndex + 1}` : 'NO ACTIVE'}</span>
-                              <span className={`px-3 py-1.5 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{activePoints || 0} pts</span>
-                              <span className={`px-3 py-1.5 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{activeField?.name || '--'}</span>
+                          <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-black">
+                              <span className={`px-2.5 py-1 rounded-lg border ${activeBoundary ? 'border-green-500/35 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`}`}>{activeBoundary ? 'ACTIVE' : 'NO ACTIVE'}</span>
+                              <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{activePoints || 0} pts</span>
+                              <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{activeField?.name || '--'}</span>
                           </div>
                       </div>
                   </div>
 
-                  <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6">
-                      <div className="grid grid-cols-1 lg:grid-cols-[minmax(360px,0.95fr)_minmax(0,1.05fr)] gap-5 h-full min-h-[520px]">
-                          <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} p-4 flex flex-col min-h-0`}>
-                              <SectionTitle icon={MapPin} title="Boundary Map" />
-                              <div className="grid grid-cols-3 gap-2 mb-4">
-                                  <StatCard icon={MapPin} label="Loops" value={boundaries.length} sub="Saved" tone="text-orange-500" />
-                                  <StatCard icon={Target} label="Active" value={activeIndex >= 0 ? activeIndex + 1 : '--'} sub={activeBoundary?.name || 'None'} tone="text-yellow-500" />
-                                  <StatCard icon={Route} label="Points" value={totalPoints} sub={`${activePoints} active`} tone="text-blue-500" />
-                              </div>
-                              <div className="min-h-0 flex-1">
-                                  <BoundaryMapPreview boundaries={boundaries} />
-                              </div>
-                          </section>
-
-                          <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} flex flex-col min-h-0 overflow-hidden`}>
-                              <div className={`shrink-0 p-4 border-b ${t.divider} flex items-center justify-between gap-3`}>
+                  <div className="flex-1 min-h-0 flex overflow-hidden">
+                      <aside className={`w-[30%] min-w-[240px] max-w-[300px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
+                          <div className={`shrink-0 px-3 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/55' : 'bg-white/70'}`}>
+                              <div className="flex items-center justify-between gap-3">
                                   <div>
-                                      <div className={`text-[10px] uppercase font-black tracking-widest ${t.textSub}`}>Boundary list</div>
-                                      <div className={`text-sm font-bold ${t.textMain}`}>{activeField?.name || 'Select a field'}</div>
+                                      <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Catalog</div>
+                                      <div className={`text-sm font-black ${t.textMain}`}>Saved Boundaries</div>
                                   </div>
+                                  <span className="px-2 py-1 rounded-lg bg-orange-500/10 text-orange-500 text-[10px] font-black">{boundaries.length}</span>
                               </div>
-                              <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
-                                  {boundaries.length > 0 ? boundaries.map((boundary, index) => {
-                                      const points = getBoundaryPoints(boundary);
-                                      const active = index === activeBoundaryIdx;
-                                      return (
-                                          <div
-                                              key={`${boundary.name || 'boundary'}-${index}`}
-                                              role="button"
-                                              tabIndex={0}
-                                              onClick={() => actions.setActiveBoundaryIdx(index)}
-                                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); actions.setActiveBoundaryIdx(index); } }}
-                                              className={`w-full rounded-xl border p-4 text-left transition-all ${active ? 'border-orange-500 bg-orange-500/10 ring-2 ring-orange-500/15' : `${t.borderCard} ${mutedPanelBg} hover:border-orange-400`}`}
-                                          >
-                                              <div className="flex items-start justify-between gap-4">
-                                                  <div className="min-w-0 flex items-start gap-3">
-                                                      <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-orange-500 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-orange-500`}`}>
-                                                          <MapPin className="w-5 h-5" />
-                                                      </div>
-                                                      <div className="min-w-0">
-                                                          <div className={`font-black ${t.textMain} truncate`}>{boundary.name || `Boundary ${index + 1}`}</div>
-                                                          <div className={`mt-1 text-xs ${t.textSub}`}>{points.length} points / loop {index + 1}</div>
-                                                      </div>
+                              <div className={`mt-2 text-[10px] ${t.textSub}`}>Select a loop to inspect its location and capture details.</div>
+                          </div>
+
+                          <div className="flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2">
+                              {boundaries.length > 0 ? boundaries.map((boundary, index) => {
+                                  const points = getBoundaryPoints(boundary);
+                                  const active = index === activeIndex;
+                                  const selected = index === selectedIndex;
+                                  const created = getCreatedDateTime(boundary);
+                                  return (
+                                      <div
+                                          key={`${boundary.name || 'boundary'}-${index}`}
+                                          role="button"
+                                          tabIndex={0}
+                                          onClick={() => setSelectedBoundaryIndex(index)}
+                                          onKeyDown={(event) => {
+                                              if (event.key === 'Enter' || event.key === ' ') {
+                                                  event.preventDefault();
+                                                  setSelectedBoundaryIndex(index);
+                                              }
+                                          }}
+                                          className={`relative p-2.5 rounded-xl border text-left transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500/40 ${selected ? 'border-orange-500 bg-orange-500/10 shadow-sm ring-1 ring-orange-500/20' : active ? 'border-green-500/35 bg-green-500/10' : `${t.borderCard} ${softPanelBg} hover:border-orange-400/70`}`}
+                                      >
+                                          {selected && <div className="absolute left-0 top-2.5 bottom-2.5 w-1 rounded-r bg-orange-500" />}
+                                          <div className="flex items-start gap-2 min-w-0">
+                                              <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${selected ? 'bg-orange-500 text-white' : active ? 'bg-green-500/15 text-green-500 border border-green-500/25' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-50'} text-orange-500 border ${t.borderCard}`}`}>
+                                                  <MapPin className="w-4 h-4" />
+                                              </div>
+                                              <div className="min-w-0 flex-1">
+                                                  <div className="flex items-start justify-between gap-2">
+                                                      <div className={`text-sm font-black leading-tight ${t.textMain} truncate`}>{boundary.name || `Boundary ${index + 1}`}</div>
+                                                      {active && <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-green-500/15 text-green-500 text-[8px] font-black uppercase">Active</span>}
+                                                      {selected && !active && <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-orange-500/15 text-orange-500 text-[8px] font-black uppercase">Selected</span>}
                                                   </div>
-                                                  <div className="shrink-0 flex items-center gap-2">
-                                                      {active && <span className="px-2 py-1 rounded-md bg-orange-500 text-white text-[10px] font-black uppercase">Active</span>}
-                                                      <span
-                                                          role="button"
-                                                          tabIndex={0}
-                                                          onClick={(e) => { e.stopPropagation(); confirmDelete('boundary', null, index); }}
-                                                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); confirmDelete('boundary', null, index); } }}
-                                                          className="p-2 rounded-lg text-red-500 hover:bg-red-500/10"
-                                                      >
-                                                          <Trash2 className="w-4 h-4" />
-                                                      </span>
-                                                  </div>
+                                                  <div className={`mt-0.5 text-[10px] ${t.textSub}`}>{points.length} points / Loop {index + 1}</div>
                                               </div>
                                           </div>
-                                      );
-                                  }) : <EmptyState label="No boundary saved. Record a boundary loop from the run screen." />}
-                              </div>
+                                          <div className={`mt-2 pt-2 border-t ${t.divider} flex items-center justify-between gap-2`}>
+                                              <div className="min-w-0">
+                                                  <div className={`text-[9px] font-bold ${t.textSub} truncate`}>{created.date}</div>
+                                                  <div className={`text-[9px] ${t.textDim} truncate`}>{getCreatedLocation(boundary, activeField)}</div>
+                                              </div>
+                                              <ChevronRight className={`w-4 h-4 shrink-0 ${selected ? 'text-orange-500' : t.textDim}`} />
+                                          </div>
+                                      </div>
+                                  );
+                              }) : (
+                                  <div className={`h-full min-h-[280px] flex flex-col items-center justify-center text-center px-5 ${t.textDim}`}>
+                                      <MapPin className="w-14 h-14 mb-4 opacity-45" />
+                                      <div className={`text-lg font-black ${t.textMain}`}>No boundary saved</div>
+                                      <div className="mt-2 text-sm">Use New Boundary, position the vehicle, then press Start to record.</div>
+                                  </div>
+                              )}
+                          </div>
+                      </aside>
+
+                      <div className={`flex-1 min-w-0 min-h-0 p-3 lg:p-4 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
+                          <section className={`${softPanelBg} border ${t.borderCard} rounded-xl min-w-0 min-h-0 h-full overflow-hidden flex flex-col`}>
+                              {selectedBoundary ? (
+                                  <>
+                                      <div className={`shrink-0 px-4 py-3 border-b ${t.divider} flex items-start justify-between gap-3`}>
+                                          <div className="min-w-0">
+                                              <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Selected boundary</div>
+                                              <h3 className={`text-lg font-black ${t.textMain} truncate`}>{selectedBoundary.name || `Boundary ${selectedIndex + 1}`}</h3>
+                                              <div className={`mt-0.5 text-xs ${t.textSub}`}>{selectedPoints.length} recorded points / Loop {selectedIndex + 1}</div>
+                                          </div>
+                                          <div className="shrink-0 flex items-center gap-2">
+                                              {selectedIndex === activeIndex && <span className="px-2 py-1 rounded-lg bg-green-500/15 text-green-500 text-[10px] font-black uppercase">Active</span>}
+                                              <span className="px-2 py-1 rounded-lg bg-orange-500/15 text-orange-500 text-[10px] font-black uppercase">Closed loop</span>
+                                          </div>
+                                      </div>
+
+                                      <div className="flex-1 min-h-0 p-3 lg:p-4 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(230px,0.62fr)] gap-3 lg:gap-4 overflow-hidden">
+                                          <div className="min-w-0 min-h-0 flex flex-col gap-3">
+                                              <div className="min-h-[210px] flex-1">
+                                                  <BoundaryMapPreview boundaries={[selectedBoundary]} />
+                                              </div>
+                                              <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
+                                                  {[
+                                                      ['Points', selectedPoints.length],
+                                                      ['Perimeter', selectedPerimeter > 0 ? `${selectedPerimeter.toFixed(1)} m` : '--'],
+                                                      ['Area', selectedArea > 0 ? `${selectedArea.toFixed(2)} ha` : '--'],
+                                                      ['Status', selectedIndex === activeIndex ? 'Active' : 'Saved']
+                                                  ].map(([label, value]) => (
+                                                      <div key={label} className={`${mutedPanelBg} border ${t.borderCard} rounded-lg p-2.5 min-w-0`}>
+                                                          <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
+                                                          <div className={`mt-1 text-xs leading-tight font-black ${label === 'Status' && value === 'Active' ? 'text-green-500' : t.textMain} break-words`}>{value}</div>
+                                                      </div>
+                                                  ))}
+                                              </div>
+                                          </div>
+
+                                          <div className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${mutedPanelBg} p-3 flex flex-col overflow-y-auto`}>
+                                              <div className="flex items-center gap-2 mb-3">
+                                                  <MapPin className="w-4 h-4 text-orange-500 shrink-0" />
+                                                  <h4 className={`font-black uppercase tracking-wider text-[11px] ${t.textSub}`}>Capture details</h4>
+                                              </div>
+                                              <div className="space-y-2">
+                                                  {[
+                                                      { label: 'Created date', value: selectedCreated.date, sub: selectedCreated.time, icon: Calendar },
+                                                      { label: 'Created at', value: selectedLocation, sub: 'Field / location', icon: MapPin },
+                                                      { label: 'Vehicle position', value: selectedPosition, sub: 'Simulation coordinates', icon: Crosshair },
+                                                      { label: 'Capture source', value: 'Vehicle boundary recorder', sub: selectedCreated.exact ? 'Exact timestamp saved' : 'Legacy record', icon: Navigation }
+                                                  ].map(({ label, value, sub, icon: Icon }) => (
+                                                      <div key={label} className={`${softPanelBg} border ${t.borderCard} rounded-lg p-2.5 flex items-start gap-2.5 min-w-0`}>
+                                                          <div className="shrink-0 w-7 h-7 rounded-lg bg-orange-500/10 text-orange-500 flex items-center justify-center">
+                                                              <Icon className="w-3.5 h-3.5" />
+                                                          </div>
+                                                          <div className="min-w-0">
+                                                              <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
+                                                              <div className={`mt-0.5 text-xs font-black ${t.textMain} break-words`}>{value}</div>
+                                                              <div className={`mt-0.5 text-[9px] ${t.textDim}`}>{sub}</div>
+                                                          </div>
+                                                      </div>
+                                                  ))}
+                                              </div>
+                                          </div>
+                                      </div>
+
+                                      <div className={`shrink-0 px-4 py-3 border-t ${t.divider} flex flex-wrap items-center justify-between gap-2 ${theme === 'dark' ? 'bg-slate-950/50' : 'bg-white/70'}`}>
+                                          <button onClick={() => confirmDelete('boundary', null, selectedIndex)} className="px-3 py-2 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold flex items-center gap-2">
+                                              <Trash2 className="w-4 h-4" />
+                                              Delete
+                                          </button>
+                                          <button
+                                              onClick={() => actions.setActiveBoundaryIdx(selectedIndex)}
+                                              disabled={selectedIndex === activeIndex}
+                                              className={`px-5 py-2 rounded-lg font-black flex items-center gap-2 ${selectedIndex === activeIndex ? `${mutedPanelBg} ${t.textDim} border ${t.borderCard} cursor-default` : 'bg-orange-500 text-white hover:bg-orange-400 shadow-lg shadow-orange-900/15'}`}
+                                          >
+                                              <CheckCircle2 className="w-4 h-4" />
+                                              {selectedIndex === activeIndex ? 'Active Boundary' : 'Set Active'}
+                                          </button>
+                                      </div>
+                                  </>
+                              ) : (
+                                  <div className={`h-full min-h-[360px] flex flex-col items-center justify-center text-center px-8 ${t.textDim}`}>
+                                      <MapPin className="w-16 h-16 mb-4 opacity-45" />
+                                      <h3 className={`text-xl font-black ${t.textMain}`}>No boundary selected</h3>
+                                      <p className="text-sm mt-2 max-w-[340px]">Create a boundary first. The saved loop, creation time and field location will appear here.</p>
+                                  </div>
+                              )}
                           </section>
                       </div>
                   </div>
@@ -7126,48 +7573,16 @@ const renderLinesPanel = () => {
           const activeTask = activeTaskId ? tasks.find(task => task.id === activeTaskId) : null;
           const pendingTasks = tasks.filter(task => task.status !== 'Done' && task.id !== activeTaskId);
           const doneTasks = tasks.filter(task => task.status === 'Done');
-
-          const renderTaskRow = (task) => {
-              const Icon = getTaskIcon(task);
-              const active = activeTaskId === task.id;
-              return (
-                  <div key={task.id} className={`rounded-xl border p-4 ${active ? 'border-green-500 bg-green-500/10 ring-2 ring-green-500/15' : `${t.borderCard} ${mutedPanelBg}`}`}>
-                      <div className="flex items-start justify-between gap-4">
-                          <div className="min-w-0 flex items-start gap-3">
-                              <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-green-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-green-500`}`}>
-                                  <Icon className="w-5 h-5" />
-                              </div>
-                              <div className="min-w-0">
-                                  <div className={`font-black ${t.textMain} truncate`}>{task.name}</div>
-                                  <div className={`mt-1 text-xs ${t.textSub}`}>{task.type} / {task.date} / {task.status}</div>
-                              </div>
-                          </div>
-                          <div className="shrink-0 flex items-center gap-2">
-                              {active ? (
-                                  <>
-                                      <button onClick={() => handleTaskAction(task, 'pause')} className="p-2 rounded-lg bg-orange-500/15 text-orange-500 hover:bg-orange-500/25" title="Pause task">
-                                          <Pause className="w-4 h-4" />
-                                      </button>
-                                      <button onClick={() => handleTaskAction(task, 'finish')} className="p-2 rounded-lg bg-green-500/15 text-green-500 hover:bg-green-500/25" title="Finish task">
-                                          <CheckSquare className="w-4 h-4" />
-                                      </button>
-                                  </>
-                              ) : (
-                                  <>
-                                      {task.status !== 'Done' && (
-                                          <button onClick={() => handleTaskAction(task, 'start')} className="p-2 rounded-lg bg-blue-500/15 text-blue-500 hover:bg-blue-500/25" title="Start task">
-                                              <PlayCircle className="w-4 h-4" />
-                                          </button>
-                                      )}
-                                      <button onClick={() => confirmDelete('task', task.id)} className="p-2 rounded-lg text-red-500 hover:bg-red-500/10" title="Delete task">
-                                          <Trash2 className="w-4 h-4" />
-                                      </button>
-                                  </>
-                              )}
-                          </div>
-                      </div>
-                  </div>
-              );
+          const selectedTask = tasks.find(task => task.id === selectedTaskId) || activeTask || tasks[0] || null;
+          const selectedTaskCreated = getCreatedDateTime(selectedTask);
+          const selectedTaskLocation = getCreatedLocation(selectedTask, activeField);
+          const selectedTaskPosition = getCreatedPosition(selectedTask);
+          const SelectedTaskIcon = selectedTask ? getTaskIcon(selectedTask) : FileText;
+          const getTaskStatusTone = (task) => {
+              if (activeTaskId === task?.id) return 'bg-green-500/15 text-green-500 border-green-500/30';
+              if (task?.status === 'Done') return 'bg-slate-500/12 text-slate-500 border-slate-500/25';
+              if (task?.status === 'Paused') return 'bg-orange-500/12 text-orange-500 border-orange-500/25';
+              return 'bg-blue-500/12 text-blue-500 border-blue-500/25';
           };
 
           return (
@@ -7188,21 +7603,21 @@ const renderLinesPanel = () => {
                       </div>
                   </div>
 
-                  <div className={`shrink-0 px-5 lg:px-6 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-green-950/18' : 'bg-green-50/80'}`}>
+                  <div className={`shrink-0 px-4 py-2 border-b ${t.divider} ${theme === 'dark' ? 'bg-green-950/14' : 'bg-green-50/65'}`}>
                       <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div className="min-w-0 flex items-center gap-3">
-                              <div className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${activeTask ? 'bg-green-600 text-white' : `${softPanelBg} ${t.textSub} border ${t.borderCard}`}`}>
-                                  <Activity className="w-5 h-5" />
+                          <div className="min-w-0 flex items-center gap-2.5">
+                              <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${activeTask ? 'bg-green-600 text-white' : `${softPanelBg} ${t.textSub} border ${t.borderCard}`}`}>
+                                  <Activity className="w-4 h-4" />
                               </div>
                               <div className="min-w-0">
-                                  <div className={`text-[10px] uppercase font-black tracking-widest ${t.textSub}`}>Active task</div>
-                                  <div className={`text-base font-black truncate ${activeTask ? t.textMain : t.textSub}`}>{activeTask?.name || 'No task running'}</div>
+                                  <div className={`text-[9px] uppercase font-black tracking-widest ${t.textSub}`}>Active task</div>
+                                  <div className={`text-sm font-black truncate ${activeTask ? t.textMain : t.textSub}`}>{activeTask?.name || 'No task running'}</div>
                               </div>
                           </div>
-                          <div className="flex flex-wrap items-center gap-2 text-xs font-black">
-                              <span className={`px-3 py-1.5 rounded-lg border ${activeTask ? 'border-green-500/35 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`}`}>{activeTask ? 'RUNNING' : 'NO ACTIVE'}</span>
-                              <span className={`px-3 py-1.5 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{pendingTasks.length} pending</span>
-                              <span className={`px-3 py-1.5 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{doneTasks.length} done</span>
+                          <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-black">
+                              <span className={`px-2.5 py-1 rounded-lg border ${activeTask ? 'border-green-500/35 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`}`}>{activeTask ? 'RUNNING' : 'NO ACTIVE'}</span>
+                              <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{pendingTasks.length} pending</span>
+                              <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{doneTasks.length} done</span>
                           </div>
                       </div>
                   </div>
@@ -7239,37 +7654,202 @@ const renderLinesPanel = () => {
                           </div>
                       </div>
                   ) : (
-                      <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6">
-                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
-                              <StatCard icon={Activity} label="Active" value={activeTask ? 1 : 0} sub={activeTask?.name || 'None'} tone="text-green-500" />
-                              <StatCard icon={FileText} label="Pending" value={pendingTasks.length} sub="Ready jobs" tone="text-blue-500" />
-                              <StatCard icon={CheckSquare} label="Done" value={doneTasks.length} sub="Completed" tone="text-slate-500" />
-                          </div>
+                      <div className="flex-1 min-h-0 flex overflow-hidden">
+                          <aside className={`w-[30%] min-w-[240px] max-w-[300px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
+                              <div className={`shrink-0 px-3 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/55' : 'bg-white/70'}`}>
+                                  <div className="flex items-center justify-between gap-3">
+                                      <div>
+                                          <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Catalog</div>
+                                          <div className={`text-sm font-black ${t.textMain}`}>Field Tasks</div>
+                                      </div>
+                                      <span className="px-2 py-1 rounded-lg bg-green-500/10 text-green-500 text-[10px] font-black">{tasks.length}</span>
+                                  </div>
+                                  <div className="mt-2 grid grid-cols-3 gap-1.5">
+                                      {[
+                                          ['Running', activeTask ? 1 : 0, 'text-green-500'],
+                                          ['Pending', pendingTasks.length, 'text-blue-500'],
+                                          ['Done', doneTasks.length, 'text-slate-500']
+                                      ].map(([label, value, tone]) => (
+                                          <div key={label} className={`rounded-lg border ${t.borderCard} ${softPanelBg} px-2 py-1.5 text-center`}>
+                                              <div className={`text-sm font-black ${tone}`}>{value}</div>
+                                              <div className={`text-[8px] font-black uppercase ${t.textSub}`}>{label}</div>
+                                          </div>
+                                      ))}
+                                  </div>
+                              </div>
 
-                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                              <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} min-h-[260px] overflow-hidden`}>
-                                  <div className={`p-4 border-b ${t.divider}`}>
-                                      <SectionTitle icon={Activity} title="Running" />
-                                  </div>
-                                  <div className="p-4 space-y-3">
-                                      {activeTask ? renderTaskRow(activeTask) : <EmptyState label="No task running. Start one from Pending." />}
-                                  </div>
-                              </section>
-                              <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} min-h-[260px] overflow-hidden`}>
-                                  <div className={`p-4 border-b ${t.divider}`}>
-                                      <SectionTitle icon={PlayCircle} title="Pending" />
-                                  </div>
-                                  <div className="p-4 space-y-3">
-                                      {pendingTasks.length > 0 ? pendingTasks.map(renderTaskRow) : <EmptyState label="No pending task." />}
-                                  </div>
-                              </section>
-                              <section className={`rounded-xl border ${t.borderCard} ${softPanelBg} min-h-[260px] overflow-hidden`}>
-                                  <div className={`p-4 border-b ${t.divider}`}>
-                                      <SectionTitle icon={CheckSquare} title="Completed" />
-                                  </div>
-                                  <div className="p-4 space-y-3">
-                                      {doneTasks.length > 0 ? doneTasks.map(renderTaskRow) : <EmptyState label="No completed task." />}
-                                  </div>
+                              <div className="flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2">
+                                  {tasks.length > 0 ? tasks.map(task => {
+                                      const Icon = getTaskIcon(task);
+                                      const active = activeTaskId === task.id;
+                                      const selected = selectedTask?.id === task.id;
+                                      const created = getCreatedDateTime(task);
+                                      return (
+                                          <div
+                                              key={task.id}
+                                              role="button"
+                                              tabIndex={0}
+                                              onClick={() => setSelectedTaskId(task.id)}
+                                              onKeyDown={(event) => {
+                                                  if (event.key === 'Enter' || event.key === ' ') {
+                                                      event.preventDefault();
+                                                      setSelectedTaskId(task.id);
+                                                  }
+                                              }}
+                                              className={`relative p-2.5 rounded-xl border text-left transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40 ${selected ? 'border-green-500 bg-green-500/10 shadow-sm ring-1 ring-green-500/20' : active ? 'border-green-500/35 bg-green-500/5' : `${t.borderCard} ${softPanelBg} hover:border-green-400/70`}`}
+                                          >
+                                              {selected && <div className="absolute left-0 top-2.5 bottom-2.5 w-1 rounded-r bg-green-600" />}
+                                              <div className="flex items-start gap-2 min-w-0">
+                                                  <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${selected ? 'bg-green-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-50'} text-green-500 border ${t.borderCard}`}`}>
+                                                      <Icon className="w-4 h-4" />
+                                                  </div>
+                                                  <div className="min-w-0 flex-1">
+                                                      <div className="flex items-start justify-between gap-2">
+                                                          <div className={`text-sm font-black leading-tight ${t.textMain} truncate`}>{task.name}</div>
+                                                          <span className={`shrink-0 px-1.5 py-0.5 rounded-md border text-[8px] font-black uppercase ${getTaskStatusTone(task)}`}>{active ? 'Running' : task.status}</span>
+                                                      </div>
+                                                      <div className={`mt-0.5 text-[10px] ${t.textSub}`}>{task.type || 'Field work'}</div>
+                                                  </div>
+                                              </div>
+                                              <div className={`mt-2 pt-2 border-t ${t.divider} flex items-center justify-between gap-2`}>
+                                                  <div className="min-w-0">
+                                                      <div className={`text-[9px] font-bold ${t.textSub} truncate`}>{created.date}</div>
+                                                      <div className={`text-[9px] ${t.textDim} truncate`}>{getCreatedLocation(task, activeField)}</div>
+                                                  </div>
+                                                  <ChevronRight className={`w-4 h-4 shrink-0 ${selected ? 'text-green-500' : t.textDim}`} />
+                                              </div>
+                                          </div>
+                                      );
+                                  }) : (
+                                      <div className={`h-full min-h-[280px] flex flex-col items-center justify-center text-center px-5 ${t.textDim}`}>
+                                          <FileText className="w-14 h-14 mb-4 opacity-45" />
+                                          <div className={`text-lg font-black ${t.textMain}`}>No task created</div>
+                                          <div className="mt-2 text-sm">Create a job for this field, then start it when the vehicle is ready.</div>
+                                      </div>
+                                  )}
+                              </div>
+                          </aside>
+
+                          <div className={`flex-1 min-w-0 min-h-0 p-3 lg:p-4 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
+                              <section className={`${softPanelBg} border ${t.borderCard} rounded-xl min-w-0 min-h-0 h-full overflow-hidden flex flex-col`}>
+                                  {selectedTask ? (
+                                      <>
+                                          <div className={`shrink-0 px-4 py-3 border-b ${t.divider} flex items-start justify-between gap-3`}>
+                                              <div className="min-w-0 flex items-start gap-3">
+                                                  <div className="shrink-0 w-10 h-10 rounded-xl bg-green-500/10 text-green-500 flex items-center justify-center">
+                                                      <SelectedTaskIcon className="w-5 h-5" />
+                                                  </div>
+                                                  <div className="min-w-0">
+                                                      <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Selected task</div>
+                                                      <h3 className={`text-lg font-black ${t.textMain} truncate`}>{selectedTask.name}</h3>
+                                                      <div className={`mt-0.5 text-xs ${t.textSub}`}>{selectedTask.type || 'Field work'} / {activeField?.name || 'No field'}</div>
+                                                  </div>
+                                              </div>
+                                              <span className={`shrink-0 px-2.5 py-1 rounded-lg border text-[10px] font-black uppercase ${getTaskStatusTone(selectedTask)}`}>
+                                                  {activeTaskId === selectedTask.id ? 'Running' : selectedTask.status}
+                                              </span>
+                                          </div>
+
+                                          <div className="flex-1 min-h-0 p-3 lg:p-4 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(230px,0.62fr)] gap-3 lg:gap-4 overflow-hidden">
+                                              <div className="min-w-0 min-h-0 flex flex-col gap-3">
+                                                  <div className={`rounded-xl border ${t.borderCard} ${mutedPanelBg} p-4`}>
+                                                      <div className="flex items-center justify-between gap-4">
+                                                          <div className="min-w-0">
+                                                              <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Work profile</div>
+                                                              <div className={`mt-1 text-xl font-black ${t.textMain}`}>{selectedTask.type || 'General field work'}</div>
+                                                              <div className={`mt-1 text-sm ${t.textSub}`}>{taskOptions.find(option => option.type === selectedTask.type)?.detail || 'Field operation and progress tracking'}</div>
+                                                          </div>
+                                                          <div className={`shrink-0 w-16 h-16 rounded-2xl flex items-center justify-center ${getTaskStatusTone(selectedTask)} border`}>
+                                                              <SelectedTaskIcon className="w-8 h-8" />
+                                                          </div>
+                                                      </div>
+                                                  </div>
+
+                                                  <div className="grid grid-cols-2 gap-2">
+                                                      {[
+                                                          ['Status', activeTaskId === selectedTask.id ? 'Running' : selectedTask.status],
+                                                          ['Field', activeField?.name || '--'],
+                                                          ['Started', selectedTask.startedAt ? getCreatedDateTime({ createdAt: selectedTask.startedAt }).date : 'Not started'],
+                                                          ['Completed', selectedTask.completedAt ? getCreatedDateTime({ createdAt: selectedTask.completedAt }).date : 'Not completed']
+                                                      ].map(([label, value]) => (
+                                                          <div key={label} className={`${mutedPanelBg} border ${t.borderCard} rounded-lg p-2.5 min-w-0`}>
+                                                              <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
+                                                              <div className={`mt-1 text-xs leading-tight font-black ${label === 'Status' && activeTaskId === selectedTask.id ? 'text-green-500' : t.textMain} break-words`}>{value}</div>
+                                                          </div>
+                                                      ))}
+                                                  </div>
+
+                                                  <div className={`rounded-xl border ${t.borderCard} ${mutedPanelBg} p-3`}>
+                                                      <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Operator note</div>
+                                                      <div className={`mt-1 text-sm ${t.textMain}`}>Task is tied to <span className="font-black">{activeField?.name || 'this field'}</span>. Start it only when the vehicle and implement are positioned for work.</div>
+                                                  </div>
+                                              </div>
+
+                                              <div className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${mutedPanelBg} p-3 flex flex-col overflow-y-auto`}>
+                                                  <div className="flex items-center gap-2 mb-3">
+                                                      <MapPin className="w-4 h-4 text-green-500 shrink-0" />
+                                                      <h4 className={`font-black uppercase tracking-wider text-[11px] ${t.textSub}`}>Creation details</h4>
+                                                  </div>
+                                                  <div className="space-y-2">
+                                                      {[
+                                                          { label: 'Created date', value: selectedTaskCreated.date, sub: selectedTaskCreated.time, icon: Calendar },
+                                                          { label: 'Created at', value: selectedTaskLocation, sub: 'Field / location', icon: MapPin },
+                                                          { label: 'Vehicle position', value: selectedTaskPosition, sub: 'Simulation coordinates', icon: Crosshair },
+                                                          { label: 'Record quality', value: selectedTaskCreated.exact ? 'Complete metadata' : 'Legacy task', sub: selectedTaskCreated.exact ? 'Exact timestamp saved' : 'Creation time unavailable', icon: CheckCircle2 }
+                                                      ].map(({ label, value, sub, icon: Icon }) => (
+                                                          <div key={label} className={`${softPanelBg} border ${t.borderCard} rounded-lg p-2.5 flex items-start gap-2.5 min-w-0`}>
+                                                              <div className="shrink-0 w-7 h-7 rounded-lg bg-green-500/10 text-green-500 flex items-center justify-center">
+                                                                  <Icon className="w-3.5 h-3.5" />
+                                                              </div>
+                                                              <div className="min-w-0">
+                                                                  <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
+                                                                  <div className={`mt-0.5 text-xs font-black ${t.textMain} break-words`}>{value}</div>
+                                                                  <div className={`mt-0.5 text-[9px] ${t.textDim}`}>{sub}</div>
+                                                              </div>
+                                                          </div>
+                                                      ))}
+                                                  </div>
+                                              </div>
+                                          </div>
+
+                                          <div className={`shrink-0 px-4 py-3 border-t ${t.divider} flex flex-wrap items-center justify-between gap-2 ${theme === 'dark' ? 'bg-slate-950/50' : 'bg-white/70'}`}>
+                                              <button onClick={() => confirmDelete('task', selectedTask.id)} className="px-3 py-2 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold flex items-center gap-2">
+                                                  <Trash2 className="w-4 h-4" />
+                                                  Delete
+                                              </button>
+                                              <div className="flex flex-wrap items-center gap-2">
+                                                  {activeTaskId === selectedTask.id ? (
+                                                      <>
+                                                          <button onClick={() => handleTaskAction(selectedTask, 'pause')} className="px-4 py-2 rounded-lg border border-orange-500/30 text-orange-500 hover:bg-orange-500/10 font-black flex items-center gap-2">
+                                                              <Pause className="w-4 h-4" />
+                                                              Pause
+                                                          </button>
+                                                          <button onClick={() => handleTaskAction(selectedTask, 'finish')} className="px-5 py-2 rounded-lg bg-green-600 text-white hover:bg-green-500 font-black flex items-center gap-2">
+                                                              <CheckSquare className="w-4 h-4" />
+                                                              Finish Task
+                                                          </button>
+                                                      </>
+                                                  ) : selectedTask.status !== 'Done' ? (
+                                                      <button onClick={() => handleTaskAction(selectedTask, 'start')} className="px-5 py-2 rounded-lg bg-green-600 text-white hover:bg-green-500 font-black shadow-lg shadow-green-900/15 flex items-center gap-2">
+                                                          <PlayCircle className="w-4 h-4" />
+                                                          Start Task
+                                                      </button>
+                                                  ) : (
+                                                      <span className={`px-4 py-2 rounded-lg border ${t.borderCard} ${mutedPanelBg} ${t.textSub} font-black flex items-center gap-2`}>
+                                                          <CheckCircle2 className="w-4 h-4" />
+                                                          Completed
+                                                      </span>
+                                                  )}
+                                              </div>
+                                          </div>
+                                      </>
+                                  ) : (
+                                      <div className={`h-full min-h-[360px] flex flex-col items-center justify-center text-center px-8 ${t.textDim}`}>
+                                          <FileText className="w-16 h-16 mb-4 opacity-45" />
+                                          <h3 className={`text-xl font-black ${t.textMain}`}>No task selected</h3>
+                                          <p className="text-sm mt-2 max-w-[340px]">Create a task first. Its time, field and vehicle location will be stored here.</p>
+                                      </div>
+                                  )}
                               </section>
                           </div>
                       </div>
@@ -7824,8 +8404,27 @@ const renderLinesPanel = () => {
     <div className="w-full h-screen bg-neutral-900 flex items-center justify-center p-4 overflow-hidden">
         <div className={`relative ${t.deviceFrame} shadow-2xl flex border-[12px] rounded-2xl ring-4 ring-black/50 transition-colors duration-500`} style={{ width: '100%', maxWidth: '1280px', height: 'min(800px, calc(100vh - 32px))', maxHeight: '100%', overflow: 'clip' }}>
             {/* LEFT RAIL */}
-            <aside className={`w-[8.5%] min-w-[82px] flex-shrink-0 ${t.bgPanel} border-r ${t.border} flex flex-col items-center py-3 overflow-hidden z-30 shadow-2xl`}>
-                <div className="mb-3"><div className="w-10 h-10 xl:w-12 xl:h-12 bg-blue-600 rounded-xl flex items-center justify-center font-black text-xl xl:text-2xl italic shadow-blue-900/50 shadow-lg text-white">F</div></div>
+            <aside className={`w-[8.5%] min-w-[82px] flex-shrink-0 ${t.bgPanel} border-r ${t.border} flex flex-col items-center overflow-hidden z-30 shadow-2xl`}>
+                <div className="relative h-[88px] w-full flex flex-shrink-0 items-center justify-center">
+                    <div className="flex h-11 w-11 xl:h-12 xl:w-12 items-center justify-center">
+                        <div
+                            role="img"
+                            aria-label="Customer G logo"
+                            className={`h-12 w-12 xl:h-[50px] xl:w-[50px] max-w-none ${theme === 'dark' ? 'bg-[#d4af69]' : 'bg-[#946a32]'}`}
+                            style={{
+                                WebkitMaskImage: 'url("./src/assets/customer-g-logo-clean.png")',
+                                maskImage: 'url("./src/assets/customer-g-logo-clean.png")',
+                                WebkitMaskRepeat: 'no-repeat',
+                                maskRepeat: 'no-repeat',
+                                WebkitMaskPosition: 'center',
+                                maskPosition: 'center',
+                                WebkitMaskSize: '100%',
+                                maskSize: '100%'
+                            }}
+                        />
+                    </div>
+                    <div className={`absolute bottom-0 left-1/2 h-px w-1/2 -translate-x-1/2 ${t.divider}`} />
+                </div>
                 <nav className="flex-1 min-h-0 w-full flex flex-col items-center gap-1.5 pt-2">
                     <RailButton theme={t} icon={MapIcon} label="Run" active={!settingsOpen && !fieldManagerOpen && !linesPanelOpen} onClick={openRunScreen} />
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
@@ -7996,8 +8595,9 @@ const renderLinesPanel = () => {
                                     {(loadedField?.boundaries || []).concat(viewMode === 'CREATE_FIELD' ? currentFieldBoundaries : []).map((bound, bIdx) => (
                                         <polygon
                                             key={bIdx}
+                                            data-boundary-2d={bIdx}
                                             points={(bound.points || bound).map(p => `${p.x},${p.y}`).join(' ')}
-                                            fill={bIdx === activeBoundaryIdx ? "rgba(234, 179, 8, 0.2)" : "rgba(100, 116, 139, 0.2)"}
+                                            fill="none"
                                             stroke={bIdx === activeBoundaryIdx ? "#eab308" : "#64748b"}
                                             strokeWidth={bIdx === activeBoundaryIdx ? 2.8 : 2}
                                             strokeOpacity={bIdx === activeBoundaryIdx ? 0.9 : 0.55}
@@ -8009,8 +8609,9 @@ const renderLinesPanel = () => {
                                     ))}
                                     {previewBoundary && (
                                         <polygon
+                                            data-boundary-preview-2d="true"
                                             points={previewBoundary.map(p => `${p.x},${p.y}`).join(' ')}
-                                            fill="rgba(34, 197, 94, 0.3)"
+                                            fill="none"
                                             stroke="#22c55e"
                                             strokeWidth="3"
                                             strokeOpacity="0.9"

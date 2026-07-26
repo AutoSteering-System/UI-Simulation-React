@@ -242,6 +242,9 @@ const MockBackend = (() => {
             name: 'Spring Planting',
             type: 'Planting',
             date: '2023-10-15',
+            createdAt: '2023-10-15T08:30:00.000Z',
+            createdLocation: 'Home_Field_01',
+            createdPosition: { x: 0, y: 0 },
             status: 'Paused'
           }
         ]
