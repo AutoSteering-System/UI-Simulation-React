@@ -88,22 +88,37 @@ const MockBackend = (() => {
     implementSettings: {
       profileId: 'planter-6r',
       name: 'Planter_6R',
-      type: 'Planter',
+      type: 'Planting',
+      brand: 'Generic',
+      model: 'PX-6R',
+      serialNumber: 'PL6R-2401',
+      connectionType: 'Rear 3-point',
       width: DEFAULT_IMPLEMENT_WIDTH,
+      overallWidth: 3.2,
+      hitchToWorkPoint: 1.45,
+      hitchToRear: 1.75,
+      transportWidth: 3.2,
+      transportLength: 2.4,
+      workingDepth: 0.08,
+      weightKg: 1450,
+      capacity: 0,
       sections: 6,
       rowSpacing: 0.5,
       overlap: 0.1,
       offset: 0,
       delayOn: 0.5,
       delayOff: 0.2,
-      controlMode: 'Section Control'
+      controlMode: 'Section Control',
+      sectionControl: true
     },
     implementProfiles: [
-      { id: 'planter-6r', label: 'Planter 6R', detail: '6 rows / 3.0 m', name: 'Planter_6R', type: 'Planter', width: 3.0, sections: 6, rowSpacing: 0.5, overlap: 0.1, offset: 0, delayOn: 0.5, delayOff: 0.2, controlMode: 'Section Control' },
-      { id: 'sprayer-12m', label: 'Sprayer 12m', detail: '6 sections / boom', name: 'Sprayer_12m', type: 'Sprayer', width: 12.0, sections: 6, rowSpacing: 0, overlap: 0.2, offset: 0, delayOn: 0.8, delayOff: 0.4, controlMode: 'Boom Sections' },
-      { id: 'spreader-18m', label: 'Spreader 18m', detail: 'Spinner spread pattern', name: 'Spreader_18m', type: 'Spreader', width: 18.0, sections: 2, rowSpacing: 0, overlap: 0.3, offset: 0, delayOn: 1.0, delayOff: 0.6, controlMode: 'Rate Control' },
-      { id: 'blade-2_4m', label: 'Blade 2.4m', detail: 'Land leveling blade', name: 'Blade_2_4m', type: 'Blade', width: 2.4, sections: 1, rowSpacing: 0, overlap: 0, offset: 0, delayOn: 0, delayOff: 0, controlMode: 'Manual Lift' },
-      { id: 'custom', label: 'Custom', detail: 'Build from width / sections', name: 'Custom_Implement', type: 'Custom', width: 3.0, sections: 1, rowSpacing: 0, overlap: 0, offset: 0, delayOn: 0, delayOff: 0, controlMode: 'Manual Lift' }
+      { id: 'tillage-4m', label: 'Tillage 4.0m', detail: 'Drawbar cultivator / 4.0 m', name: 'Tillage_4M', type: 'Tillage', brand: 'Generic', model: 'CT-400', serialNumber: 'CT400-2401', connectionType: 'Drawbar', width: 4.0, overallWidth: 4.3, hitchToWorkPoint: 2.1, hitchToRear: 3.2, transportWidth: 3.0, transportLength: 4.4, workingDepth: 0.18, weightKg: 2800, capacity: 0, sections: 4, rowSpacing: 0.25, overlap: 0.1, offset: 0, delayOn: 0.2, delayOff: 0.1, controlMode: 'Manual Lift', sectionControl: false },
+      { id: 'sprayer-12m', label: 'Sprayer 12m', detail: '6 boom sections / 12.0 m', name: 'Sprayer_12M', type: 'Spraying', brand: 'Generic', model: 'BS-1200', serialNumber: 'BS1200-2407', connectionType: 'Drawbar', width: 12.0, overallWidth: 12.4, hitchToWorkPoint: 2.4, hitchToRear: 3.1, transportWidth: 2.8, transportLength: 4.5, workingDepth: 0, weightKg: 2200, capacity: 2400, sections: 6, rowSpacing: 0, overlap: 0.2, offset: 0, delayOn: 0.8, delayOff: 0.4, controlMode: 'Boom Sections', sectionControl: true },
+      { id: 'seeder-3m', label: 'Seeder 3.0m', detail: '18 rows / rear 3-point', name: 'Seeder_3M', type: 'Seeding', brand: 'Generic', model: 'SD-300', serialNumber: 'SD300-2411', connectionType: 'Rear 3-point', width: 3.0, overallWidth: 3.2, hitchToWorkPoint: 1.35, hitchToRear: 1.9, transportWidth: 3.2, transportLength: 2.6, workingDepth: 0.06, weightKg: 1650, capacity: 950, sections: 6, rowSpacing: 0.167, overlap: 0.05, offset: 0, delayOn: 0.5, delayOff: 0.25, controlMode: 'Section Control', sectionControl: true },
+      { id: 'harvest-6m', label: 'Harvest Header 6m', detail: '6.0 m cutter / integrated', name: 'Harvest_Header_6M', type: 'Harvest', brand: 'Generic', model: 'HD-600', serialNumber: 'HD600-2318', connectionType: 'Integrated', width: 6.0, overallWidth: 6.35, hitchToWorkPoint: 0.9, hitchToRear: 1.6, transportWidth: 3.0, transportLength: 2.2, workingDepth: 0, weightKg: 2400, capacity: 0, sections: 2, rowSpacing: 0, overlap: 0.12, offset: 0, delayOn: 0.4, delayOff: 0.2, controlMode: 'Header Control', sectionControl: false },
+      { id: 'planter-6r', label: 'Planter 6R', detail: '6 rows / 3.0 m', name: 'Planter_6R', type: 'Planting', brand: 'Generic', model: 'PX-6R', serialNumber: 'PL6R-2401', connectionType: 'Rear 3-point', width: 3.0, overallWidth: 3.2, hitchToWorkPoint: 1.45, hitchToRear: 1.75, transportWidth: 3.2, transportLength: 2.4, workingDepth: 0.08, weightKg: 1450, capacity: 0, sections: 6, rowSpacing: 0.5, overlap: 0.1, offset: 0, delayOn: 0.5, delayOff: 0.2, controlMode: 'Section Control', sectionControl: true },
+      { id: 'leveler-3m', label: 'Land Leveler 3m', detail: '3.0 m scraper / drawbar', name: 'Land_Leveler_3M', type: 'Land Leveling', brand: 'Generic', model: 'LL-300', serialNumber: 'LL300-2309', connectionType: 'Drawbar', width: 3.0, overallWidth: 3.15, hitchToWorkPoint: 2.2, hitchToRear: 3.0, transportWidth: 3.15, transportLength: 4.1, workingDepth: 0.12, weightKg: 3100, capacity: 4.5, sections: 1, rowSpacing: 0, overlap: 0.08, offset: 0, delayOn: 0, delayOff: 0, controlMode: 'Grade Control', sectionControl: false },
+      { id: 'ditcher-1_8m', label: 'Ditcher 1.8m', detail: 'V-ditch / rear 3-point', name: 'Ditcher_1_8M', type: 'Ditching', brand: 'Generic', model: 'DT-180', serialNumber: 'DT180-2414', connectionType: 'Rear 3-point', width: 1.8, overallWidth: 2.05, hitchToWorkPoint: 1.2, hitchToRear: 1.8, transportWidth: 2.05, transportLength: 2.1, workingDepth: 0.65, weightKg: 920, capacity: 0, sections: 1, rowSpacing: 0, overlap: 0, offset: 0, delayOn: 0, delayOff: 0, controlMode: 'Manual Lift', sectionControl: false }
     ],
     rtkSettings: {
       correctionSource: 'Base Station',
@@ -342,7 +357,16 @@ const MockBackend = (() => {
         gnssMountPosition: 'Cab roof crossbar'
       };
     });
-    next.implementSettings = { ...base.implementSettings, ...(persisted.data.implementSettings || {}) };
+    const persistedImplementSettings = persisted.data.implementSettings || {};
+    const activeImplementBase = base.implementProfiles.find((item) => item.id === persistedImplementSettings.profileId) || base.implementSettings;
+    next.implementSettings = { ...base.implementSettings, ...activeImplementBase, ...persistedImplementSettings };
+    const persistedImplementProfiles = persisted.data.implementProfiles || base.implementProfiles;
+    next.implementProfiles = persistedImplementProfiles.map((profile) => ({
+      ...base.implementSettings,
+      ...(base.implementProfiles.find((item) => item.id === profile.id) || {}),
+      ...profile,
+      profileId: undefined
+    }));
     next.rtkSettings = { ...base.rtkSettings, ...(persisted.data.rtkSettings || {}) };
     next.wifiSettings = { ...base.wifiSettings, ...(persisted.data.wifiSettings || {}) };
     next.uTurnSettings = { ...base.uTurnSettings, ...(persisted.data.uTurnSettings || {}) };

@@ -169,10 +169,11 @@ const App = () => {
   const [isCombinationPaused, setIsCombinationPaused] = useState(false);
   const [vehicleProfileSearch, setVehicleProfileSearch] = useState('');
   const [vehicleSetupStep, setVehicleSetupStep] = useState('information');
-  const [vehicleGeometryGroup, setVehicleGeometryGroup] = useState('chassis');
   const [vehicleMeasureFocus, setVehicleMeasureFocus] = useState('wheelbase');
   const settingsContentScrollRef = useRef(null);
   const [implementProfileSearch, setImplementProfileSearch] = useState('');
+  const [implementSetupStep, setImplementSetupStep] = useState('information');
+  const [implementMeasureFocus, setImplementMeasureFocus] = useState('width');
   const [rtkQualityOpen, setRtkQualityOpen] = useState(false);
   const [eventHistoryOpen, setEventHistoryOpen] = useState(false);
   const [productivityOpen, setProductivityOpen] = useState(false);
@@ -4872,10 +4873,37 @@ const App = () => {
 
   const savedVehicleProfiles = vehicleProfiles || [];
   const savedImplementProfiles = implementProfiles || [];
+  const implementTypeOptions = [
+      { id: 'tillage', label: 'Tillage', detail: 'Cultivator, plow and soil preparation', connectionType: 'Drawbar', controlMode: 'Manual Lift', width: 4, overallWidth: 4.3, hitchToWorkPoint: 2.1, hitchToRear: 3.2, transportWidth: 3, transportLength: 4.4, workingDepth: 0.18, weightKg: 2800, capacity: 0, sections: 4, rowSpacing: 0.25 },
+      { id: 'spraying', label: 'Spraying', detail: 'Boom sprayer and liquid application', connectionType: 'Drawbar', controlMode: 'Boom Sections', width: 12, overallWidth: 12.4, hitchToWorkPoint: 2.4, hitchToRear: 3.1, transportWidth: 2.8, transportLength: 4.5, workingDepth: 0, weightKg: 2200, capacity: 2400, sections: 6, rowSpacing: 0 },
+      { id: 'seeding', label: 'Seeding', detail: 'Grain drill and air seeder', connectionType: 'Rear 3-point', controlMode: 'Section Control', width: 3, overallWidth: 3.2, hitchToWorkPoint: 1.35, hitchToRear: 1.9, transportWidth: 3.2, transportLength: 2.6, workingDepth: 0.06, weightKg: 1650, capacity: 950, sections: 6, rowSpacing: 0.167 },
+      { id: 'harvest', label: 'Harvest', detail: 'Header and crop pickup attachment', connectionType: 'Integrated', controlMode: 'Header Control', width: 6, overallWidth: 6.35, hitchToWorkPoint: 0.9, hitchToRear: 1.6, transportWidth: 3, transportLength: 2.2, workingDepth: 0, weightKg: 2400, capacity: 0, sections: 2, rowSpacing: 0 },
+      { id: 'planting', label: 'Planting', detail: 'Precision row-crop planter', connectionType: 'Rear 3-point', controlMode: 'Section Control', width: 3, overallWidth: 3.2, hitchToWorkPoint: 1.45, hitchToRear: 1.75, transportWidth: 3.2, transportLength: 2.4, workingDepth: 0.08, weightKg: 1450, capacity: 0, sections: 6, rowSpacing: 0.5 },
+      { id: 'leveling', label: 'Land Leveling', detail: 'Scraper, grader and leveling blade', connectionType: 'Drawbar', controlMode: 'Grade Control', width: 3, overallWidth: 3.15, hitchToWorkPoint: 2.2, hitchToRear: 3, transportWidth: 3.15, transportLength: 4.1, workingDepth: 0.12, weightKg: 3100, capacity: 4.5, sections: 1, rowSpacing: 0 },
+      { id: 'ditching', label: 'Ditching', detail: 'V-ditch and drainage former', connectionType: 'Rear 3-point', controlMode: 'Manual Lift', width: 1.8, overallWidth: 2.05, hitchToWorkPoint: 1.2, hitchToRear: 1.8, transportWidth: 2.05, transportLength: 2.1, workingDepth: 0.65, weightKg: 920, capacity: 0, sections: 1, rowSpacing: 0 }
+  ];
   const filteredVehicleProfiles = savedVehicleProfiles.filter(profile => `${profile.label || ''} ${profile.type || ''} ${profile.detail || ''}`.toLowerCase().includes(vehicleProfileSearch.toLowerCase()));
   const filteredImplementProfiles = savedImplementProfiles.filter(profile => `${profile.label || ''} ${profile.name || ''} ${profile.type || ''} ${profile.detail || ''}`.toLowerCase().includes(implementProfileSearch.toLowerCase()));
   const activeVehicleProfile = savedVehicleProfiles.find(profile => profile.id === vehicleSettings.profileId) || savedVehicleProfiles[0] || vehicleSettings;
   const activeImplementProfile = savedImplementProfiles.find(profile => profile.id === implementSettings.profileId) || savedImplementProfiles[0] || implementSettings;
+  const getVehicleAssetPrefix = (profile = {}) => {
+      const identity = `${profile.type || ''} ${profile.label || ''} ${profile.id || ''}`.toLowerCase();
+      if (identity.includes('articulated')) return 'articulated';
+      if (identity.includes('self propelled') || identity.includes('self-propelled')) return 'sprayer';
+      return 'tractor';
+  };
+  const getVehicleAsset = (profile, view = 'side') => `src/assets/vehicles/${getVehicleAssetPrefix(profile)}-${view}.png`;
+  const getImplementAssetKey = (profile = {}) => {
+      const identity = `${profile.type || ''} ${profile.label || ''} ${profile.id || ''}`.toLowerCase();
+      if (identity.includes('spray') || identity.includes('spread')) return 'spraying';
+      if (identity.includes('seed')) return 'seeding';
+      if (identity.includes('harvest') || identity.includes('header')) return 'harvest';
+      if (identity.includes('plant')) return 'planting';
+      if (identity.includes('level') || identity.includes('blade') || identity.includes('grade')) return 'leveling';
+      if (identity.includes('ditch')) return 'ditching';
+      return 'tillage';
+  };
+  const getImplementAsset = (profile) => `src/assets/implements/${getImplementAssetKey(profile)}.png`;
   const makeProfileId = (prefix, name) => `${prefix}-${String(name || 'profile').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${Date.now().toString(36)}`;
   const cleanProfileLabel = (value, fallback) => String(value || fallback).replace(/_/g, ' ');
   const getImplementProfileDetail = (profile) => `${profile.sections || 1} sections / ${Number(profile.width || 0).toFixed(1)} m`;
@@ -4892,6 +4920,70 @@ const App = () => {
       requestAnimationFrame(() => {
           settingsContentScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
       });
+  };
+  const startNewVehicleProfile = () => {
+      const template = savedVehicleProfiles[0] || vehicleSettings;
+      actions.setVehicleSettings(prev => ({
+          ...prev,
+          ...template,
+          profileId: null,
+          label: 'New Vehicle',
+          brand: 'Generic',
+          model: '',
+          purchaseDate: '',
+          custom: true
+      }));
+      setVehicleSetupStep('information');
+      setVehicleMeasureFocus('wheelbase');
+      requestAnimationFrame(() => settingsContentScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' }));
+      showNotification('New vehicle draft ready — complete the details, then save', 'info');
+  };
+  const implementSetupStepIds = ['information', 'geometry', 'summary'];
+  const goToImplementStep = (index) => {
+      const bounded = Math.max(0, Math.min(implementSetupStepIds.length - 1, index));
+      setImplementSetupStep(implementSetupStepIds[bounded]);
+      requestAnimationFrame(() => {
+          settingsContentScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+  };
+  const startNewImplementProfile = () => {
+      const template = implementTypeOptions[0];
+      actions.setImplementSettings(prev => ({
+          ...prev,
+          ...template,
+          profileId: null,
+          name: 'New_Implement',
+          brand: 'Generic',
+          model: '',
+          serialNumber: '',
+          overlap: 0,
+          offset: 0,
+          delayOn: 0,
+          delayOff: 0,
+          sectionControl: false,
+          custom: true
+      }));
+      setImplementSetupStep('information');
+      setImplementMeasureFocus('width');
+      requestAnimationFrame(() => settingsContentScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' }));
+      showNotification('New implement draft ready — choose a type and complete the details', 'info');
+  };
+  const applyImplementType = (option) => {
+      actions.setImplementSettings(prev => ({
+          ...prev,
+          ...option,
+          type: option.label,
+          name: `${option.label.replace(/\s+/g, '_')}_${Number(option.width || 0).toFixed(1)}M`,
+          brand: prev.brand || 'Generic',
+          model: option.label,
+          serialNumber: '',
+          overlap: Number(prev.overlap || 0),
+          offset: 0,
+          delayOn: option.controlMode === 'Manual Lift' ? 0 : 0.5,
+          delayOff: option.controlMode === 'Manual Lift' ? 0 : 0.2,
+          sectionControl: ['Section Control', 'Boom Sections'].includes(option.controlMode)
+      }));
+      setImplementMeasureFocus('width');
   };
 
   const applyVehicleProfile = (profile) => {
@@ -4969,7 +5061,28 @@ const App = () => {
   };
 
   const applyImplementProfile = (profile) => {
-      actions.setImplementSettings(prev => ({ ...prev, ...profile, profileId: profile.id }));
+      const typeDefaults = implementTypeOptions.find(option => option.id === getImplementAssetKey(profile)) || implementTypeOptions[0];
+      actions.setImplementSettings(prev => ({
+          ...prev,
+          ...typeDefaults,
+          ...profile,
+          profileId: profile.id,
+          type: implementTypeOptions.some(option => option.label === profile.type) ? profile.type : typeDefaults.label,
+          brand: profile.brand || prev.brand || 'Generic',
+          model: profile.model || profile.label || profile.type,
+          serialNumber: profile.serialNumber || '',
+          connectionType: profile.connectionType || typeDefaults.connectionType,
+          overallWidth: Number(profile.overallWidth ?? Math.max(Number(profile.width || typeDefaults.width), Number(profile.width || typeDefaults.width) + 0.2)),
+          hitchToWorkPoint: Number(profile.hitchToWorkPoint ?? typeDefaults.hitchToWorkPoint),
+          hitchToRear: Number(profile.hitchToRear ?? typeDefaults.hitchToRear),
+          transportWidth: Number(profile.transportWidth ?? typeDefaults.transportWidth),
+          transportLength: Number(profile.transportLength ?? typeDefaults.transportLength),
+          workingDepth: Number(profile.workingDepth ?? typeDefaults.workingDepth),
+          weightKg: Number(profile.weightKg ?? typeDefaults.weightKg),
+          capacity: Number(profile.capacity ?? typeDefaults.capacity),
+          sectionControl: profile.sectionControl ?? ['Section Control', 'Boom Sections'].includes(profile.controlMode || typeDefaults.controlMode)
+      }));
+      setImplementMeasureFocus('width');
       showNotification(`${profile.label} implement profile applied`, 'success');
   };
 
@@ -5086,98 +5199,412 @@ const App = () => {
       </div>
   );
 
-  const VehicleLibrarySidebar = () => (
-      <aside className={`flex min-h-0 flex-col border-r ${t.border} ${theme === 'dark' ? 'bg-slate-950/45' : 'bg-slate-50/80'}`}>
-          <div className={`border-b ${t.border} p-3`}>
-              <div className="flex items-center justify-between gap-2">
-                  <div>
-                      <div className={`text-[9px] font-black uppercase tracking-wider ${t.textSub}`}>Vehicle library</div>
-                      <div className={`text-sm font-black ${t.textMain}`}>Saved machines</div>
+  const SetupLibrarySidebar = ({
+      eyebrow,
+      title,
+      count,
+      searchValue,
+      onSearchChange,
+      searchPlaceholder,
+      profiles,
+      isActive,
+      onSelect,
+      getImage,
+      getSecondary,
+      getMeta,
+      onDelete,
+      emptyText,
+      headerAction,
+      footer
+  }) => (
+      <aside className={`flex min-h-0 flex-col border-r font-sans ${t.border} ${theme === 'dark' ? 'bg-slate-950/45' : 'bg-slate-50/80'}`}>
+          <div className={`border-b ${t.border} px-4 py-3.5`}>
+              <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                      <div className={`text-[10px] font-semibold uppercase leading-4 tracking-[0.08em] ${t.textSub}`}>{eyebrow}</div>
+                      <div className={`truncate text-[15px] font-bold leading-5 tracking-[-0.01em] ${t.textMain}`}>{title}</div>
                   </div>
-                  <span className="rounded-full bg-blue-500/10 px-2 py-1 text-[9px] font-black text-blue-500">{savedVehicleProfiles.length}</span>
+                  <span className="mt-0.5 flex shrink-0 items-center gap-1.5">
+                      <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-blue-500/10 px-2 text-[10px] font-bold tabular-nums text-blue-500">
+                          {count}
+                      </span>
+                      {headerAction}
+                  </span>
               </div>
-              <div className="relative mt-3">
-                  <Search className={`absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ${t.textDim}`} />
+              <label className="relative mt-3 block">
+                  <Search className={`pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ${t.textDim}`} />
                   <input
-                      value={vehicleProfileSearch}
-                      onChange={(event) => setVehicleProfileSearch(event.target.value)}
-                      placeholder="Search vehicle"
-                      className={`w-full rounded-lg border ${t.borderCard} ${t.bgInput} py-2.5 pl-8 pr-3 text-[11px] ${t.textMain} outline-none focus:border-blue-500`}
+                      value={searchValue}
+                      onChange={(event) => onSearchChange(event.target.value)}
+                      placeholder={searchPlaceholder}
+                      className={`h-10 w-full rounded-lg border ${t.borderCard} ${t.bgInput} pl-8 pr-3 text-xs font-medium ${t.textMain} outline-none transition-colors placeholder:font-normal focus:border-blue-500`}
                   />
-              </div>
+              </label>
           </div>
 
           <div className="flex-1 space-y-2 overflow-y-auto p-3">
-              {filteredVehicleProfiles.map((profile) => {
-                  const active = vehicleSettings.profileId === profile.id;
+              {profiles.map((profile) => {
+                  const active = isActive(profile);
                   return (
-                      <button
+                      <article
                           key={profile.id}
-                          type="button"
-                          onClick={() => applyVehicleProfile(profile)}
-                          className={`group relative flex w-full min-w-0 items-center gap-2.5 rounded-xl border p-2.5 text-left transition-colors ${active ? 'border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/15' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/55' : 'bg-white'} hover:border-blue-500/50`}`}
+                          className={`group w-full min-w-0 rounded-xl border px-2.5 py-2 transition-colors ${active ? 'border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/15' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/55' : 'bg-white'} hover:border-blue-500/50`}`}
                       >
-                          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-blue-50'} text-blue-500`}`}>
-                              <Tractor className="h-[18px] w-[18px]" />
-                          </span>
-                          <span className="min-w-0 flex-1">
-                              <span className={`block truncate text-[11px] font-black ${t.textMain}`}>{profile.label}</span>
-                              <span className={`block truncate text-[9px] ${t.textSub}`}>{profile.brand || 'Generic'} · {profile.model || profile.type}</span>
-                          </span>
-                          {profile.custom ? (
-                              <span
-                                  role="button"
-                                  tabIndex={0}
-                                  aria-label={`Delete ${profile.label}`}
-                                  onClick={(event) => deleteVehicleProfile(profile, event)}
-                                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') deleteVehicleProfile(profile, event); }}
-                                  className="rounded-md p-1 text-red-500 opacity-60 hover:bg-red-500/10 group-hover:opacity-100"
-                              >
-                                  <Trash2 className="h-3.5 w-3.5" />
+                          <button type="button" onClick={() => onSelect(profile)} className="grid w-full min-w-0 grid-cols-[48px_minmax(0,1fr)] items-center gap-2 text-left">
+                              <span className={`flex h-11 w-12 items-center justify-center overflow-hidden rounded-lg border ${active ? 'border-blue-500/40 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-950/70' : 'bg-slate-50'}`}`}>
+                                  <img src={getImage(profile)} alt="" aria-hidden="true" className="h-full w-full object-contain p-1" />
                               </span>
-                          ) : active ? <CheckCircle2 className="h-4 w-4 shrink-0 text-blue-500" /> : null}
-                      </button>
+                              <span className="min-w-0">
+                                  <span
+                                      className={`block text-xs font-bold leading-[15px] tracking-[-0.01em] ${active ? 'text-blue-500' : t.textMain}`}
+                                      style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                                  >
+                                      {profile.label}
+                                  </span>
+                                  <span className={`mt-0.5 block truncate text-[10px] font-medium leading-4 ${t.textSub}`}>{getSecondary(profile)}</span>
+                                  <span className={`block truncate text-[10px] font-normal leading-[14px] ${t.textDim}`}>{getMeta(profile)}</span>
+                              </span>
+                          </button>
+
+                          <div className={`mt-2 flex items-center justify-between gap-2 border-t ${t.border} pt-2`}>
+                              <span className={`text-[8px] font-semibold uppercase tracking-[0.08em] ${profile.custom ? 'text-violet-500' : t.textDim}`}>
+                                  {profile.custom ? 'Custom profile' : 'Built-in'}
+                              </span>
+                              <span className="flex items-center gap-1.5">
+                                  {profile.custom && (
+                                      <button
+                                          type="button"
+                                          aria-label={`Delete ${profile.label}`}
+                                          onClick={(event) => onDelete(profile, event)}
+                                          className="flex h-7 items-center gap-1 rounded-md border border-red-500/30 px-2 text-[9px] font-semibold uppercase text-red-500 transition-colors hover:bg-red-500/10"
+                                      >
+                                          <Trash2 className="h-3 w-3" />
+                                          Delete
+                                      </button>
+                                  )}
+                                  {active ? (
+                                      <span className="flex h-7 items-center gap-1 rounded-md bg-green-500/12 px-2 text-[9px] font-bold uppercase text-green-500">
+                                          <CheckCircle2 className="h-3 w-3" />
+                                          Active
+                                      </span>
+                                  ) : (
+                                      <button
+                                          type="button"
+                                          onClick={() => onSelect(profile)}
+                                          className="flex h-7 items-center gap-1 rounded-md bg-blue-600 px-2.5 text-[9px] font-bold uppercase text-white transition-colors hover:bg-blue-500"
+                                      >
+                                          Load
+                                          <ChevronRight className="h-3 w-3" />
+                                      </button>
+                                  )}
+                              </span>
+                          </div>
+                      </article>
                   );
               })}
-              {filteredVehicleProfiles.length === 0 && (
-                  <div className={`rounded-xl border border-dashed ${t.borderCard} p-4 text-center text-[11px] ${t.textDim}`}>No matching vehicle.</div>
+              {profiles.length === 0 && (
+                  <div className={`rounded-xl border border-dashed ${t.borderCard} px-3 py-5 text-center text-xs font-medium ${t.textDim}`}>{emptyText}</div>
               )}
           </div>
 
-          <div className={`border-t ${t.border} p-3`}>
-              <button
-                  type="button"
-                  onClick={() => showNotification('Quick import is ready for a vehicle profile file', 'info')}
-                  className={`flex w-full items-center justify-center gap-2 rounded-lg border ${t.borderCard} px-3 py-2.5 text-[10px] font-black ${t.textSub} hover:border-blue-500 hover:text-blue-500`}
-              >
-                  <FolderOpen className="h-3.5 w-3.5" />
-                  Import profile
-              </button>
-          </div>
+          <div className={`border-t ${t.border} p-3`}>{footer}</div>
       </aside>
   );
 
-  const VehicleParameterInput = ({ field, label, value, unit = 'm', hint }) => {
+  const VehicleLibrarySidebar = () => (
+      <SetupLibrarySidebar
+          eyebrow="Vehicle"
+          title="Machines"
+          count={savedVehicleProfiles.length}
+          searchValue={vehicleProfileSearch}
+          onSearchChange={setVehicleProfileSearch}
+          searchPlaceholder="Search machines"
+          profiles={filteredVehicleProfiles}
+          isActive={(profile) => vehicleSettings.profileId === profile.id}
+          onSelect={applyVehicleProfile}
+          getImage={(profile) => getVehicleAsset(profile, 'side')}
+          getSecondary={(profile) => `${profile.brand || 'Generic'} \u00B7 ${profile.model || profile.type}`}
+          getMeta={(profile) => `${profile.type || 'Vehicle'} \u00B7 ${Number(profile.horsepower || 0)} HP`}
+          onDelete={deleteVehicleProfile}
+          emptyText="No matching machine"
+          headerAction={(
+              <button
+                  type="button"
+                  onClick={startNewVehicleProfile}
+                  className="flex h-7 items-center gap-1 rounded-md bg-blue-600 px-2 text-[9px] font-bold uppercase text-white transition-colors hover:bg-blue-500"
+              >
+                  <Plus className="h-3 w-3" />
+                  New
+              </button>
+          )}
+          footer={(
+              <button
+                  type="button"
+                  onClick={() => showNotification('Quick import is ready for a vehicle profile file', 'info')}
+                  className={`flex h-10 w-full items-center justify-center gap-1.5 rounded-lg border ${t.borderCard} px-2 text-[11px] font-semibold ${t.textSub} transition-colors hover:border-blue-500 hover:text-blue-500`}
+              >
+                  <FolderOpen className="h-4 w-4" />
+                  Import profile
+              </button>
+          )}
+      />
+  );
+
+  const ImplementLibrarySidebar = () => (
+      <SetupLibrarySidebar
+          eyebrow="Implement"
+          title="Implements"
+          count={savedImplementProfiles.length}
+          searchValue={implementProfileSearch}
+          onSearchChange={setImplementProfileSearch}
+          searchPlaceholder="Search implements"
+          profiles={filteredImplementProfiles}
+          isActive={(profile) => implementSettings.profileId === profile.id}
+          onSelect={applyImplementProfile}
+          getImage={getImplementAsset}
+          getSecondary={(profile) => `${profile.type || 'Implement'} \u00B7 ${profile.connectionType || 'Rear 3-point'}`}
+          getMeta={(profile) => `${Number(profile.width || 0).toFixed(1)} m working width`}
+          onDelete={deleteImplementProfile}
+          emptyText="No matching implement"
+          headerAction={(
+              <button
+                  type="button"
+                  onClick={startNewImplementProfile}
+                  className="flex h-7 items-center gap-1 rounded-md bg-blue-600 px-2 text-[9px] font-bold uppercase text-white transition-colors hover:bg-blue-500"
+              >
+                  <Plus className="h-3 w-3" />
+                  New
+              </button>
+          )}
+          footer={(
+              <button
+                  type="button"
+                  onClick={() => showNotification('Quick import is ready for an implement profile file', 'info')}
+                  className={`flex h-10 w-full items-center justify-center gap-1.5 rounded-lg border ${t.borderCard} px-2 text-[11px] font-semibold ${t.textSub} transition-colors hover:border-blue-500 hover:text-blue-500`}
+              >
+                  <FolderOpen className="h-4 w-4" />
+                  Import profile
+              </button>
+          )}
+      />
+  );
+
+  const VehicleParameterInput = ({ field, label, value, unit = 'm', hint, className = '' }) => {
       const active = vehicleMeasureFocus === field;
       return (
           <label
-              className={`block rounded-xl border p-3 transition-colors cursor-text ${active ? 'border-blue-500 bg-blue-500/8 ring-1 ring-blue-500/20' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/60' : 'bg-white'}`}`}
+              className={`flex min-w-0 cursor-text items-center gap-3 border-b ${t.border} px-3 py-2.5 transition-colors last:border-b-0 ${active ? 'bg-blue-500/7' : ''} ${className}`}
+              style={active ? { boxShadow: 'inset 3px 0 0 #2563eb' } : undefined}
               onClick={() => setVehicleMeasureFocus(field)}
           >
-              <span className={`block text-[10px] font-black uppercase tracking-wide ${active ? 'text-blue-500' : t.textSub}`}>{label}</span>
-              <span className="mt-1.5 flex items-center gap-2">
+              <span className="min-w-0 flex-1">
+                  <span className={`block text-[9px] font-black uppercase tracking-wide ${active ? 'text-blue-500' : t.textMain}`}>{label}</span>
+                  {hint && <span className={`mt-0.5 block truncate text-[8px] ${t.textDim}`}>{hint}</span>}
+              </span>
+              <span className={`flex w-[92px] shrink-0 items-center rounded-lg border ${active ? 'border-blue-500/40' : t.borderCard} ${t.bgInput} px-2.5`}>
                   <input
                       type="number"
                       step={unit === '°' ? '0.1' : '0.01'}
                       value={Number.isFinite(Number(value)) ? Math.round(Number(value) * 1000) / 1000 : 0}
                       onFocus={() => setVehicleMeasureFocus(field)}
                       onChange={(event) => handleVehicleChange(field, parseFloat(event.target.value) || 0)}
-                      className={`min-w-0 flex-1 bg-transparent text-lg font-black outline-none ${t.textMain}`}
+                      className={`h-9 min-w-0 flex-1 bg-transparent text-right text-sm font-black outline-none ${t.textMain}`}
                   />
-                  <span className={`text-xs font-black uppercase ${t.textDim}`}>{unit}</span>
+                  <span className={`ml-1 text-[9px] font-black uppercase ${t.textDim}`}>{unit}</span>
               </span>
-              {hint && <span className={`mt-1 block text-[10px] leading-snug ${t.textDim}`}>{hint}</span>}
           </label>
+      );
+  };
+
+  const ImplementParameterInput = ({ field, label, value, unit = 'm', hint, step = '0.01', className = '' }) => {
+      const active = implementMeasureFocus === field;
+      return (
+          <label
+              className={`flex min-w-0 cursor-text items-center gap-3 border-b ${t.border} px-3 py-2.5 transition-colors last:border-b-0 ${active ? 'bg-blue-500/7' : ''} ${className}`}
+              style={active ? { boxShadow: 'inset 3px 0 0 #2563eb' } : undefined}
+              onClick={() => setImplementMeasureFocus(field)}
+          >
+              <span className="min-w-0 flex-1">
+                  <span className={`block text-[9px] font-black uppercase tracking-wide ${active ? 'text-blue-500' : t.textMain}`}>{label}</span>
+                  {hint && <span className={`mt-0.5 block truncate text-[8px] ${t.textDim}`}>{hint}</span>}
+              </span>
+              <span className={`flex w-[100px] shrink-0 items-center rounded-lg border ${active ? 'border-blue-500/40' : t.borderCard} ${t.bgInput} px-2.5`}>
+                  <input
+                      type="number"
+                      step={step}
+                      value={Number.isFinite(Number(value)) ? Math.round(Number(value) * 1000) / 1000 : 0}
+                      onFocus={() => setImplementMeasureFocus(field)}
+                      onChange={(event) => handleImplementChange(field, parseFloat(event.target.value) || 0)}
+                      className={`h-9 min-w-0 flex-1 bg-transparent text-right text-sm font-black outline-none ${t.textMain}`}
+                  />
+                  <span className={`ml-1 text-[9px] font-black uppercase ${t.textDim}`}>{unit}</span>
+              </span>
+          </label>
+      );
+  };
+
+  const RealImplementMeasurementView = () => {
+      const implementDisplayType = implementTypeOptions.find(option => option.id === getImplementAssetKey(implementSettings))?.label || implementSettings.type || 'Implement';
+      const numberValue = (field, decimals = 2) => Number(implementSettings[field] || 0).toFixed(decimals);
+      const measures = {
+          width: ['Working width', `${numberValue('width')} m`, '#2563eb', 'width'],
+          overallWidth: ['Overall width', `${numberValue('overallWidth')} m`, '#06b6d4', 'overall'],
+          hitchToWorkPoint: ['Hitch to working point', `${numberValue('hitchToWorkPoint')} m`, '#f59e0b', 'length'],
+          hitchToRear: ['Hitch to rear edge', `${numberValue('hitchToRear')} m`, '#f97316', 'length'],
+          offset: ['Lateral offset', `${Number(implementSettings.offset || 0) >= 0 ? '+' : ''}${numberValue('offset')} m`, '#8b5cf6', 'offset'],
+          overlap: ['Skip / overlap', `${numberValue('overlap')} m`, '#ef4444', 'overlap'],
+          sections: ['Sections / rows', `${Math.max(1, Number(implementSettings.sections || 1))}`, '#16a34a', 'sections'],
+          rowSpacing: ['Row spacing', `${numberValue('rowSpacing', 3)} m`, '#16a34a', 'rows'],
+          transportWidth: ['Transport width', `${numberValue('transportWidth')} m`, '#0f766e', 'transportWidth'],
+          transportLength: ['Transport length', `${numberValue('transportLength')} m`, '#d97706', 'transportLength'],
+          workingDepth: ['Working depth', `${numberValue('workingDepth')} m`, '#a16207', 'depth'],
+          weightKg: ['Operating weight', `${Math.round(Number(implementSettings.weightKg || 0))} kg`, '#64748b', 'mass'],
+          capacity: ['Tank / hopper capacity', `${numberValue('capacity', 0)} ${implementDisplayType === 'Land Leveling' ? 'm³' : 'L'}`, '#0284c7', 'capacity'],
+          delayOn: ['Switch-on delay', `${numberValue('delayOn', 1)} s`, '#22c55e', 'timing'],
+          delayOff: ['Switch-off delay', `${numberValue('delayOff', 1)} s`, '#ef4444', 'timing']
+      };
+      const selected = measures[implementMeasureFocus] || measures.width;
+      const [selectedLabel, selectedValue, selectedColor, selectedMode] = selected;
+      const sectionCount = Math.max(1, Math.min(16, Number(implementSettings.sections || 1)));
+      const offsetPx = Math.max(-80, Math.min(80, Number(implementSettings.offset || 0) * 80));
+      const gridStroke = theme === 'dark' ? '#1e293b' : '#e2e8f0';
+      const panelFill = theme === 'dark' ? '#020617' : '#ffffff';
+      const mutedColor = theme === 'dark' ? '#64748b' : '#94a3b8';
+      const sectionWidthPx = 360 / sectionCount;
+
+      const MeasureLabel = ({ x, y, text = selectedValue, color = selectedColor }) => (
+          <g>
+              <rect x={x - 46} y={y - 13} width="92" height="26" rx="8" fill={panelFill} stroke={color} strokeWidth="1.5" />
+              <text x={x} y={y + 4} textAnchor="middle" fontSize="10" fontWeight="900" fill={color}>{text}</text>
+          </g>
+      );
+
+      return (
+          <div className={`overflow-hidden rounded-2xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'}`}>
+              <style>{`
+                  @keyframes implementMeasureIn {
+                      from { opacity: 0; transform: translateY(6px) scale(.985); }
+                      to { opacity: 1; transform: translateY(0) scale(1); }
+                  }
+                  @keyframes implementTimingPulse {
+                      0%, 100% { opacity: .35; }
+                      50% { opacity: 1; }
+                  }
+              `}</style>
+              <div className={`flex items-center justify-between gap-3 border-b ${t.border} px-3.5 py-3`}>
+                  <div className="min-w-0">
+                      <div className={`text-[8px] font-black uppercase tracking-wider ${t.textSub}`}>{implementDisplayType} reference</div>
+                      <div className={`truncate text-sm font-black ${t.textMain}`}>{selectedLabel}</div>
+                  </div>
+                  <span className="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-black" style={{ color: selectedColor, backgroundColor: `${selectedColor}14` }}>
+                      {selectedValue}
+                  </span>
+              </div>
+
+              <svg viewBox="0 0 520 330" className="h-[350px] w-full" role="img" aria-label={`${selectedLabel} on real ${implementDisplayType} view`}>
+                  <defs>
+                      <pattern id="real-implement-grid" width="30" height="30" patternUnits="userSpaceOnUse">
+                          <path d="M30 0H0V30" fill="none" stroke={gridStroke} strokeWidth="1" />
+                      </pattern>
+                      <marker id="implement-measure-arrow" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto-start-reverse">
+                          <path d="M0 0L7 3.5L0 7Z" fill={selectedColor} />
+                      </marker>
+                  </defs>
+                  <rect width="520" height="330" fill="url(#real-implement-grid)" />
+                  <g key={`${getImplementAssetKey(implementSettings)}-${implementMeasureFocus}`} style={{ animation: 'implementMeasureIn 220ms ease-out' }}>
+                      <image href={getImplementAsset(implementSettings)} x="38" y="36" width="444" height="220" preserveAspectRatio="xMidYMid meet" />
+                      <line x1="260" y1="28" x2="260" y2="300" stroke={mutedColor} strokeDasharray="6 5" opacity="0.42" />
+                      <circle cx="260" cy="246" r="6" fill={panelFill} stroke={selectedColor} strokeWidth="2.5" />
+                      <text x="270" y="250" fontSize="8" fontWeight="900" fill={mutedColor}>HITCH DATUM</text>
+
+                      {selectedMode === 'width' && (
+                          <>
+                              <line x1="82" y1="276" x2="438" y2="276" stroke={selectedColor} strokeWidth="3.5" markerStart="url(#implement-measure-arrow)" markerEnd="url(#implement-measure-arrow)" />
+                              <MeasureLabel x={260} y={298} />
+                          </>
+                      )}
+                      {selectedMode === 'overall' && (
+                          <>
+                              <line x1="58" y1="292" x2="462" y2="292" stroke={selectedColor} strokeWidth="3.5" markerStart="url(#implement-measure-arrow)" markerEnd="url(#implement-measure-arrow)" />
+                              <MeasureLabel x={260} y={270} />
+                          </>
+                      )}
+                      {selectedMode === 'length' && (
+                          <>
+                              <line x1="62" y1="66" x2="62" y2="246" stroke={selectedColor} strokeWidth="3.5" markerStart="url(#implement-measure-arrow)" markerEnd="url(#implement-measure-arrow)" />
+                              <line x1="62" y1="246" x2="250" y2="246" stroke={selectedColor} strokeDasharray="5 4" opacity="0.65" />
+                              <MeasureLabel x={112} y={158} />
+                          </>
+                      )}
+                      {selectedMode === 'offset' && (
+                          <>
+                              <line x1="260" y1="278" x2={260 + offsetPx} y2="278" stroke={selectedColor} strokeWidth="3.5" markerEnd="url(#implement-measure-arrow)" />
+                              <circle cx={260 + offsetPx} cy="278" r="6" fill={panelFill} stroke={selectedColor} strokeWidth="2.5" />
+                              <MeasureLabel x={260} y={304} />
+                          </>
+                      )}
+                      {selectedMode === 'overlap' && (
+                          <>
+                              <rect x="72" y="250" width="28" height="42" rx="8" fill={selectedColor} opacity="0.2" stroke={selectedColor} />
+                              <rect x="420" y="250" width="28" height="42" rx="8" fill={selectedColor} opacity="0.2" stroke={selectedColor} />
+                              <MeasureLabel x={260} y={282} />
+                          </>
+                      )}
+                      {selectedMode === 'sections' && (
+                          <>
+                              {Array.from({ length: sectionCount }).map((_, index) => (
+                                  <rect key={index} x={80 + index * sectionWidthPx} y="270" width={Math.max(5, sectionWidthPx - 3)} height="24" rx="4" fill={selectedColor} opacity={0.22 + (index % 2) * 0.12} stroke={selectedColor} />
+                              ))}
+                              <MeasureLabel x={260} y={244} />
+                          </>
+                      )}
+                      {selectedMode === 'rows' && (
+                          <>
+                              {Array.from({ length: Math.min(12, sectionCount * 2) }).map((_, index, items) => (
+                                  <line key={index} x1={92 + index * (336 / Math.max(1, items.length - 1))} y1="260" x2={92 + index * (336 / Math.max(1, items.length - 1))} y2="296" stroke={selectedColor} strokeWidth="2.5" />
+                              ))}
+                              <MeasureLabel x={260} y={238} />
+                          </>
+                      )}
+                      {selectedMode === 'transportWidth' && (
+                          <>
+                              <line x1="126" y1="286" x2="394" y2="286" stroke={selectedColor} strokeWidth="3.5" strokeDasharray="8 5" markerStart="url(#implement-measure-arrow)" markerEnd="url(#implement-measure-arrow)" />
+                              <MeasureLabel x={260} y={258} />
+                          </>
+                      )}
+                      {selectedMode === 'transportLength' && (
+                          <>
+                              <line x1="456" y1="72" x2="456" y2="246" stroke={selectedColor} strokeWidth="3.5" strokeDasharray="8 5" markerStart="url(#implement-measure-arrow)" markerEnd="url(#implement-measure-arrow)" />
+                              <MeasureLabel x={408} y={158} />
+                          </>
+                      )}
+                      {selectedMode === 'depth' && (
+                          <>
+                              <line x1="428" y1="238" x2="428" y2="294" stroke={selectedColor} strokeWidth="3.5" markerStart="url(#implement-measure-arrow)" markerEnd="url(#implement-measure-arrow)" />
+                              <MeasureLabel x={372} y={276} />
+                          </>
+                      )}
+                      {selectedMode === 'mass' && <MeasureLabel x={260} y={282} />}
+                      {selectedMode === 'capacity' && (
+                          <>
+                              <circle cx="260" cy="144" r="42" fill={selectedColor} opacity="0.12" stroke={selectedColor} strokeWidth="2.5" strokeDasharray="7 5" />
+                              <MeasureLabel x={260} y={205} />
+                          </>
+                      )}
+                      {selectedMode === 'timing' && (
+                          <>
+                              <circle cx="260" cy="246" r="30" fill="none" stroke={selectedColor} strokeWidth="4" style={{ animation: 'implementTimingPulse 1.1s ease-in-out infinite' }} />
+                              <MeasureLabel x={260} y={194} />
+                          </>
+                      )}
+                  </g>
+              </svg>
+
+              <div className={`flex items-center gap-2 border-t ${t.border} px-3.5 py-2.5`}>
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: selectedColor }} />
+                  <span className={`text-[9px] font-bold ${t.textSub}`}>Select a value on the right · the implement reference updates automatically</span>
+              </div>
+          </div>
       );
   };
 
@@ -5643,6 +6070,225 @@ const App = () => {
                       </div>
                       <div className={`text-[9px] font-bold ${t.textSub}`}>Primary: {vehicleSettings.gnssPrimarySide || 'Left / ANT A'} · Baseline {baseline.toFixed(2)} m</div>
                   </div>
+              </div>
+          </div>
+      );
+  };
+
+  const RealVehicleMeasurementView = () => {
+      const vehicleImage = (view) => getVehicleAsset(vehicleSettings, view);
+      const value = (field, decimals = 2) => Number(vehicleSettings[field] || 0).toFixed(decimals);
+      const measures = {
+          wheelbase: ['Wheelbase', `${value('wheelbase')} m`, 'Chassis', '#2563eb', 'side'],
+          turnRadius: ['Minimum turn radius', `${value('turnRadius')} m`, 'Chassis', '#2563eb', 'top'],
+          frontAxleWidth: ['Front wheel track', `${value('frontAxleWidth')} m`, 'Chassis', '#2563eb', 'front'],
+          rearAxleWidth: ['Rear wheel track', `${value('rearAxleWidth')} m`, 'Chassis', '#2563eb', 'front'],
+          frontOverhang: ['Front overhang', `${value('frontOverhang')} m`, 'Chassis', '#2563eb', 'side'],
+          rearOverhang: ['Rear overhang', `${value('rearOverhang')} m`, 'Chassis', '#2563eb', 'side'],
+          overallHeight: ['Vehicle height', `${value('overallHeight')} m`, 'Chassis', '#2563eb', 'side'],
+          gnssBaseline: ['Antenna baseline', `B ${value('gnssBaseline')} m`, 'Dual GNSS', '#f59e0b', 'front'],
+          antennaToRearAxle: ['Pair center to rear axle', `X ${value('antennaToRearAxle')} m`, 'Dual GNSS', '#2563eb', 'side'],
+          antennaOffset: ['Pair center lateral offset', `Y ${value('antennaOffset')} m`, 'Dual GNSS', '#8b5cf6', 'top'],
+          antennaHeight: ['Shared antenna height', `Z ${value('antennaHeight')} m`, 'Dual GNSS', '#16a34a', 'front'],
+          gnssHeadingOffset: ['Heading correction', `${value('gnssHeadingOffset', 1)}°`, 'Dual GNSS', '#06b6d4', 'top'],
+          gnssRollOffset: ['Roll correction', `${value('gnssRollOffset', 1)}°`, 'Dual GNSS', '#ec4899', 'front'],
+          gnssPitchOffset: ['Pitch correction', `${value('gnssPitchOffset', 1)}°`, 'Dual GNSS', '#f97316', 'side'],
+          rearHitch: ['Rear axle to hitch', `X ${value('rearHitch')} m`, 'Hitch', '#7c3aed', 'side'],
+          hitchOffset: ['Hitch lateral offset', `Y ${value('hitchOffset')} m`, 'Hitch', '#7c3aed', 'top'],
+          hitchHeight: ['Hitch height', `Z ${value('hitchHeight')} m`, 'Hitch', '#7c3aed', 'side']
+      };
+      const selected = measures[vehicleMeasureFocus] || measures.wheelbase;
+      const [selectedLabel, selectedValue, selectedGroup, selectedColor, activeView] = selected;
+      const activeViewBox = activeView === 'front'
+          ? vehicleMeasureFocus === 'antennaHeight' ? '40 0 440 330' : '100 0 320 330'
+          : activeView === 'side'
+              ? '40 0 440 330'
+              : vehicleMeasureFocus === 'turnRadius' ? '150 20 330 290' : '150 10 220 310';
+      const gridStroke = theme === 'dark' ? '#1e293b' : '#e2e8f0';
+      const panelFill = theme === 'dark' ? '#020617' : '#ffffff';
+      const textColor = theme === 'dark' ? '#e2e8f0' : '#0f172a';
+      const mutedColor = theme === 'dark' ? '#64748b' : '#94a3b8';
+      const antennaPairX = 260 + Math.max(-50, Math.min(50, Number(vehicleSettings.antennaOffset || 0) * 65));
+      const hitchPointX = 260 + Math.max(-45, Math.min(45, Number(vehicleSettings.hitchOffset || 0) * 65));
+
+      const MeasureLabel = ({ x, y, text = selectedValue, color = selectedColor }) => (
+          <g>
+              <rect x={x - 39} y={y - 12} width="78" height="24" rx="8" fill={panelFill} stroke={color} strokeWidth="1.5" />
+              <text x={x} y={y + 4} textAnchor="middle" fontSize="10" fontWeight="900" fill={color}>{text}</text>
+          </g>
+      );
+
+      return (
+          <div className={`overflow-hidden rounded-2xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'}`}>
+              <style>{`
+                  @keyframes realVehicleViewIn {
+                      from { opacity: 0; transform: translateY(6px) scale(.985); }
+                      to { opacity: 1; transform: translateY(0) scale(1); }
+                  }
+              `}</style>
+              <div className={`flex items-center justify-between gap-3 border-b ${t.border} px-3.5 py-3`}>
+                  <div className="min-w-0">
+                      <div className={`text-[8px] font-black uppercase tracking-wider ${t.textSub}`}>{selectedGroup} reference</div>
+                      <div className={`truncate text-sm font-black ${t.textMain}`}>{selectedLabel}</div>
+                  </div>
+                  <span className="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-black" style={{ color: selectedColor, backgroundColor: `${selectedColor}14` }}>
+                      {selectedValue}
+                  </span>
+              </div>
+
+              <svg viewBox={activeViewBox} className="h-[350px] w-full" role="img" aria-label={`${selectedLabel} on real ${activeView} vehicle view`}>
+                  <defs>
+                      <pattern id="real-vehicle-grid" width="30" height="30" patternUnits="userSpaceOnUse">
+                          <path d="M30 0H0V30" fill="none" stroke={gridStroke} strokeWidth="1" />
+                      </pattern>
+                      <marker id="real-measure-arrow" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto-start-reverse">
+                          <path d="M0 0L7 3.5L0 7Z" fill={selectedColor} />
+                      </marker>
+                  </defs>
+                  <rect width="520" height="330" fill="url(#real-vehicle-grid)" />
+
+                  {activeView === 'front' && (
+                      <g key={`front-${vehicleMeasureFocus}`} style={{ animation: 'realVehicleViewIn 220ms ease-out' }}>
+                          <image href={vehicleImage('front')} x="125" y="30" width="270" height="270" preserveAspectRatio="xMidYMid meet" />
+                          <line x1="52" y1="286" x2="468" y2="286" stroke={gridStroke} strokeWidth="2.5" />
+
+                          {['frontAxleWidth', 'rearAxleWidth'].includes(vehicleMeasureFocus) && (
+                              <>
+                                  <line x1="155" y1="258" x2="365" y2="258" stroke={selectedColor} strokeWidth="3.5" markerStart="url(#real-measure-arrow)" markerEnd="url(#real-measure-arrow)" />
+                                  <MeasureLabel x={260} y={226} />
+                              </>
+                          )}
+                          {vehicleMeasureFocus === 'gnssBaseline' && (
+                              <>
+                                  <line x1="205" y1="72" x2="315" y2="72" stroke={selectedColor} strokeWidth="4" markerStart="url(#real-measure-arrow)" markerEnd="url(#real-measure-arrow)" />
+                                  <circle cx="205" cy="72" r="8" fill={panelFill} stroke={selectedColor} strokeWidth="3" />
+                                  <circle cx="315" cy="72" r="8" fill={panelFill} stroke={selectedColor} strokeWidth="3" />
+                                  <MeasureLabel x={260} y={112} />
+                              </>
+                          )}
+                          {vehicleMeasureFocus === 'antennaHeight' && (
+                              <>
+                                  <line x1="72" y1="286" x2="72" y2="72" stroke={selectedColor} strokeWidth="3.5" markerStart="url(#real-measure-arrow)" markerEnd="url(#real-measure-arrow)" />
+                                  <line x1="72" y1="72" x2="210" y2="72" stroke={selectedColor} strokeDasharray="5 4" opacity="0.7" />
+                                  <MeasureLabel x={118} y={180} />
+                              </>
+                          )}
+                          {vehicleMeasureFocus === 'gnssRollOffset' && (
+                              <>
+                                  <line x1="203" y1="78" x2="317" y2="66" stroke={selectedColor} strokeWidth="4" strokeLinecap="round" />
+                                  <circle cx="203" cy="78" r="7" fill={panelFill} stroke={selectedColor} strokeWidth="3" />
+                                  <circle cx="317" cy="66" r="7" fill={panelFill} stroke={selectedColor} strokeWidth="3" />
+                                  <MeasureLabel x={260} y={112} />
+                              </>
+                          )}
+                      </g>
+                  )}
+
+                  {activeView === 'side' && (
+                      <g key={`side-${vehicleMeasureFocus}`} style={{ animation: 'realVehicleViewIn 220ms ease-out' }}>
+                          <image href={vehicleImage('side')} x="70" y="-10" width="380" height="380" preserveAspectRatio="xMidYMid meet" />
+                          <line x1="42" y1="280" x2="478" y2="280" stroke={gridStroke} strokeWidth="2.5" />
+
+                          {vehicleMeasureFocus === 'wheelbase' && (
+                              <>
+                                  <line x1="160" y1="262" x2="375" y2="262" stroke={selectedColor} strokeWidth="3.5" markerStart="url(#real-measure-arrow)" markerEnd="url(#real-measure-arrow)" />
+                                  <line x1="160" y1="208" x2="160" y2="262" stroke={selectedColor} strokeDasharray="5 4" opacity="0.6" />
+                                  <line x1="375" y1="208" x2="375" y2="262" stroke={selectedColor} strokeDasharray="5 4" opacity="0.6" />
+                                  <MeasureLabel x={268} y={230} />
+                              </>
+                          )}
+                          {vehicleMeasureFocus === 'frontOverhang' && (
+                              <>
+                                  <line x1="375" y1="232" x2="452" y2="232" stroke={selectedColor} strokeWidth="3.5" markerStart="url(#real-measure-arrow)" markerEnd="url(#real-measure-arrow)" />
+                                  <MeasureLabel x={413} y={198} />
+                              </>
+                          )}
+                          {vehicleMeasureFocus === 'rearOverhang' && (
+                              <>
+                                  <line x1="72" y1="232" x2="160" y2="232" stroke={selectedColor} strokeWidth="3.5" markerStart="url(#real-measure-arrow)" markerEnd="url(#real-measure-arrow)" />
+                                  <MeasureLabel x={116} y={198} />
+                              </>
+                          )}
+                          {vehicleMeasureFocus === 'overallHeight' && (
+                              <>
+                                  <line x1="58" y1="280" x2="58" y2="54" stroke={selectedColor} strokeWidth="3.5" markerStart="url(#real-measure-arrow)" markerEnd="url(#real-measure-arrow)" />
+                                  <MeasureLabel x={106} y={166} />
+                              </>
+                          )}
+                          {vehicleMeasureFocus === 'antennaToRearAxle' && (
+                              <>
+                                  <circle cx="160" cy="214" r="6" fill={selectedColor} stroke={panelFill} strokeWidth="2.5" />
+                                  <circle cx="255" cy="58" r="8" fill={panelFill} stroke="#f59e0b" strokeWidth="3" />
+                                  <line x1="160" y1="122" x2="255" y2="122" stroke={selectedColor} strokeWidth="3.5" markerStart="url(#real-measure-arrow)" markerEnd="url(#real-measure-arrow)" />
+                                  <line x1="160" y1="122" x2="160" y2="205" stroke={selectedColor} strokeDasharray="5 4" opacity="0.65" />
+                                  <line x1="255" y1="66" x2="255" y2="122" stroke={selectedColor} strokeDasharray="5 4" opacity="0.65" />
+                                  <MeasureLabel x={207} y={150} />
+                              </>
+                          )}
+                          {vehicleMeasureFocus === 'gnssPitchOffset' && (
+                              <>
+                                  <line x1="220" y1="64" x2="292" y2="54" stroke={selectedColor} strokeWidth="4" strokeLinecap="round" />
+                                  <MeasureLabel x={256} y={101} />
+                              </>
+                          )}
+                          {vehicleMeasureFocus === 'rearHitch' && (
+                              <>
+                                  <circle cx="160" cy="214" r="6" fill={selectedColor} stroke={panelFill} strokeWidth="2.5" />
+                                  <circle cx="82" cy="220" r="6" fill={selectedColor} stroke={panelFill} strokeWidth="2.5" />
+                                  <line x1="82" y1="190" x2="160" y2="190" stroke={selectedColor} strokeWidth="3.5" markerStart="url(#real-measure-arrow)" markerEnd="url(#real-measure-arrow)" />
+                                  <MeasureLabel x={121} y={157} />
+                              </>
+                          )}
+                          {vehicleMeasureFocus === 'hitchHeight' && (
+                              <>
+                                  <circle cx="82" cy="220" r="7" fill={selectedColor} stroke={panelFill} strokeWidth="2.5" />
+                                  <line x1="55" y1="280" x2="55" y2="220" stroke={selectedColor} strokeWidth="3.5" markerStart="url(#real-measure-arrow)" markerEnd="url(#real-measure-arrow)" />
+                                  <line x1="55" y1="220" x2="82" y2="220" stroke={selectedColor} strokeDasharray="5 4" />
+                                  <MeasureLabel x={105} y={250} />
+                              </>
+                          )}
+                      </g>
+                  )}
+
+                  {activeView === 'top' && (
+                      <g key={`top-${vehicleMeasureFocus}`} style={{ animation: 'realVehicleViewIn 220ms ease-out' }}>
+                          <image href={vehicleImage('top')} x="105" y="12" width="310" height="310" preserveAspectRatio="xMidYMid meet" />
+                          <line x1="260" y1="24" x2="260" y2="310" stroke={mutedColor} strokeDasharray="6 5" opacity="0.55" />
+
+                          {vehicleMeasureFocus === 'turnRadius' && (
+                              <>
+                                  <path d="M350 82C448 126 464 220 402 292" fill="none" stroke={selectedColor} strokeWidth="3.5" strokeDasharray="7 5" markerEnd="url(#real-measure-arrow)" />
+                                  <MeasureLabel x={424} y={170} />
+                              </>
+                          )}
+                          {vehicleMeasureFocus === 'antennaOffset' && (
+                              <>
+                                  <line x1="260" y1="145" x2={antennaPairX} y2="145" stroke={selectedColor} strokeWidth="3.5" markerEnd="url(#real-measure-arrow)" />
+                                  <circle cx={antennaPairX} cy="145" r="8" fill={panelFill} stroke={selectedColor} strokeWidth="3" />
+                                  <MeasureLabel x={260} y={183} />
+                              </>
+                          )}
+                          {vehicleMeasureFocus === 'gnssHeadingOffset' && (
+                              <>
+                                  <line x1="260" y1="151" x2="260" y2="67" stroke={selectedColor} strokeWidth="3.5" markerEnd="url(#real-measure-arrow)" />
+                                  <circle cx="260" cy="151" r="8" fill={panelFill} stroke="#f59e0b" strokeWidth="3" />
+                                  <MeasureLabel x={312} y={105} />
+                              </>
+                          )}
+                          {vehicleMeasureFocus === 'hitchOffset' && (
+                              <>
+                                  <line x1="260" y1="276" x2={hitchPointX} y2="276" stroke={selectedColor} strokeWidth="3.5" markerEnd="url(#real-measure-arrow)" />
+                                  <circle cx={hitchPointX} cy="276" r="7" fill={panelFill} stroke={selectedColor} strokeWidth="3" />
+                                  <MeasureLabel x={260} y={244} />
+                              </>
+                          )}
+                      </g>
+                  )}
+              </svg>
+
+              <div className={`flex items-center gap-2 border-t ${t.border} px-3.5 py-2.5`}>
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: selectedColor }} />
+                  <span className={`text-[9px] font-bold ${t.textSub}`}>Select a measurement on the right · the real vehicle view updates automatically</span>
               </div>
           </div>
       );
@@ -6116,6 +6762,14 @@ const App = () => {
             ];
             const currentStepIndex = vehicleSteps.findIndex(step => step.id === vehicleSetupStep);
             const informationReady = Boolean(vehicleSettings.label || activeVehicleProfile.label) && Boolean(vehicleSettings.type);
+            const chassisReady = Number(vehicleSettings.wheelbase) > 0
+                && Number(vehicleSettings.frontAxleWidth) > 0
+                && Number(vehicleSettings.rearAxleWidth) > 0;
+            const gnssReady = Number(vehicleSettings.antennaHeight) > 0
+                && Number(vehicleSettings.gnssBaseline) > 0
+                && Number(vehicleSettings.antennaToRearAxle) >= 0;
+            const hitchReady = Number(vehicleSettings.hitchHeight) >= 0
+                && Number(vehicleSettings.rearHitch) >= 0;
             const geometryReady = Number(vehicleSettings.wheelbase) > 0
                 && Number(vehicleSettings.frontAxleWidth) > 0
                 && Number(vehicleSettings.rearAxleWidth) > 0
@@ -6163,7 +6817,7 @@ const App = () => {
                         })}
                     </div>
 
-                    <div className="grid min-h-[560px] grid-cols-[210px_minmax(0,1fr)]">
+                    <div className="grid min-h-[560px] grid-cols-[232px_minmax(0,1fr)]">
                         <VehicleLibrarySidebar />
 
                         <div className="min-w-0 p-4 lg:p-5">
@@ -6237,44 +6891,54 @@ const App = () => {
                                     <div className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border ${t.borderCard} p-3`}>
                                         <div>
                                             <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>Dimension setup</div>
-                                            <div className={`text-sm font-black ${t.textMain}`}>Configure every physical reference point</div>
+                                            <div className={`text-sm font-black ${t.textMain}`}>All vehicle reference points</div>
+                                            <div className={`mt-0.5 text-[9px] ${t.textDim}`}>One page · select any measurement to update the visual</div>
                                         </div>
-                                        <div className={`grid grid-cols-3 rounded-xl p-1 ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-100'}`}>
+                                        <div className="flex flex-wrap items-center justify-end gap-1.5">
                                             {[
-                                                ['chassis', 'Chassis', 'wheelbase'],
-                                                ['gnss', 'GNSS receiver', 'gnssBaseline'],
-                                                ['hitch', 'Hitch', 'rearHitch']
-                                            ].map(([group, label, focus]) => (
-                                                <button
-                                                    key={group}
-                                                    type="button"
-                                                    onClick={() => { setVehicleGeometryGroup(group); setVehicleMeasureFocus(focus); }}
-                                                    className={`rounded-lg px-3 py-2 text-[9px] font-black ${vehicleGeometryGroup === group ? 'bg-blue-600 text-white shadow-sm' : t.textSub}`}
-                                                >
-                                                    {label}
-                                                </button>
+                                                ['Chassis', '7 measures', chassisReady],
+                                                ['Dual GNSS', '7 measures', gnssReady],
+                                                ['Hitch', '3 measures', hitchReady]
+                                            ].map(([label, detail, ready]) => (
+                                                <div key={label} className={`flex items-center gap-2 rounded-lg border ${t.borderCard} px-2.5 py-1.5`}>
+                                                    <span className={`h-1.5 w-1.5 rounded-full ${ready ? 'bg-green-500' : 'bg-orange-500'}`} />
+                                                    <span>
+                                                        <span className={`block text-[8px] font-black uppercase ${t.textMain}`}>{label}</span>
+                                                        <span className={`block text-[7px] ${t.textDim}`}>{detail}</span>
+                                                    </span>
+                                                </div>
                                             ))}
                                         </div>
                                     </div>
 
-                                    <div className={vehicleGeometryGroup === 'gnss' ? 'space-y-3' : 'grid grid-cols-[minmax(250px,0.95fr)_minmax(300px,1.05fr)] gap-3'}>
-                                        {vehicleGeometryGroup === 'gnss'
-                                            ? <GnssLiveIllustration />
-                                            : <VehicleGeometryDiagram group={vehicleGeometryGroup} />
-                                        }
+                                    <div
+                                        className="grid grid-cols-[minmax(250px,0.95fr)_minmax(300px,1.05fr)] items-start gap-3 overflow-hidden"
+                                        style={{ height: 'min(540px, calc(100vh - 220px))', minHeight: '420px' }}
+                                    >
+                                        <div className="h-fit">
+                                            <RealVehicleMeasurementView />
+                                        </div>
 
-                                        <div className={`rounded-2xl border ${t.borderCard} p-4`}>
+                                        <div className={`h-full overflow-y-auto rounded-2xl border ${t.borderCard} p-4`}>
                                             <div className="mb-4">
-                                                <div className={`text-[10px] font-black uppercase tracking-wide ${t.textSub}`}>Measurement setup</div>
-                                                <div className={`text-base font-black ${t.textMain}`}>
-                                                    {vehicleGeometryGroup === 'chassis' ? 'Chassis dimensions' : vehicleGeometryGroup === 'gnss' ? 'Dual-antenna horizontal geometry' : 'Hitch & coupling point'}
-                                                </div>
-                                                <p className={`mt-1 text-[10px] leading-relaxed ${t.textSub}`}>{vehicleGeometryGroup === 'gnss' ? 'ANT A and ANT B form a left-to-right heading baseline. X/Y/Z use the midpoint of that pair.' : 'Select a value to highlight its physical reference on the diagram.'}</p>
+                                                <div className={`text-[10px] font-black uppercase tracking-wide ${t.textSub}`}>Complete dimension sheet</div>
+                                                <div className={`text-base font-black ${t.textMain}`}>Chassis, GNSS and hitch</div>
+                                                <p className={`mt-1 text-[10px] leading-relaxed ${t.textSub}`}>Everything is visible here. Select a value and the reference view changes automatically.</p>
                                             </div>
 
-                                            {vehicleGeometryGroup === 'chassis' && (
+                                            {(
                                                 <>
-                                                    <div className="grid grid-cols-2 gap-2.5">
+                                                    <div className="mb-3 flex items-center justify-between gap-3">
+                                                        <div className="flex items-center gap-2.5">
+                                                            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-[9px] font-black text-white">01</span>
+                                                            <div>
+                                                                <div className={`text-xs font-black ${t.textMain}`}>Chassis dimensions</div>
+                                                                <div className={`text-[9px] ${t.textDim}`}>Axles, body and turning envelope</div>
+                                                            </div>
+                                                        </div>
+                                                        <span className={`text-[8px] font-black uppercase ${chassisReady ? 'text-green-500' : 'text-orange-500'}`}>{chassisReady ? 'Ready' : 'Check values'}</span>
+                                                    </div>
+                                                    <div className={`overflow-hidden rounded-xl border ${t.borderCard}`}>
                                                         <VehicleParameterInput field="wheelbase" label="Wheelbase" value={vehicleSettings.wheelbase} hint="Front axle to rear axle." />
                                                         <VehicleParameterInput field="turnRadius" label="Min. turn radius" value={vehicleSettings.turnRadius} hint="Guidance and U-turn limit." />
                                                         <VehicleParameterInput field="frontAxleWidth" label="Front wheel track" value={vehicleSettings.frontAxleWidth} hint="Tire center to tire center." />
@@ -6297,13 +6961,24 @@ const App = () => {
                                                             <div className={`truncate text-[11px] font-black ${t.textMain}`}>{vehicleSettings.steeringType || 'Front axle'}</div>
                                                         </div>
                                                     </div>
+                                                    <div className={`my-5 h-px ${t.divider}`} />
                                                 </>
                                             )}
 
-                                            {vehicleGeometryGroup === 'gnss' && (
+                                            {(
                                                 <div className="space-y-3">
-                                                    <section className={`overflow-hidden rounded-xl border ${t.borderCard}`}>
-                                                        <div className={`border-b ${t.border} px-3 py-2.5`}>
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <div className="flex items-center gap-2.5">
+                                                            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500 text-[9px] font-black text-white">02</span>
+                                                            <div>
+                                                                <div className={`text-xs font-black ${t.textMain}`}>Dual GNSS receiver</div>
+                                                                <div className={`text-[9px] ${t.textDim}`}>Hardware, pair center and antenna alignment</div>
+                                                            </div>
+                                                        </div>
+                                                        <span className={`text-[8px] font-black uppercase ${gnssReady ? 'text-green-500' : 'text-orange-500'}`}>{gnssReady ? 'Ready' : 'Check values'}</span>
+                                                    </div>
+                                                    <section className="space-y-2">
+                                                        <div className="py-1">
                                                             <div className="flex items-start justify-between gap-3">
                                                                 <div>
                                                                     <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>1 · Dual receiver hardware</div>
@@ -6312,14 +6987,14 @@ const App = () => {
                                                                 <span className="rounded-lg bg-amber-500/12 px-2 py-1 text-[8px] font-black uppercase text-amber-500">A ↔ B · Horizontal</span>
                                                             </div>
                                                         </div>
-                                                        <div className="grid grid-cols-[0.9fr_1.2fr_1fr] gap-2.5 p-3">
+                                                        <div className="grid grid-cols-1 gap-2">
                                                             <SettingSelect label="Receiver Model" value={vehicleSettings.gnssReceiverModel || 'AG-372'} onChange={(value) => handleVehicleChange('gnssReceiverModel', value)} options={['AG-372', 'SMART7-S', 'Nav-900', 'Generic RTK']} />
                                                             <SettingSelect label="Crossbar Position" value={vehicleSettings.gnssMountPosition || 'Cab roof crossbar'} onChange={(value) => handleVehicleChange('gnssMountPosition', value)} options={['Cab roof crossbar', 'Front roof crossbar', 'Rear roof crossbar', 'Custom crossbar']} />
                                                             <SettingSelect label="Primary Antenna" value={vehicleSettings.gnssPrimarySide || 'Left / ANT A'} onChange={(value) => handleVehicleChange('gnssPrimarySide', value)} options={['Left / ANT A', 'Right / ANT B']} />
                                                         </div>
                                                     </section>
 
-                                                    <section className={`overflow-hidden rounded-xl border ${t.borderCard}`}>
+                                                    <section className={`overflow-hidden rounded-xl ${theme === 'dark' ? 'bg-slate-900/55' : 'bg-slate-50'}`}>
                                                         <div className={`flex items-start justify-between gap-3 border-b ${t.border} px-3 py-2.5`}>
                                                             <div>
                                                                 <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>2 · Baseline & pair-center position</div>
@@ -6333,7 +7008,7 @@ const App = () => {
                                                         <GnssAxisField field="antennaHeight" axis="Z" label="Shared antenna height" value={vehicleSettings.antennaHeight} color="#16a34a" hint="Ground to ANT A / ANT B phase centers" />
                                                     </section>
 
-                                                    <section className={`rounded-xl border ${t.borderCard} p-3`}>
+                                                    <section className="pt-1">
                                                         <div className="mb-2.5">
                                                             <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>3 · Baseline orientation calibration</div>
                                                             <div className={`text-xs font-black ${t.textMain}`}>Correct crossbar alignment after installation</div>
@@ -6352,18 +7027,29 @@ const App = () => {
                                                             <div className={`truncate text-[10px] font-bold ${t.textSub}`}>B {Number(vehicleSettings.gnssBaseline || 0).toFixed(2)} m · X {Number(vehicleSettings.antennaToRearAxle || 0).toFixed(2)} m · Y {Number(vehicleSettings.antennaOffset || 0).toFixed(2)} m · Z {Number(vehicleSettings.antennaHeight || 0).toFixed(2)} m</div>
                                                         </div>
                                                     </div>
+                                                    <div className={`my-2 h-px ${t.divider}`} />
                                                 </div>
                                             )}
 
-                                            {vehicleGeometryGroup === 'hitch' && (
+                                            {(
                                                 <>
+                                                    <div className="mb-3 flex items-center justify-between gap-3">
+                                                        <div className="flex items-center gap-2.5">
+                                                            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-600 text-[9px] font-black text-white">03</span>
+                                                            <div>
+                                                                <div className={`text-xs font-black ${t.textMain}`}>Hitch & coupling point</div>
+                                                                <div className={`text-[9px] ${t.textDim}`}>Rear axle reference to implement connection</div>
+                                                            </div>
+                                                        </div>
+                                                        <span className={`text-[8px] font-black uppercase ${hitchReady ? 'text-green-500' : 'text-orange-500'}`}>{hitchReady ? 'Ready' : 'Check values'}</span>
+                                                    </div>
                                                     <SettingSelect label="Hitch Type" value={vehicleSettings.hitchType || 'Rear 3-point'} onChange={(value) => handleVehicleChange('hitchType', value)} options={['Rear 3-point', 'Drawbar', 'Integrated', 'Front mount']} />
-                                                    <div className="mt-3 grid grid-cols-2 gap-2.5">
+                                                    <div className={`mt-3 overflow-hidden rounded-xl border ${t.borderCard}`}>
                                                         <VehicleParameterInput field="rearHitch" label="Rear axle to hitch / X" value={vehicleSettings.rearHitch} hint="Axle center to coupling pin." />
                                                         <VehicleParameterInput field="hitchOffset" label="Lateral offset / Y" value={vehicleSettings.hitchOffset || 0} hint="+ right, − left of center." />
                                                         <VehicleParameterInput field="hitchHeight" label="Hitch height / Z" value={vehicleSettings.hitchHeight || 0} hint="Ground to coupling point." />
                                                     </div>
-                                                    <div className={`mt-3 rounded-xl border ${t.borderCard} p-3`}>
+                                                    <div className={`mt-3 rounded-xl ${theme === 'dark' ? 'bg-slate-900/55' : 'bg-slate-50'} p-3`}>
                                                         <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Coupling reference</div>
                                                         <div className={`mt-1 text-xs font-black ${t.textMain}`}>{vehicleSettings.hitchType || 'Rear 3-point'}</div>
                                                         <div className={`mt-1 text-[10px] leading-relaxed ${t.textDim}`}>These offsets are measured from the rear axle center and are used to place the implement correctly on the map.</div>
@@ -6378,7 +7064,7 @@ const App = () => {
                             {vehicleSetupStep === 'summary' && (
                                 <div className="grid grid-cols-[minmax(250px,0.9fr)_minmax(300px,1.1fr)] gap-3">
                                     <div className="space-y-3">
-                                        <VehicleGeometryDiagram group="chassis" />
+                                        <RealVehicleMeasurementView />
                                         <div className="grid grid-cols-3 gap-2">
                                             <SettingsMetric label="Wheelbase" value={`${Number(vehicleSettings.wheelbase || 0).toFixed(2)} m`} />
                                             <SettingsMetric label="Track Avg" value={`${avgTrack.toFixed(2)} m`} />
@@ -6431,95 +7117,305 @@ const App = () => {
         }
         case 'implement': {
             const implementWidth = Number(implementSettings.width) || 0;
+            const implementOverallWidth = Number(implementSettings.overallWidth) || implementWidth;
             const implementSections = Math.max(1, Number(implementSettings.sections) || 1);
             const sectionWidth = implementWidth / implementSections;
+            const implementTypeLabel = implementTypeOptions.find(option => option.id === getImplementAssetKey(implementSettings))?.label || implementSettings.type || 'Tillage';
+            const implementSteps = [
+                { id: 'information', label: 'Information', detail: 'Type and connection', icon: Ruler },
+                { id: 'geometry', label: 'Dimensions', detail: 'Coverage and reference points', icon: Activity },
+                { id: 'summary', label: 'Review', detail: 'Validate and save', icon: CheckCircle2 }
+            ];
+            const currentStepIndex = implementSteps.findIndex(step => step.id === implementSetupStep);
+            const informationReady = Boolean(implementSettings.name)
+                && Boolean(implementSettings.type)
+                && Boolean(implementSettings.connectionType);
+            const coverageReady = implementWidth > 0
+                && implementOverallWidth >= implementWidth
+                && Number(implementSettings.hitchToWorkPoint) >= 0
+                && Number(implementSettings.hitchToRear) >= Number(implementSettings.hitchToWorkPoint);
+            const controlReady = implementSections > 0
+                && Number(implementSettings.delayOn) >= 0
+                && Number(implementSettings.delayOff) >= 0;
+            const transportReady = Number(implementSettings.transportWidth) > 0
+                && Number(implementSettings.transportLength) > 0
+                && Number(implementSettings.weightKg) >= 0;
+            const geometryReady = coverageReady && controlReady && transportReady;
+            const renderImplementReviewRow = (label, value, unit = '') => (
+                <div className={`flex items-center justify-between gap-4 border-b ${t.border} py-2.5 last:border-b-0`}>
+                    <span className={`text-xs font-bold ${t.textSub}`}>{label}</span>
+                    <span className={`text-right text-sm font-black ${t.textMain}`}>{value}{unit && <span className={`ml-1 text-[10px] uppercase ${t.textDim}`}>{unit}</span>}</span>
+                </div>
+            );
+
             return (
-                <div className="space-y-5">
-                    <SettingsSection
-                        title="Implement Profiles"
-                        detail="Saved seasonal implements. Select a planter, sprayer or custom tool instead of rebuilding it each season."
-                        icon={Ruler}
-                        actions={<><SettingsActionButton onClick={() => saveImplementProfile('new')}>Save New</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => saveImplementProfile('update')}>Update Profile</SettingsActionButton></>}
-                    >
-                        <div className="flex items-center gap-3">
-                            <div className="relative flex-1 min-w-0">
-                                <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${t.textDim}`} />
-                                <input
-                                    value={implementProfileSearch}
-                                    onChange={(e) => setImplementProfileSearch(e.target.value)}
-                                    placeholder="Search implement profiles"
-                                    className={`w-full pl-9 pr-3 py-2.5 rounded-lg border ${t.borderCard} ${t.bgInput} ${t.textMain} outline-none focus:border-blue-500`}
-                                />
-                            </div>
-                            <span className={`shrink-0 text-xs font-black ${t.textSub}`}>{filteredImplementProfiles.length}/{savedImplementProfiles.length}</span>
-                        </div>
-                        <div className="grid grid-cols-[repeat(auto-fill,minmax(136px,1fr))] gap-3 max-h-[310px] overflow-y-auto pr-1">
-                            {filteredImplementProfiles.map((profile) => {
-                                const active = implementSettings.profileId === profile.id;
-                                const ProfileIcon = profile.type === 'Planter' ? Sprout : profile.type === 'Sprayer' ? Droplets : profile.type === 'Spreader' ? Layers : Ruler;
-                                return (
-                                    <button
-                                        key={profile.id}
-                                        onClick={() => applyImplementProfile(profile)}
-                                        className={`relative text-left rounded-xl border p-3 min-h-[136px] transition-all ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'} hover:brightness-95`}`}
-                                    >
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} text-blue-500`}`}>
-                                                <ProfileIcon className="w-5 h-5" />
+                <section className={`${t.bgPanel} min-h-full overflow-hidden`}>
+                    <div className={`grid grid-cols-3 border-b ${t.border}`}>
+                        {implementSteps.map((step, index) => {
+                            const StepIcon = step.icon;
+                            const active = step.id === implementSetupStep;
+                            const complete = index < currentStepIndex || (step.id === 'information' ? informationReady : step.id === 'geometry' ? geometryReady : false);
+                            return (
+                                <button
+                                    key={step.id}
+                                    type="button"
+                                    onClick={() => goToImplementStep(index)}
+                                    className={`relative flex min-w-0 items-center justify-center gap-2 px-2 py-3 text-left transition-colors ${active ? (theme === 'dark' ? 'bg-blue-500/12' : 'bg-blue-50') : 'hover:bg-blue-500/5'}`}
+                                >
+                                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-black ${active ? 'bg-blue-600 text-white' : complete ? 'bg-green-500/15 text-green-500' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} ${t.textSub}`}`}>
+                                        {complete && !active ? <Check className="h-3.5 w-3.5" /> : <StepIcon className="h-3.5 w-3.5" />}
+                                    </span>
+                                    <span className="hidden min-w-0 sm:block">
+                                        <span className={`block truncate text-xs font-black ${active ? 'text-blue-500' : t.textMain}`}>{step.label}</span>
+                                        <span className={`block truncate text-[9px] ${t.textDim}`}>{step.detail}</span>
+                                    </span>
+                                    {active && <span className="absolute inset-x-4 bottom-0 h-0.5 rounded-full bg-blue-600" />}
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    <div className="grid min-h-[560px] grid-cols-[232px_minmax(0,1fr)]">
+                        <ImplementLibrarySidebar />
+
+                        <div className="min-w-0 p-4 lg:p-5">
+                            {implementSetupStep === 'information' && (
+                                <div className="space-y-3">
+                                    <div className={`overflow-hidden rounded-2xl border ${t.borderCard}`}>
+                                        <div className={`flex flex-wrap items-center justify-between gap-3 border-b ${t.border} px-4 py-3`}>
+                                            <div className="flex min-w-0 items-center gap-3">
+                                                <span className={`flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-slate-50'}`}>
+                                                    <img src={getImplementAsset(implementSettings)} alt="" aria-hidden="true" className="h-full w-full object-contain p-1" />
+                                                </span>
+                                                <div className="min-w-0">
+                                                    <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>Active implement</div>
+                                                    <div className={`truncate text-base font-black ${t.textMain}`}>{cleanProfileLabel(implementSettings.name, activeImplementProfile.label)}</div>
+                                                    <div className={`truncate text-[10px] ${t.textSub}`}>{implementTypeLabel} · {implementSettings.connectionType || 'Connection required'}</div>
+                                                </div>
                                             </div>
-                                            <div className="flex items-center gap-1">
-                                                {profile.custom && (
-                                                    <span
-                                                        role="button"
-                                                        tabIndex={0}
-                                                        onClick={(e) => deleteImplementProfile(profile, e)}
-                                                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') deleteImplementProfile(profile, e); }}
-                                                        className="p-1.5 rounded-md text-red-500 hover:bg-red-500/10"
-                                                    >
-                                                        <Trash2 className="w-3.5 h-3.5" />
-                                                    </span>
-                                                )}
-                                                {active && <CheckCircle2 className="w-5 h-5 text-blue-500" />}
+                                            <div className="flex flex-wrap items-center justify-end gap-1.5">
+                                                <span className={`rounded-lg border ${t.borderCard} px-2.5 py-1.5 text-[9px] font-black ${t.textMain}`}>{implementWidth.toFixed(1)} m work</span>
+                                                <span className={`rounded-lg border ${t.borderCard} px-2.5 py-1.5 text-[9px] font-black ${t.textMain}`}>{implementSections} sections</span>
+                                                <span className={`rounded-full px-2.5 py-1 text-[8px] font-black uppercase ${informationReady ? 'bg-green-500/10 text-green-500' : 'bg-orange-500/10 text-orange-500'}`}>
+                                                    {informationReady ? 'Complete' : 'Required'}
+                                                </span>
                                             </div>
                                         </div>
-                                        <div className={`mt-3 font-black leading-tight truncate ${t.textMain}`}>{profile.label}</div>
-                                        <div className={`text-xs leading-snug ${t.textSub}`}>{profile.detail}</div>
-                                        {profile.custom && <div className="mt-2 inline-flex px-2 py-1 rounded-md bg-green-500/10 text-green-500 text-[9px] font-black uppercase">Saved</div>}
-                                    </button>
-                                );
-                            })}
-                            {filteredImplementProfiles.length === 0 && (
-                                <div className={`col-span-full rounded-xl border border-dashed ${t.borderCard} p-5 text-center text-sm ${t.textDim}`}>No implement profile matched.</div>
+
+                                        <div className="p-4">
+                                            <div className="mb-3 flex items-end justify-between gap-3">
+                                                <div>
+                                                    <div className={`text-xs font-black ${t.textMain}`}>Choose implement type</div>
+                                                    <div className={`text-[9px] ${t.textDim}`}>Pick by picture first; dimensions and control defaults update automatically.</div>
+                                                </div>
+                                                <span className={`text-[9px] font-black uppercase ${t.textSub}`}>7 categories</span>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                                                {implementTypeOptions.map((option) => {
+                                                    const active = getImplementAssetKey(implementSettings) === option.id;
+                                                    return (
+                                                        <button
+                                                            key={option.id}
+                                                            type="button"
+                                                            onClick={() => applyImplementType(option)}
+                                                            className={`group relative min-w-0 overflow-hidden rounded-xl border p-2 text-left transition-colors ${active ? 'border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/15' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/55' : 'bg-white'} hover:border-blue-500/50`}`}
+                                                        >
+                                                            <div className={`flex h-[74px] items-center justify-center rounded-lg ${theme === 'dark' ? 'bg-slate-950/70' : 'bg-slate-50'}`}>
+                                                                <img src={`src/assets/implements/${option.id}.png`} alt="" aria-hidden="true" className="h-full w-full object-contain p-1" />
+                                                            </div>
+                                                            <div className={`mt-2 truncate text-[10px] font-black ${active ? 'text-blue-500' : t.textMain}`}>{option.label}</div>
+                                                            <div className={`mt-0.5 truncate text-[8px] ${t.textDim}`}>{option.detail}</div>
+                                                            {active && <CheckCircle2 className="absolute right-2 top-2 h-4 w-4 text-blue-500" />}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className={`overflow-hidden rounded-2xl border ${t.borderCard}`}>
+                                        <div className={`border-b ${t.border} px-4 py-3`}>
+                                            <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>Implement identity</div>
+                                            <div className={`text-sm font-black ${t.textMain}`}>Name, connection and control</div>
+                                        </div>
+                                        <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2">
+                                            <SettingInput theme={t} label="Implement Name" value={implementSettings.name || ''} onChange={(event) => handleImplementChange('name', event.target.value)} />
+                                            <SettingSelect label="Implement Type" value={implementTypeLabel} onChange={(value) => {
+                                                const option = implementTypeOptions.find(item => item.label === value);
+                                                if (option) applyImplementType(option);
+                                            }} options={implementTypeOptions.map(option => option.label)} />
+                                            <SettingInput theme={t} label="Brand" value={implementSettings.brand || ''} onChange={(event) => handleImplementChange('brand', event.target.value)} />
+                                            <SettingInput theme={t} label="Model" value={implementSettings.model || ''} onChange={(event) => handleImplementChange('model', event.target.value)} />
+                                            <SettingInput theme={t} label="Serial Number" value={implementSettings.serialNumber || ''} onChange={(event) => handleImplementChange('serialNumber', event.target.value)} />
+                                            <SettingSelect label="Connection" value={implementSettings.connectionType || 'Rear 3-point'} onChange={(value) => handleImplementChange('connectionType', value)} options={['Rear 3-point', 'Drawbar', 'Front mount', 'Integrated']} />
+                                            <SettingSelect label="Control Mode" value={implementSettings.controlMode || 'Manual Lift'} onChange={(value) => {
+                                                handleImplementChange('controlMode', value);
+                                                handleImplementChange('sectionControl', ['Section Control', 'Boom Sections'].includes(value));
+                                            }} options={['Manual Lift', 'Section Control', 'Boom Sections', 'Rate Control', 'Grade Control', 'Header Control', 'ISOBUS']} />
+                                            <div className={`flex items-center justify-between rounded-lg border ${t.borderCard} ${t.bgInput} px-4 py-2.5`}>
+                                                <span>
+                                                    <span className={`block text-[11px] font-bold uppercase ${t.textSub}`}>Automatic Sections</span>
+                                                    <span className={`block text-[9px] ${t.textDim}`}>Use coverage map to switch sections.</span>
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleImplementChange('sectionControl', !implementSettings.sectionControl)}
+                                                    className={`h-6 w-11 rounded-full p-0.5 transition-colors ${implementSettings.sectionControl ? 'bg-green-500' : 'bg-slate-500'}`}
+                                                >
+                                                    <span className={`block h-5 w-5 rounded-full bg-white transition-transform ${implementSettings.sectionControl ? 'translate-x-5' : ''}`} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {implementSetupStep === 'geometry' && (
+                                <div className="space-y-3">
+                                    <div className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border ${t.borderCard} p-3`}>
+                                        <div>
+                                            <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>Geometry setup</div>
+                                            <div className={`text-sm font-black ${t.textMain}`}>All implement reference points</div>
+                                            <div className={`mt-0.5 text-[9px] ${t.textDim}`}>One page · select any value to update the real implement visual</div>
+                                        </div>
+                                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                                            {[
+                                                ['Coverage', '6 values', coverageReady],
+                                                ['Control', '4 values', controlReady],
+                                                ['Transport', '4 values', transportReady]
+                                            ].map(([label, detail, ready]) => (
+                                                <div key={label} className={`flex items-center gap-2 rounded-lg border ${t.borderCard} px-2.5 py-1.5`}>
+                                                    <span className={`h-1.5 w-1.5 rounded-full ${ready ? 'bg-green-500' : 'bg-orange-500'}`} />
+                                                    <span>
+                                                        <span className={`block text-[8px] font-black uppercase ${t.textMain}`}>{label}</span>
+                                                        <span className={`block text-[7px] ${t.textDim}`}>{detail}</span>
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div
+                                        className="grid grid-cols-[minmax(250px,0.95fr)_minmax(320px,1.05fr)] items-start gap-3 overflow-hidden"
+                                        style={{ height: 'min(540px, calc(100vh - 220px))', minHeight: '420px' }}
+                                    >
+                                        <div className="h-fit">
+                                            <RealImplementMeasurementView />
+                                        </div>
+
+                                        <div className={`h-full overflow-y-auto rounded-2xl border ${t.borderCard}`}>
+                                            <div className={`border-b ${t.border} px-4 py-3`}>
+                                                <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>Complete geometry sheet</div>
+                                                <div className={`text-sm font-black ${t.textMain}`}>Coverage, attachment and transport</div>
+                                                <div className={`mt-1 text-[9px] ${t.textDim}`}>The selected measurement is highlighted on the real implement.</div>
+                                            </div>
+
+                                            <div className={`flex items-start gap-3 border-b ${t.border} px-4 py-3`}>
+                                                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-[9px] font-black text-white">01</span>
+                                                <div>
+                                                    <div className={`text-xs font-black ${t.textMain}`}>Coverage geometry</div>
+                                                    <div className={`text-[9px] ${t.textDim}`}>Pass spacing and implement footprint</div>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <ImplementParameterInput field="width" label="Working width" value={implementSettings.width} hint="Effective treated width." />
+                                                <ImplementParameterInput field="overallWidth" label="Overall width" value={implementSettings.overallWidth} hint="Physical edge to edge." />
+                                                <ImplementParameterInput field="overlap" label="Skip / overlap" value={implementSettings.overlap} hint="Positive value overlaps adjacent passes." />
+                                                <ImplementParameterInput field="offset" label="Lateral offset" value={implementSettings.offset} hint="+ right, − left of tractor centerline." />
+                                                <ImplementParameterInput field="workingDepth" label="Working depth" value={implementSettings.workingDepth} hint="Nominal depth below ground." />
+                                            </div>
+
+                                            <div className={`flex items-start gap-3 border-y ${t.border} px-4 py-3`}>
+                                                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-orange-500 text-[9px] font-black text-white">02</span>
+                                                <div>
+                                                    <div className={`text-xs font-black ${t.textMain}`}>Attachment reference</div>
+                                                    <div className={`text-[9px] ${t.textDim}`}>Measure every distance from the hitch datum</div>
+                                                </div>
+                                            </div>
+                                            <div className={`border-b ${t.border} p-3`}>
+                                                <SettingSelect label="Connection Type" value={implementSettings.connectionType || 'Rear 3-point'} onChange={(value) => handleImplementChange('connectionType', value)} options={['Rear 3-point', 'Drawbar', 'Front mount', 'Integrated']} />
+                                            </div>
+                                            <div>
+                                                <ImplementParameterInput field="hitchToWorkPoint" label="Hitch to working point" value={implementSettings.hitchToWorkPoint} hint="Hitch datum to active tool center." />
+                                                <ImplementParameterInput field="hitchToRear" label="Hitch to rear edge" value={implementSettings.hitchToRear} hint="Hitch datum to furthest rear point." />
+                                            </div>
+
+                                            <div className={`flex items-start gap-3 border-y ${t.border} px-4 py-3`}>
+                                                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-green-600 text-[9px] font-black text-white">03</span>
+                                                <div>
+                                                    <div className={`text-xs font-black ${t.textMain}`}>Rows, sections and timing</div>
+                                                    <div className={`text-[9px] ${t.textDim}`}>Control layout used during coverage recording</div>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <ImplementParameterInput field="sections" label="Sections / rows" value={implementSettings.sections} unit="" hint={`${sectionWidth.toFixed(2)} m per section.`} step="1" />
+                                                <ImplementParameterInput field="rowSpacing" label="Row spacing" value={implementSettings.rowSpacing} hint="Center-to-center row spacing." step="0.001" />
+                                                <ImplementParameterInput field="delayOn" label="Switch-on delay" value={implementSettings.delayOn} unit="s" hint="Advance when entering untreated area." step="0.1" />
+                                                <ImplementParameterInput field="delayOff" label="Switch-off delay" value={implementSettings.delayOff} unit="s" hint="Delay when leaving treated area." step="0.1" />
+                                            </div>
+
+                                            <div className={`flex items-start gap-3 border-y ${t.border} px-4 py-3`}>
+                                                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-[9px] font-black text-white">04</span>
+                                                <div>
+                                                    <div className={`text-xs font-black ${t.textMain}`}>Transport and capacity</div>
+                                                    <div className={`text-[9px] ${t.textDim}`}>Folded envelope and operational load</div>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <ImplementParameterInput field="transportWidth" label="Transport width" value={implementSettings.transportWidth} hint="Folded or road width." />
+                                                <ImplementParameterInput field="transportLength" label="Transport length" value={implementSettings.transportLength} hint="Hitch to rear in transport state." />
+                                                <ImplementParameterInput field="weightKg" label="Operating weight" value={implementSettings.weightKg} unit="kg" hint="Loaded operational weight." step="1" />
+                                                <ImplementParameterInput field="capacity" label={implementSettings.type === 'Land Leveling' ? 'Bowl capacity' : 'Tank / hopper capacity'} value={implementSettings.capacity} unit={implementSettings.type === 'Land Leveling' ? 'm³' : 'L'} hint="Nominal usable capacity." step="1" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {implementSetupStep === 'summary' && (
+                                <div className="grid grid-cols-[minmax(250px,0.95fr)_minmax(320px,1.05fr)] gap-3">
+                                    <RealImplementMeasurementView />
+                                    <div className="space-y-3">
+                                        <div className={`rounded-2xl border ${t.borderCard} p-4`}>
+                                            <div className="mb-3 flex items-start justify-between gap-3">
+                                                <div>
+                                                    <div className={`text-[10px] font-black uppercase tracking-wide ${t.textSub}`}>Implement summary</div>
+                                                    <div className={`text-base font-black ${t.textMain}`}>{cleanProfileLabel(implementSettings.name, activeImplementProfile.label)}</div>
+                                                    <div className={`text-[10px] ${t.textSub}`}>{implementSettings.brand || 'Generic'} · {implementSettings.model || implementSettings.type}</div>
+                                                </div>
+                                                <span className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase ${informationReady && geometryReady ? 'bg-green-500/10 text-green-500' : 'bg-orange-500/10 text-orange-500'}`}>
+                                                    {informationReady && geometryReady ? 'Ready to save' : 'Needs review'}
+                                                </span>
+                                            </div>
+                                            {renderImplementReviewRow('Type / connection', `${implementTypeLabel} · ${implementSettings.connectionType}`)}
+                                            {renderImplementReviewRow('Working / overall width', `${implementWidth.toFixed(2)} / ${implementOverallWidth.toFixed(2)}`, 'm')}
+                                            {renderImplementReviewRow('Hitch to work / rear', `${Number(implementSettings.hitchToWorkPoint || 0).toFixed(2)} / ${Number(implementSettings.hitchToRear || 0).toFixed(2)}`, 'm')}
+                                            {renderImplementReviewRow('Offset / overlap', `${Number(implementSettings.offset || 0).toFixed(2)} / ${Number(implementSettings.overlap || 0).toFixed(2)}`, 'm')}
+                                            {renderImplementReviewRow('Sections / row spacing', `${implementSections} / ${Number(implementSettings.rowSpacing || 0).toFixed(3)}`, 'm')}
+                                            {renderImplementReviewRow('Control / timing', `${implementSettings.controlMode} · ${Number(implementSettings.delayOn || 0).toFixed(1)} / ${Number(implementSettings.delayOff || 0).toFixed(1)} s`)}
+                                            {renderImplementReviewRow('Transport W / L', `${Number(implementSettings.transportWidth || 0).toFixed(2)} / ${Number(implementSettings.transportLength || 0).toFixed(2)}`, 'm')}
+                                            {renderImplementReviewRow('Weight / capacity', `${Math.round(Number(implementSettings.weightKg || 0))} kg · ${Number(implementSettings.capacity || 0).toFixed(0)} ${implementSettings.type === 'Land Leveling' ? 'm³' : 'L'}`)}
+                                        </div>
+                                        <div className={`rounded-2xl border ${t.borderCard} p-4`}>
+                                            <div className={`mb-3 text-[10px] font-black uppercase tracking-wide ${t.textSub}`}>Validation</div>
+                                            {[
+                                                ['Identity and connection complete', informationReady],
+                                                ['Coverage geometry valid', coverageReady],
+                                                ['Sections and timing valid', controlReady],
+                                                ['Transport envelope valid', transportReady]
+                                            ].map(([label, ready]) => (
+                                                <div key={label} className="flex items-center gap-2 py-1.5">
+                                                    {ready ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <AlertTriangle className="h-4 w-4 text-orange-500" />}
+                                                    <span className={`text-xs font-bold ${ready ? t.textMain : 'text-orange-500'}`}>{label}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
                             )}
                         </div>
-                        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-                            <SettingsMetric label="Active" value={cleanProfileLabel(implementSettings.name, activeImplementProfile.label)} />
-                            <SettingsMetric label="Width" value={`${implementWidth.toFixed(1)} m`} />
-                            <SettingsMetric label="Sections" value={implementSections} />
-                            <SettingsMetric label="Section Width" value={`${sectionWidth.toFixed(2)} m`} />
-                        </div>
-                    </SettingsSection>
-
-                    <SettingsSection title="Working Setup" detail="Geometry used by coverage, pass spacing and section control." icon={Activity}>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <SettingInput theme={t} label="Implement Name" value={implementSettings.name} onChange={(e) => handleImplementChange('name', e.target.value)} />
-                            <SettingSelect label="Implement Type" value={implementSettings.type || 'Planter'} onChange={(value) => handleImplementChange('type', value)} options={['Planter', 'Sprayer', 'Spreader', 'Blade', 'Mower', 'Custom']} />
-                            <SettingInput theme={t} label="Working Width (m)" value={implementSettings.width} type="number" onChange={(e) => handleImplementChange('width', parseFloat(e.target.value) || 0)} />
-                            <SettingInput theme={t} label="Sections / Rows" value={implementSettings.sections || 1} type="number" onChange={(e) => handleImplementChange('sections', parseInt(e.target.value, 10) || 1)} />
-                            <SettingInput theme={t} label="Row Spacing (m)" value={implementSettings.rowSpacing || 0} type="number" onChange={(e) => handleImplementChange('rowSpacing', parseFloat(e.target.value) || 0)} />
-                            <SettingSelect label="Control Mode" value={implementSettings.controlMode || 'Section Control'} onChange={(value) => handleImplementChange('controlMode', value)} options={['Section Control', 'Boom Sections', 'Rate Control', 'Manual Lift']} />
-                            <SettingInput theme={t} label="Overlap (m)" value={implementSettings.overlap} type="number" onChange={(e) => handleImplementChange('overlap', parseFloat(e.target.value) || 0)} />
-                            <SettingInput theme={t} label="Lateral Offset (cm)" value={implementSettings.offset} type="number" onChange={(e) => handleImplementChange('offset', parseFloat(e.target.value) || 0)} />
-                        </div>
-                    </SettingsSection>
-
-                    <SettingsSection title="Section Timing" detail="Delay compensation for coverage and section control." icon={Activity}>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <SettingInput theme={t} label="Delay On (s)" value={implementSettings.delayOn} type="number" onChange={(e) => handleImplementChange('delayOn', parseFloat(e.target.value) || 0)} />
-                            <SettingInput theme={t} label="Delay Off (s)" value={implementSettings.delayOff} type="number" onChange={(e) => handleImplementChange('delayOff', parseFloat(e.target.value) || 0)} />
-                        </div>
-                    </SettingsSection>
-                </div>
+                    </div>
+                </section>
             );
         }
         case 'guidance': return (
@@ -7416,10 +8312,10 @@ const App = () => {
                   </div>
 
                   <div className={`flex-1 min-w-0 min-h-0 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
-                      <div ref={settingsContentScrollRef} className={`flex-1 min-h-0 overflow-y-auto scroll-pb-28 ${settingsTab === 'vehicle' ? 'p-0' : 'p-5 lg:p-7'}`}>
-                          <div className={`${settingsTab === 'vehicle' ? 'w-full' : 'max-w-5xl'} pb-24`}>{renderSettingsContent()}</div>
+                      <div ref={settingsContentScrollRef} className={`flex-1 min-h-0 overflow-y-auto scroll-pb-28 ${['vehicle', 'implement'].includes(settingsTab) ? 'p-0' : 'p-5 lg:p-7'}`}>
+                          <div className={`${['vehicle', 'implement'].includes(settingsTab) ? 'w-full' : 'max-w-5xl'} pb-24`}>{renderSettingsContent()}</div>
                       </div>
-                      <div className={`p-4 lg:p-5 border-t ${t.borderCard} flex items-center gap-3 ${settingsTab === 'vehicle' ? 'justify-between' : 'justify-end'} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
+                      <div className={`p-4 lg:p-5 border-t ${t.borderCard} flex items-center gap-3 ${['vehicle', 'implement'].includes(settingsTab) ? 'justify-between' : 'justify-end'} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
                           <button className={`px-5 lg:px-7 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-sm lg:text-base`} onClick={() => setSettingsOpen(false)}>Cancel</button>
                           {settingsTab === 'vehicle' ? (
                               <div className="flex items-center gap-3">
@@ -7448,6 +8344,35 @@ const App = () => {
                                   >
                                       {vehicleSetupStep === 'summary' ? 'Save Vehicle' : 'Continue'}
                                       {vehicleSetupStep === 'summary' ? <Check className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                                  </button>
+                              </div>
+                          ) : settingsTab === 'implement' ? (
+                              <div className="flex items-center gap-3">
+                                  <button
+                                      onClick={() => goToImplementStep(implementSetupStepIds.indexOf(implementSetupStep) - 1)}
+                                      disabled={implementSetupStep === 'information'}
+                                      className={`flex items-center gap-2 rounded-lg border ${t.borderCard} px-4 py-2.5 text-sm font-black ${t.textMain} disabled:cursor-not-allowed disabled:opacity-35`}
+                                  >
+                                      <ChevronRight className="h-4 w-4 rotate-180" />
+                                      Back
+                                  </button>
+                                  <div className={`hidden min-w-[96px] text-center text-[10px] font-bold sm:block ${t.textDim}`}>
+                                      Step {implementSetupStepIds.indexOf(implementSetupStep) + 1} / {implementSetupStepIds.length}
+                                  </div>
+                                  <button
+                                      onClick={() => {
+                                          const index = implementSetupStepIds.indexOf(implementSetupStep);
+                                          if (index < implementSetupStepIds.length - 1) {
+                                              goToImplementStep(index + 1);
+                                          } else {
+                                              const profile = savedImplementProfiles.find(item => item.id === implementSettings.profileId);
+                                              saveImplementProfile(profile?.custom ? 'update' : 'new');
+                                          }
+                                      }}
+                                      className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-black text-white shadow-lg shadow-blue-900/20 hover:bg-blue-500"
+                                  >
+                                      {implementSetupStep === 'summary' ? 'Save Implement' : 'Continue'}
+                                      {implementSetupStep === 'summary' ? <Check className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                                   </button>
                               </div>
                           ) : (
