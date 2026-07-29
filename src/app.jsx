@@ -29,12 +29,29 @@ const DEFAULT_FEATURE_SETTINGS = {
     dataTransfer: true
 };
 
+const WifiGlyph = ({ className = '' }) => (
+    <svg
+        aria-hidden="true"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        className={className}
+    >
+        <path d="M3 8.5C8.3 4.2 15.7 4.2 21 8.5" />
+        <path d="M6.3 12c3.3-2.7 8.1-2.7 11.4 0" />
+        <path d="M9.6 15.4c1.4-1.1 3.4-1.1 4.8 0" />
+        <circle cx="12" cy="18.5" r="1.2" fill="currentColor" stroke="none" />
+    </svg>
+);
+
 const App = () => {
   const { state, actions } = window.MockBackend.useStore();
   const {
-    vehicleSettings,
+    vehicleSettings: activeVehicleSettings,
     vehicleProfiles,
-    implementSettings,
+    implementSettings: activeImplementSettings,
     implementProfiles,
     rtkSettings,
     wifiSettings,
@@ -170,14 +187,36 @@ const App = () => {
   const [vehicleProfileSearch, setVehicleProfileSearch] = useState('');
   const [vehicleSetupStep, setVehicleSetupStep] = useState('information');
   const [vehicleMeasureFocus, setVehicleMeasureFocus] = useState('wheelbase');
+  const [vehicleSettings, setVehicleSettingsDraft] = useState(() => ({ ...activeVehicleSettings }));
   const settingsContentScrollRef = useRef(null);
   const [implementProfileSearch, setImplementProfileSearch] = useState('');
   const [implementSetupStep, setImplementSetupStep] = useState('information');
   const [implementMeasureFocus, setImplementMeasureFocus] = useState('width');
+  const [implementSettings, setImplementSettingsDraft] = useState(() => ({ ...activeImplementSettings }));
+  const [pendingProfileDeleteKey, setPendingProfileDeleteKey] = useState(null);
+  const [pendingProfileSwitchKey, setPendingProfileSwitchKey] = useState(null);
+  const [wifiAdvancedOpen, setWifiAdvancedOpen] = useState(false);
+  const [wifiScanning, setWifiScanning] = useState(false);
+  const [wifiJoinTarget, setWifiJoinTarget] = useState(null);
+  const [wifiJoinPassword, setWifiJoinPassword] = useState('');
+  const [wifiForgetConfirmSsid, setWifiForgetConfirmSsid] = useState(null);
+  const [wifiHiddenNetwork, setWifiHiddenNetwork] = useState({ ssid: '', security: 'WPA2/WPA3', password: '' });
   const [rtkQualityOpen, setRtkQualityOpen] = useState(false);
   const [eventHistoryOpen, setEventHistoryOpen] = useState(false);
   const [productivityOpen, setProductivityOpen] = useState(false);
   const [uTurnPanelOpen, setUTurnPanelOpen] = useState(false);
+
+  useEffect(() => {
+      if (!settingsOpen || settingsTab !== 'vehicle') {
+          setVehicleSettingsDraft({ ...activeVehicleSettings });
+      }
+  }, [activeVehicleSettings, settingsOpen, settingsTab]);
+
+  useEffect(() => {
+      if (!settingsOpen || settingsTab !== 'implement') {
+          setImplementSettingsDraft({ ...activeImplementSettings });
+      }
+  }, [activeImplementSettings, settingsOpen, settingsTab]);
 
   const [satelliteCount, setSatelliteCount] = useState(() => Number(savedUiLocalState.satelliteCount || gnssTelemetry?.roverUsedSats || 12));
   const [notification, setNotification] = useState(null);
@@ -4884,8 +4923,10 @@ const App = () => {
   ];
   const filteredVehicleProfiles = savedVehicleProfiles.filter(profile => `${profile.label || ''} ${profile.type || ''} ${profile.detail || ''}`.toLowerCase().includes(vehicleProfileSearch.toLowerCase()));
   const filteredImplementProfiles = savedImplementProfiles.filter(profile => `${profile.label || ''} ${profile.name || ''} ${profile.type || ''} ${profile.detail || ''}`.toLowerCase().includes(implementProfileSearch.toLowerCase()));
-  const activeVehicleProfile = savedVehicleProfiles.find(profile => profile.id === vehicleSettings.profileId) || savedVehicleProfiles[0] || vehicleSettings;
-  const activeImplementProfile = savedImplementProfiles.find(profile => profile.id === implementSettings.profileId) || savedImplementProfiles[0] || implementSettings;
+  const activeVehicleProfile = savedVehicleProfiles.find(profile => profile.id === activeVehicleSettings.profileId) || savedVehicleProfiles[0] || activeVehicleSettings;
+  const activeImplementProfile = savedImplementProfiles.find(profile => profile.id === activeImplementSettings.profileId) || savedImplementProfiles[0] || activeImplementSettings;
+  const selectedVehicleProfile = savedVehicleProfiles.find(profile => profile.id === vehicleSettings.profileId) || null;
+  const selectedImplementProfile = savedImplementProfiles.find(profile => profile.id === implementSettings.profileId) || null;
   const getVehicleAssetPrefix = (profile = {}) => {
       const identity = `${profile.type || ''} ${profile.label || ''} ${profile.id || ''}`.toLowerCase();
       if (identity.includes('articulated')) return 'articulated';
@@ -4908,9 +4949,38 @@ const App = () => {
   const cleanProfileLabel = (value, fallback) => String(value || fallback).replace(/_/g, ' ');
   const getImplementProfileDetail = (profile) => `${profile.sections || 1} sections / ${Number(profile.width || 0).toFixed(1)} m`;
   const getVehicleProfileDetail = (profile) => `${profile.steeringType || 'Front axle'} / ${Number(profile.wheelbase || 0).toFixed(1)} m wheelbase`;
+  const makeUniqueProfileLabel = (requestedLabel, profiles, excludeId = null) => {
+      const base = cleanProfileLabel(requestedLabel, 'Profile').trim() || 'Profile';
+      const used = new Set(profiles.filter(profile => profile.id !== excludeId).map(profile => String(profile.label || '').trim().toLowerCase()));
+      if (!used.has(base.toLowerCase())) return base;
+      let suffix = 2;
+      while (used.has(`${base} ${suffix}`.toLowerCase())) suffix += 1;
+      return `${base} ${suffix}`;
+  };
+  const vehicleInformationReady = Boolean(String(vehicleSettings.label || '').trim()) && Boolean(vehicleSettings.type);
+  const vehicleGeometryReady = Number(vehicleSettings.wheelbase) > 0
+      && Number(vehicleSettings.frontAxleWidth) > 0
+      && Number(vehicleSettings.rearAxleWidth) > 0
+      && Number(vehicleSettings.antennaHeight) > 0
+      && Number(vehicleSettings.gnssBaseline) > 0
+      && Number(vehicleSettings.antennaToRearAxle) >= 0
+      && Number(vehicleSettings.hitchHeight) >= 0;
+  const implementInformationReady = Boolean(String(implementSettings.name || '').trim())
+      && Boolean(implementSettings.type)
+      && Boolean(implementSettings.connectionType);
+  const implementGeometryReady = Number(implementSettings.width) > 0
+      && Number(implementSettings.overallWidth) >= Number(implementSettings.width)
+      && Number(implementSettings.hitchToWorkPoint) >= 0
+      && Number(implementSettings.hitchToRear) >= Number(implementSettings.hitchToWorkPoint)
+      && Number(implementSettings.sections) > 0
+      && Number(implementSettings.delayOn) >= 0
+      && Number(implementSettings.delayOff) >= 0
+      && Number(implementSettings.transportWidth) > 0
+      && Number(implementSettings.transportLength) > 0
+      && Number(implementSettings.weightKg) >= 0;
 
   const handleVehicleChange = (key, value) => {
-      actions.setVehicleSettings(prev => ({ ...prev, [key]: value }));
+      setVehicleSettingsDraft(prev => ({ ...prev, [key]: value }));
   };
 
   const vehicleSetupStepIds = ['information', 'geometry', 'summary'];
@@ -4923,9 +4993,12 @@ const App = () => {
   };
   const startNewVehicleProfile = () => {
       const template = savedVehicleProfiles[0] || vehicleSettings;
-      actions.setVehicleSettings(prev => ({
+      setPendingProfileDeleteKey(null);
+      setPendingProfileSwitchKey(null);
+      setVehicleSettingsDraft(prev => ({
           ...prev,
           ...template,
+          id: undefined,
           profileId: null,
           label: 'New Vehicle',
           brand: 'Generic',
@@ -4948,13 +5021,17 @@ const App = () => {
   };
   const startNewImplementProfile = () => {
       const template = implementTypeOptions[0];
-      actions.setImplementSettings(prev => ({
+      setPendingProfileDeleteKey(null);
+      setPendingProfileSwitchKey(null);
+      setImplementSettingsDraft(prev => ({
           ...prev,
           ...template,
+          id: undefined,
           profileId: null,
           name: 'New_Implement',
+          type: template.label,
           brand: 'Generic',
-          model: '',
+          model: template.label,
           serialNumber: '',
           overlap: 0,
           offset: 0,
@@ -4969,7 +5046,7 @@ const App = () => {
       showNotification('New implement draft ready — choose a type and complete the details', 'info');
   };
   const applyImplementType = (option) => {
-      actions.setImplementSettings(prev => ({
+      setImplementSettingsDraft(prev => ({
           ...prev,
           ...option,
           type: option.label,
@@ -4986,44 +5063,74 @@ const App = () => {
       setImplementMeasureFocus('width');
   };
 
-  const applyVehicleProfile = (profile) => {
+  const buildVehicleSettings = (profile, base = activeVehicleSettings) => {
       const fallbackPower = profile.id === 'articulated' ? 420 : profile.id === 'self-propelled' ? 280 : 125;
-      actions.setVehicleSettings(prev => ({
-          ...prev,
+      return {
+          ...base,
           ...profile,
           profileId: profile.id,
-          label: profile.label || profile.type || prev.label,
+          label: profile.label || profile.type || base.label,
           brand: profile.brand || 'Generic',
           model: profile.model || profile.label || profile.type || 'Vehicle',
           controlType: profile.controlType || (profile.steeringType === 'Articulated' || profile.id === 'self-propelled' ? 'CAN Hydraulic' : 'Electronic Steering Wheel'),
           horsepower: Number(profile.horsepower || fallbackPower),
-          purchaseDate: profile.purchaseDate || prev.purchaseDate || '',
-          frontOverhang: Number(profile.frontOverhang ?? prev.frontOverhang ?? 1.35),
-          rearOverhang: Number(profile.rearOverhang ?? prev.rearOverhang ?? 1.05),
-          overallHeight: Number(profile.overallHeight ?? prev.overallHeight ?? 3.1),
-          antennaToRearAxle: Number(profile.antennaToRearAxle ?? Math.max(0.5, Number(profile.wheelbase || prev.wheelbase || 2.5) * 0.46)),
-          gnssReceiverModel: profile.gnssReceiverModel || prev.gnssReceiverModel || 'AG-372',
+          purchaseDate: profile.purchaseDate || base.purchaseDate || '',
+          frontOverhang: Number(profile.frontOverhang ?? base.frontOverhang ?? 1.35),
+          rearOverhang: Number(profile.rearOverhang ?? base.rearOverhang ?? 1.05),
+          overallHeight: Number(profile.overallHeight ?? base.overallHeight ?? 3.1),
+          antennaToRearAxle: Number(profile.antennaToRearAxle ?? Math.max(0.5, Number(profile.wheelbase || base.wheelbase || 2.5) * 0.46)),
+          gnssReceiverModel: profile.gnssReceiverModel || base.gnssReceiverModel || 'AG-372',
           gnssLayout: 'Dual antenna horizontal',
           gnssAntennaCount: 2,
-          gnssBaseline: Number(profile.gnssBaseline ?? prev.gnssBaseline ?? 1.2),
-          gnssPrimarySide: profile.gnssPrimarySide || prev.gnssPrimarySide || 'Left / ANT A',
-          gnssMountPosition: profile.gnssMountPosition || prev.gnssMountPosition || 'Cab roof crossbar',
-          gnssHeadingOffset: Number(profile.gnssHeadingOffset ?? prev.gnssHeadingOffset ?? 0),
-          gnssRollOffset: Number(profile.gnssRollOffset ?? prev.gnssRollOffset ?? 0),
-          gnssPitchOffset: Number(profile.gnssPitchOffset ?? prev.gnssPitchOffset ?? 0),
-          hitchOffset: Number(profile.hitchOffset ?? prev.hitchOffset ?? 0),
-          hitchHeight: Number(profile.hitchHeight ?? prev.hitchHeight ?? 0.65)
-      }));
-      showNotification(`${profile.label} vehicle profile applied`, 'success');
+          gnssBaseline: Number(profile.gnssBaseline ?? base.gnssBaseline ?? 1.2),
+          gnssPrimarySide: profile.gnssPrimarySide || base.gnssPrimarySide || 'Left / ANT A',
+          gnssMountPosition: profile.gnssMountPosition || base.gnssMountPosition || 'Cab roof crossbar',
+          gnssHeadingOffset: Number(profile.gnssHeadingOffset ?? base.gnssHeadingOffset ?? 0),
+          gnssRollOffset: Number(profile.gnssRollOffset ?? base.gnssRollOffset ?? 0),
+          gnssPitchOffset: Number(profile.gnssPitchOffset ?? base.gnssPitchOffset ?? 0),
+          hitchOffset: Number(profile.hitchOffset ?? base.hitchOffset ?? 0),
+          hitchHeight: Number(profile.hitchHeight ?? base.hitchHeight ?? 0.65)
+      };
   };
 
-  const saveVehicleProfile = (mode = 'update') => {
-      const currentProfile = savedVehicleProfiles.find(profile => profile.id === vehicleSettings.profileId);
-      if (mode === 'update' && currentProfile && !currentProfile.custom) {
-          return showNotification('Use Save New to copy a built-in vehicle template', 'warning');
+  const applyVehicleProfile = (profile) => {
+      const currentBaseline = selectedVehicleProfile ? buildVehicleSettings(selectedVehicleProfile, activeVehicleSettings) : null;
+      const hasUnsavedDraft = !currentBaseline || JSON.stringify(vehicleSettings) !== JSON.stringify(currentBaseline);
+      const switchKey = `vehicle:${profile.id}`;
+      if (vehicleSettings.profileId !== profile.id && hasUnsavedDraft && pendingProfileSwitchKey !== switchKey) {
+          setPendingProfileSwitchKey(switchKey);
+          return showNotification(`Unsaved vehicle changes — select ${profile.label} again to discard them`, 'warning');
       }
-      const shouldUpdate = mode === 'update' && currentProfile?.custom === true;
-      const label = cleanProfileLabel(vehicleSettings.label || vehicleSettings.type, 'Vehicle Profile');
+      setPendingProfileDeleteKey(null);
+      setPendingProfileSwitchKey(null);
+      setVehicleSettingsDraft(buildVehicleSettings(profile, activeVehicleSettings));
+      setVehicleSetupStep('information');
+      showNotification(`${profile.label} selected for review`, 'info');
+  };
+
+  const activateVehicleProfile = (profile) => {
+      const nextSettings = buildVehicleSettings(profile, activeVehicleSettings);
+      if (vehicleSettings.profileId === profile.id && JSON.stringify(vehicleSettings) !== JSON.stringify(nextSettings)) {
+          return showNotification('Save or discard vehicle edits before activating this profile', 'warning');
+      }
+      setPendingProfileDeleteKey(null);
+      setPendingProfileSwitchKey(null);
+      setVehicleSettingsDraft(nextSettings);
+      actions.setVehicleSettings(nextSettings);
+      showNotification(`${profile.label} is now the active vehicle`, 'success');
+  };
+
+  const saveVehicleProfile = () => {
+      if (!vehicleInformationReady || !vehicleGeometryReady) {
+          goToVehicleStep(vehicleInformationReady ? 1 : 0);
+          return showNotification(vehicleInformationReady ? 'Complete all required vehicle dimensions before saving' : 'Vehicle name and type are required', 'warning');
+      }
+      const currentProfile = savedVehicleProfiles.find(profile => profile.id === vehicleSettings.profileId);
+      const shouldUpdate = currentProfile?.custom === true;
+      const isCopy = Boolean(currentProfile && !currentProfile.custom);
+      const requestedLabel = cleanProfileLabel(vehicleSettings.label || vehicleSettings.type, 'Vehicle Profile');
+      const copyLabel = isCopy ? `${requestedLabel} Copy` : requestedLabel;
+      const label = makeUniqueProfileLabel(copyLabel, savedVehicleProfiles, shouldUpdate ? currentProfile.id : null);
       const id = shouldUpdate ? currentProfile.id : makeProfileId('vehicle', label);
       const nextProfile = {
           ...vehicleSettings,
@@ -5032,43 +5139,61 @@ const App = () => {
           label,
           detail: getVehicleProfileDetail(vehicleSettings),
           custom: true,
-          savedAt: 'Today'
+          savedAt: new Date().toISOString()
       };
 
       actions.setVehicleProfiles(prev => shouldUpdate
           ? prev.map(profile => profile.id === id ? nextProfile : profile)
           : [nextProfile, ...prev]
       );
-      actions.setVehicleSettings(prev => ({ ...prev, profileId: id }));
-      showNotification(`${label} vehicle profile ${shouldUpdate ? 'updated' : 'saved'}`, 'success');
+      const nextDraft = { ...nextProfile, profileId: id };
+      setVehicleSettingsDraft(nextDraft);
+      if (shouldUpdate && activeVehicleSettings.profileId === id) {
+          actions.setVehicleSettings(nextDraft);
+      }
+      setPendingProfileDeleteKey(null);
+      setPendingProfileSwitchKey(null);
+      showNotification(
+          `${label} ${shouldUpdate ? 'changes saved' : isCopy ? 'copy created' : 'created'}${activeVehicleSettings.profileId === id ? '' : ' — activate it when ready'}`,
+          'success'
+      );
   };
 
   const deleteVehicleProfile = (profile, event) => {
       event.stopPropagation();
       if (!profile.custom) return showNotification('Built-in vehicle templates cannot be deleted', 'warning');
+      if (activeVehicleSettings.profileId === profile.id) {
+          return showNotification('Activate another vehicle before deleting this profile', 'warning');
+      }
+      const deleteKey = `vehicle:${profile.id}`;
+      if (pendingProfileDeleteKey !== deleteKey) {
+          setPendingProfileDeleteKey(deleteKey);
+          return showNotification(`Press Confirm to delete ${profile.label}`, 'warning');
+      }
       const nextProfiles = savedVehicleProfiles.filter(item => item.id !== profile.id);
       actions.setVehicleProfiles(nextProfiles);
       if (vehicleSettings.profileId === profile.id) {
-          const fallback = nextProfiles[0];
-          if (fallback) applyVehicleProfile(fallback);
+          setVehicleSettingsDraft({ ...activeVehicleSettings });
       }
+      setPendingProfileDeleteKey(null);
+      setPendingProfileSwitchKey(null);
       showNotification(`${profile.label} vehicle profile deleted`, 'info');
   };
 
   // HANDLER FOR REAL-TIME IMPLEMENT CHANGE
   const handleImplementChange = (key, value) => {
-      actions.setImplementSettings(prev => ({ ...prev, [key]: value }));
+      setImplementSettingsDraft(prev => ({ ...prev, [key]: value }));
   };
 
-  const applyImplementProfile = (profile) => {
+  const buildImplementSettings = (profile, base = activeImplementSettings) => {
       const typeDefaults = implementTypeOptions.find(option => option.id === getImplementAssetKey(profile)) || implementTypeOptions[0];
-      actions.setImplementSettings(prev => ({
-          ...prev,
+      return {
+          ...base,
           ...typeDefaults,
           ...profile,
           profileId: profile.id,
           type: implementTypeOptions.some(option => option.label === profile.type) ? profile.type : typeDefaults.label,
-          brand: profile.brand || prev.brand || 'Generic',
+          brand: profile.brand || base.brand || 'Generic',
           model: profile.model || profile.label || profile.type,
           serialNumber: profile.serialNumber || '',
           connectionType: profile.connectionType || typeDefaults.connectionType,
@@ -5081,18 +5206,49 @@ const App = () => {
           weightKg: Number(profile.weightKg ?? typeDefaults.weightKg),
           capacity: Number(profile.capacity ?? typeDefaults.capacity),
           sectionControl: profile.sectionControl ?? ['Section Control', 'Boom Sections'].includes(profile.controlMode || typeDefaults.controlMode)
-      }));
-      setImplementMeasureFocus('width');
-      showNotification(`${profile.label} implement profile applied`, 'success');
+      };
   };
 
-  const saveImplementProfile = (mode = 'update') => {
-      const currentProfile = savedImplementProfiles.find(profile => profile.id === implementSettings.profileId);
-      if (mode === 'update' && currentProfile && !currentProfile.custom) {
-          return showNotification('Use Save New to copy a built-in implement template', 'warning');
+  const applyImplementProfile = (profile) => {
+      const currentBaseline = selectedImplementProfile ? buildImplementSettings(selectedImplementProfile, activeImplementSettings) : null;
+      const hasUnsavedDraft = !currentBaseline || JSON.stringify(implementSettings) !== JSON.stringify(currentBaseline);
+      const switchKey = `implement:${profile.id}`;
+      if (implementSettings.profileId !== profile.id && hasUnsavedDraft && pendingProfileSwitchKey !== switchKey) {
+          setPendingProfileSwitchKey(switchKey);
+          return showNotification(`Unsaved implement changes — select ${profile.label} again to discard them`, 'warning');
       }
-      const shouldUpdate = mode === 'update' && currentProfile?.custom === true;
-      const label = cleanProfileLabel(implementSettings.name, `${implementSettings.type || 'Implement'} ${Number(implementSettings.width || 0).toFixed(1)}m`);
+      setPendingProfileDeleteKey(null);
+      setPendingProfileSwitchKey(null);
+      setImplementSettingsDraft(buildImplementSettings(profile, activeImplementSettings));
+      setImplementSetupStep('information');
+      setImplementMeasureFocus('width');
+      showNotification(`${profile.label} selected for review`, 'info');
+  };
+
+  const activateImplementProfile = (profile) => {
+      const nextSettings = buildImplementSettings(profile, activeImplementSettings);
+      if (implementSettings.profileId === profile.id && JSON.stringify(implementSettings) !== JSON.stringify(nextSettings)) {
+          return showNotification('Save or discard implement edits before activating this profile', 'warning');
+      }
+      setPendingProfileDeleteKey(null);
+      setPendingProfileSwitchKey(null);
+      setImplementSettingsDraft(nextSettings);
+      actions.setImplementSettings(nextSettings);
+      setImplementMeasureFocus('width');
+      showNotification(`${profile.label} is now the active implement`, 'success');
+  };
+
+  const saveImplementProfile = () => {
+      if (!implementInformationReady || !implementGeometryReady) {
+          goToImplementStep(implementInformationReady ? 1 : 0);
+          return showNotification(implementInformationReady ? 'Complete all required implement dimensions before saving' : 'Implement name, type and connection are required', 'warning');
+      }
+      const currentProfile = savedImplementProfiles.find(profile => profile.id === implementSettings.profileId);
+      const shouldUpdate = currentProfile?.custom === true;
+      const isCopy = Boolean(currentProfile && !currentProfile.custom);
+      const requestedLabel = cleanProfileLabel(implementSettings.name, `${implementSettings.type || 'Implement'} ${Number(implementSettings.width || 0).toFixed(1)}m`);
+      const copyLabel = isCopy ? `${requestedLabel} Copy` : requestedLabel;
+      const label = makeUniqueProfileLabel(copyLabel, savedImplementProfiles, shouldUpdate ? currentProfile.id : null);
       const id = shouldUpdate ? currentProfile.id : makeProfileId('implement', label);
       const nextProfile = {
           ...implementSettings,
@@ -5101,27 +5257,53 @@ const App = () => {
           label,
           detail: getImplementProfileDetail(implementSettings),
           custom: true,
-          savedAt: 'Today'
+          savedAt: new Date().toISOString()
       };
 
       actions.setImplementProfiles(prev => shouldUpdate
           ? prev.map(profile => profile.id === id ? nextProfile : profile)
           : [nextProfile, ...prev]
       );
-      actions.setImplementSettings(prev => ({ ...prev, profileId: id }));
-      showNotification(`${label} implement profile ${shouldUpdate ? 'updated' : 'saved'}`, 'success');
+      const nextDraft = { ...nextProfile, profileId: id };
+      setImplementSettingsDraft(nextDraft);
+      if (shouldUpdate && activeImplementSettings.profileId === id) {
+          actions.setImplementSettings(nextDraft);
+      }
+      setPendingProfileDeleteKey(null);
+      setPendingProfileSwitchKey(null);
+      showNotification(
+          `${label} ${shouldUpdate ? 'changes saved' : isCopy ? 'copy created' : 'created'}${activeImplementSettings.profileId === id ? '' : ' — activate it when ready'}`,
+          'success'
+      );
   };
 
   const deleteImplementProfile = (profile, event) => {
       event.stopPropagation();
       if (!profile.custom) return showNotification('Built-in implement templates cannot be deleted', 'warning');
+      if (activeImplementSettings.profileId === profile.id) {
+          return showNotification('Activate another implement before deleting this profile', 'warning');
+      }
+      const deleteKey = `implement:${profile.id}`;
+      if (pendingProfileDeleteKey !== deleteKey) {
+          setPendingProfileDeleteKey(deleteKey);
+          return showNotification(`Press Confirm to delete ${profile.label}`, 'warning');
+      }
       const nextProfiles = savedImplementProfiles.filter(item => item.id !== profile.id);
       actions.setImplementProfiles(nextProfiles);
       if (implementSettings.profileId === profile.id) {
-          const fallback = nextProfiles[0];
-          if (fallback) applyImplementProfile(fallback);
+          setImplementSettingsDraft({ ...activeImplementSettings });
       }
+      setPendingProfileDeleteKey(null);
+      setPendingProfileSwitchKey(null);
       showNotification(`${profile.label} implement profile deleted`, 'info');
+  };
+
+  const closeSettingsPanel = () => {
+      setVehicleSettingsDraft({ ...activeVehicleSettings });
+      setImplementSettingsDraft({ ...activeImplementSettings });
+      setPendingProfileDeleteKey(null);
+      setPendingProfileSwitchKey(null);
+      setSettingsOpen(false);
   };
 
   const handleRtkSettingChange = (key, value) => {
@@ -5208,14 +5390,17 @@ const App = () => {
       searchPlaceholder,
       profiles,
       isActive,
+      isSelected,
       onSelect,
+      onActivate,
       getImage,
       getSecondary,
       getMeta,
       onDelete,
       emptyText,
       headerAction,
-      footer
+      footer,
+      entity
   }) => (
       <aside className={`flex min-h-0 flex-col border-r font-sans ${t.border} ${theme === 'dark' ? 'bg-slate-950/45' : 'bg-slate-50/80'}`}>
           <div className={`border-b ${t.border} px-4 py-3.5`}>
@@ -5245,18 +5430,21 @@ const App = () => {
           <div className="flex-1 space-y-2 overflow-y-auto p-3">
               {profiles.map((profile) => {
                   const active = isActive(profile);
+                  const selected = isSelected(profile);
+                  const deleteKey = `${entity}:${profile.id}`;
+                  const confirmingDelete = pendingProfileDeleteKey === deleteKey;
                   return (
                       <article
                           key={profile.id}
-                          className={`group w-full min-w-0 rounded-xl border px-2.5 py-2 transition-colors ${active ? 'border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/15' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/55' : 'bg-white'} hover:border-blue-500/50`}`}
+                          className={`group w-full min-w-0 rounded-xl border px-2.5 py-2 transition-colors ${selected ? 'border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/15' : active ? 'border-green-500/60 bg-green-500/5' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/55' : 'bg-white'} hover:border-blue-500/50`}`}
                       >
                           <button type="button" onClick={() => onSelect(profile)} className="grid w-full min-w-0 grid-cols-[48px_minmax(0,1fr)] items-center gap-2 text-left">
-                              <span className={`flex h-11 w-12 items-center justify-center overflow-hidden rounded-lg border ${active ? 'border-blue-500/40 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-950/70' : 'bg-slate-50'}`}`}>
+                              <span className={`flex h-11 w-12 items-center justify-center overflow-hidden rounded-lg border ${selected ? 'border-blue-500/40 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-950/70' : 'bg-slate-50'}`}`}>
                                   <img src={getImage(profile)} alt="" aria-hidden="true" className="h-full w-full object-contain p-1" />
                               </span>
                               <span className="min-w-0">
                                   <span
-                                      className={`block text-xs font-bold leading-[15px] tracking-[-0.01em] ${active ? 'text-blue-500' : t.textMain}`}
+                                      className={`block text-xs font-bold leading-[15px] tracking-[-0.01em] ${selected ? 'text-blue-500' : t.textMain}`}
                                       style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
                                   >
                                       {profile.label}
@@ -5274,12 +5462,14 @@ const App = () => {
                                   {profile.custom && (
                                       <button
                                           type="button"
-                                          aria-label={`Delete ${profile.label}`}
+                                          aria-label={confirmingDelete ? `Confirm delete ${profile.label}` : `Delete ${profile.label}`}
                                           onClick={(event) => onDelete(profile, event)}
-                                          className="flex h-7 items-center gap-1 rounded-md border border-red-500/30 px-2 text-[9px] font-semibold uppercase text-red-500 transition-colors hover:bg-red-500/10"
+                                          disabled={active}
+                                          title={active ? 'Activate another profile before deleting this one' : confirmingDelete ? 'Press again to confirm deletion' : 'Delete profile'}
+                                          className={`flex h-7 items-center gap-1 rounded-md border px-2 text-[9px] font-semibold uppercase transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${confirmingDelete ? 'border-red-500 bg-red-500 text-white' : 'border-red-500/30 text-red-500 hover:bg-red-500/10'}`}
                                       >
                                           <Trash2 className="h-3 w-3" />
-                                          Delete
+                                          {confirmingDelete ? 'Confirm' : 'Delete'}
                                       </button>
                                   )}
                                   {active ? (
@@ -5290,10 +5480,10 @@ const App = () => {
                                   ) : (
                                       <button
                                           type="button"
-                                          onClick={() => onSelect(profile)}
+                                          onClick={() => onActivate(profile)}
                                           className="flex h-7 items-center gap-1 rounded-md bg-blue-600 px-2.5 text-[9px] font-bold uppercase text-white transition-colors hover:bg-blue-500"
                                       >
-                                          Load
+                                          Activate
                                           <ChevronRight className="h-3 w-3" />
                                       </button>
                                   )}
@@ -5320,13 +5510,16 @@ const App = () => {
           onSearchChange={setVehicleProfileSearch}
           searchPlaceholder="Search machines"
           profiles={filteredVehicleProfiles}
-          isActive={(profile) => vehicleSettings.profileId === profile.id}
+          isActive={(profile) => activeVehicleSettings.profileId === profile.id}
+          isSelected={(profile) => vehicleSettings.profileId === profile.id}
           onSelect={applyVehicleProfile}
+          onActivate={activateVehicleProfile}
           getImage={(profile) => getVehicleAsset(profile, 'side')}
           getSecondary={(profile) => `${profile.brand || 'Generic'} \u00B7 ${profile.model || profile.type}`}
           getMeta={(profile) => `${profile.type || 'Vehicle'} \u00B7 ${Number(profile.horsepower || 0)} HP`}
           onDelete={deleteVehicleProfile}
           emptyText="No matching machine"
+          entity="vehicle"
           headerAction={(
               <button
                   type="button"
@@ -5359,13 +5552,16 @@ const App = () => {
           onSearchChange={setImplementProfileSearch}
           searchPlaceholder="Search implements"
           profiles={filteredImplementProfiles}
-          isActive={(profile) => implementSettings.profileId === profile.id}
+          isActive={(profile) => activeImplementSettings.profileId === profile.id}
+          isSelected={(profile) => implementSettings.profileId === profile.id}
           onSelect={applyImplementProfile}
+          onActivate={activateImplementProfile}
           getImage={getImplementAsset}
           getSecondary={(profile) => `${profile.type || 'Implement'} \u00B7 ${profile.connectionType || 'Rear 3-point'}`}
           getMeta={(profile) => `${Number(profile.width || 0).toFixed(1)} m working width`}
           onDelete={deleteImplementProfile}
           emptyText="No matching implement"
+          entity="implement"
           headerAction={(
               <button
                   type="button"
@@ -6497,7 +6693,7 @@ const App = () => {
               { id: 'overview', label: 'Overview', icon: LayoutGrid },
               { id: 'guidance', label: 'Guidance', icon: Navigation },
               { id: 'rtk', label: 'RTK / GNSS', icon: Radio },
-              { id: 'wifi', label: 'WiFi / Network', icon: Signal },
+              { id: 'wifi', label: 'WiFi / Network', icon: WifiGlyph },
               { id: 'display', label: 'Display', icon: Monitor }
           ]
       },
@@ -6558,54 +6754,97 @@ const App = () => {
         );
         case 'wifi': {
             const wifiConfig = {
-              enabled: true,
-              mode: 'Client',
-              status: 'Disconnected',
-              ssid: '',
-              security: 'WPA2/WPA3',
-              password: '',
-              signalDbm: -90,
-              channel: 'Auto',
-              band: '2.4 GHz',
-              autoReconnect: true,
-              dhcp: true,
-              ipAddress: '192.168.1.48',
-              subnetMask: '255.255.255.0',
-              gateway: '192.168.1.1',
-              dnsPrimary: '8.8.8.8',
-              dnsSecondary: '1.1.1.1',
-              hotspotEnabled: false,
-              hotspotSsid: 'Autosteer_Setup',
-              hotspotPassword: '',
-              lteFallback: true,
-              lastScanAt: null,
-              savedNetworks: [],
-              ...wifiSettings
+                enabled: true,
+                mode: 'Client',
+                status: 'Disconnected',
+                ssid: '',
+                security: 'WPA2/WPA3',
+                password: '',
+                signalDbm: -90,
+                channel: 'Auto',
+                band: '2.4 GHz',
+                autoReconnect: true,
+                dhcp: true,
+                ipAddress: '192.168.1.48',
+                subnetMask: '255.255.255.0',
+                gateway: '192.168.1.1',
+                dnsPrimary: '8.8.8.8',
+                dnsSecondary: '1.1.1.1',
+                hotspotEnabled: false,
+                hotspotSsid: 'Autosteer_Setup',
+                hotspotPassword: '',
+                lteFallback: true,
+                lastScanAt: null,
+                savedNetworks: [],
+                ...wifiSettings
             };
+            const connected = wifiConfig.enabled && wifiConfig.status === 'Connected' && Boolean(wifiConfig.ssid);
             const wifiSignalPercent = Math.max(0, Math.min(100, Math.round(((Number(wifiConfig.signalDbm) + 90) / 55) * 100)));
-            const wifiTone = wifiConfig.status === 'Connected' ? 'text-green-500' : wifiConfig.enabled ? 'text-yellow-500' : 'text-slate-500';
+            const savedNetworkSsids = new Set((wifiConfig.savedNetworks || []).map(network => network.ssid));
             const scanNetworks = [
                 ...(wifiConfig.savedNetworks || []),
                 { ssid: 'Field_Base_AP', security: 'WPA2', signalDbm: -61, status: 'Available' },
                 { ssid: 'NTRIP_Mobile', security: 'WPA2', signalDbm: -70, status: 'Available' }
-            ].filter((network, index, list) => list.findIndex(item => item.ssid === network.ssid) === index);
+            ]
+                .filter((network, index, list) => list.findIndex(item => item.ssid === network.ssid) === index)
+                .sort((left, right) => {
+                    const leftConnected = left.ssid === wifiConfig.ssid && connected;
+                    const rightConnected = right.ssid === wifiConfig.ssid && connected;
+                    if (leftConnected !== rightConnected) return leftConnected ? -1 : 1;
+                    const leftSaved = savedNetworkSsids.has(left.ssid);
+                    const rightSaved = savedNetworkSsids.has(right.ssid);
+                    if (leftSaved !== rightSaved) return leftSaved ? -1 : 1;
+                    return Number(right.signalDbm || -90) - Number(left.signalDbm || -90);
+                });
             const toggleWifiFlag = (key) => handleWifiSettingChange(key, !wifiConfig[key]);
-            const renderWifiMetric = (label, value, tone = t.textMain) => (
-                <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-3 rounded-xl border ${t.borderCard} min-w-0`}>
-                    <div className={`text-[10px] uppercase font-black ${t.textSub}`}>{label}</div>
-                    <div className={`text-base font-black break-all leading-tight ${tone}`}>{value}</div>
-                </div>
+            const signalLabel = (strength) => strength >= 70 ? 'Excellent' : strength >= 48 ? 'Good' : strength >= 28 ? 'Fair' : 'Weak';
+            const WifiSignalBars = ({ strength, active = false }) => (
+                <span className="flex h-6 w-7 items-end justify-center gap-[2px]" aria-hidden="true">
+                    {[28, 46, 68, 92].map((threshold, index) => (
+                        <span
+                            key={threshold}
+                            className={`w-1 rounded-sm ${strength >= threshold ? (active ? 'bg-white' : 'bg-blue-500') : (theme === 'dark' ? 'bg-slate-700' : 'bg-slate-300')}`}
+                            style={{ height: `${7 + index * 4}px` }}
+                        />
+                    ))}
+                </span>
             );
-            const connectWifiNetwork = (network) => {
+            const connectWifiNetwork = (network, password = '') => {
+                const existingSavedNetworks = wifiConfig.savedNetworks || [];
+                const nextSavedNetworks = existingSavedNetworks
+                    .filter(item => item.ssid !== network.ssid)
+                    .map(item => ({
+                        ...item,
+                        status: item.status === 'Connected' ? 'Saved' : item.status
+                    }));
+                handleWifiSettingChange('enabled', true);
                 handleWifiSettingChange('ssid', network.ssid);
                 handleWifiSettingChange('security', network.security);
                 handleWifiSettingChange('signalDbm', network.signalDbm);
                 handleWifiSettingChange('status', 'Connected');
-                handleWifiSettingChange('savedNetworks', scanNetworks.map(item => ({
-                    ...item,
-                    status: item.ssid === network.ssid ? 'Connected' : item.status === 'Connected' ? 'Saved' : item.status
-                })));
+                handleWifiSettingChange('password', password);
+                handleWifiSettingChange('savedNetworks', [
+                    {
+                        ...network,
+                        password,
+                        status: 'Connected'
+                    },
+                    ...nextSavedNetworks
+                ]);
+                setWifiJoinTarget(null);
+                setWifiJoinPassword('');
+                setWifiForgetConfirmSsid(null);
                 showNotification(`WiFi connected: ${network.ssid}`, 'success');
+            };
+            const requestWifiConnection = (network) => {
+                const alreadySaved = savedNetworkSsids.has(network.ssid);
+                if (alreadySaved || network.security === 'Open') {
+                    connectWifiNetwork(network, network.password || '');
+                    return;
+                }
+                setWifiJoinTarget(network);
+                setWifiJoinPassword('');
+                setWifiForgetConfirmSsid(null);
             };
             const forgetWifiNetwork = (network) => {
                 const nextSavedNetworks = (wifiConfig.savedNetworks || []).filter(item => item.ssid !== network.ssid);
@@ -6615,140 +6854,365 @@ const App = () => {
                     handleWifiSettingChange('status', 'Disconnected');
                     handleWifiSettingChange('signalDbm', -90);
                 }
+                setWifiForgetConfirmSsid(null);
                 showNotification(`Forgot WiFi network: ${network.ssid}`, 'info');
             };
-            const renderWifiToggle = ({ label, detail, flagKey, icon: Icon = CheckCircle2 }) => (
+            const requestForgetWifiNetwork = (network) => {
+                if (wifiForgetConfirmSsid !== network.ssid) {
+                    setWifiForgetConfirmSsid(network.ssid);
+                    return;
+                }
+                forgetWifiNetwork(network);
+            };
+            const disconnectWifi = () => {
+                handleWifiSettingChange('status', 'Disconnected');
+                handleWifiSettingChange('signalDbm', -90);
+                showNotification('WiFi disconnected', 'info');
+            };
+            const toggleWifiEnabled = () => {
+                const nextEnabled = !wifiConfig.enabled;
+                handleWifiSettingChange('enabled', nextEnabled);
+                if (!nextEnabled) {
+                    handleWifiSettingChange('status', 'Disconnected');
+                    handleWifiSettingChange('signalDbm', -90);
+                    setWifiJoinTarget(null);
+                    setWifiJoinPassword('');
+                }
+                showNotification(nextEnabled ? 'WiFi enabled' : 'WiFi disabled', nextEnabled ? 'success' : 'info');
+            };
+            const renderWifiSettingRow = ({ label, detail, flagKey, icon: Icon = CheckCircle2 }) => (
                 <button
+                    type="button"
                     onClick={() => toggleWifiFlag(flagKey)}
-                    className={`p-4 rounded-xl border text-left flex items-center justify-between gap-4 ${wifiConfig[flagKey] ? 'border-green-500/50 bg-green-500/10' : `${t.borderCard} ${t.bgInput}`}`}
+                    role="switch"
+                    aria-checked={Boolean(wifiConfig[flagKey])}
+                    className={`flex w-full items-center justify-between gap-4 border-b ${t.border} px-4 py-3.5 text-left last:border-b-0 hover:bg-blue-500/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500`}
                 >
                     <div className="flex items-center gap-3 min-w-0">
-                        <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${wifiConfig[flagKey] ? 'bg-green-500 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} ${t.textDim}`}`}>
-                            <Icon className="w-5 h-5" />
+                        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${wifiConfig[flagKey] ? 'bg-blue-500/12 text-blue-500' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textDim}`}`}>
+                            <Icon className="h-[18px] w-[18px]" />
                         </div>
                         <div className="min-w-0">
-                            <div className={`font-bold ${t.textMain}`}>{label}</div>
-                            <div className={`text-xs ${t.textSub}`}>{detail}</div>
+                            <div className={`text-sm font-bold ${t.textMain}`}>{label}</div>
+                            <div className={`mt-0.5 text-[11px] leading-4 ${t.textSub}`}>{detail}</div>
                         </div>
                     </div>
-                    <div className={`shrink-0 w-12 h-7 rounded-full p-1 transition-colors ${wifiConfig[flagKey] ? 'bg-green-500' : 'bg-slate-400'}`}>
-                        <div className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform ${wifiConfig[flagKey] ? 'translate-x-5' : ''}`}></div>
-                    </div>
+                    <span className={`h-6 w-11 shrink-0 rounded-full p-0.5 transition-colors ${wifiConfig[flagKey] ? 'bg-blue-600' : 'bg-slate-400'}`}>
+                        <span className={`block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${wifiConfig[flagKey] ? 'translate-x-5' : ''}`} />
+                    </span>
                 </button>
             );
 
             return (
-              <div className="space-y-5">
-                <SettingsSection
-                    title="WiFi / Network"
-                    detail="Quick network setup for NTRIP, sync and service access."
-                    icon={Signal}
-                    actions={<SettingsActionButton onClick={() => { handleWifiSettingChange('lastScanAt', new Date().toISOString()); showNotification('WiFi scan completed', 'success'); }}>Scan</SettingsActionButton>}
-                >
-                    <div className="grid grid-cols-1 xl:grid-cols-[300px_minmax(0,1fr)] gap-4">
-                        <div className={`rounded-xl border ${wifiConfig.status === 'Connected' ? 'border-green-500/45 bg-green-500/10' : 'border-yellow-500/45 bg-yellow-500/10'} p-4`}>
-                            <div className="flex items-center justify-between gap-3">
-                                <div className="min-w-0">
-                                    <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Current Network</div>
-                                    <div className={`mt-1 text-2xl font-black leading-none ${wifiTone}`}>{wifiConfig.status}</div>
-                                </div>
-                                <div className={`shrink-0 w-12 h-12 rounded-xl flex items-center justify-center ${wifiConfig.status === 'Connected' ? 'bg-green-600 text-white' : 'bg-yellow-500/20 text-yellow-500'}`}>
-                                    <Signal className="w-6 h-6" />
-                                </div>
-                            </div>
-                            <div className={`mt-3 text-sm font-black truncate ${t.textMain}`}>{wifiConfig.ssid || 'No network selected'}</div>
-                            <div className={`mt-4 h-2 rounded-full overflow-hidden ${theme === 'dark' ? 'bg-slate-800' : 'bg-white/80'}`}>
-                                <div className="h-full bg-green-500" style={{ width: `${wifiSignalPercent}%` }}></div>
-                            </div>
-                            <div className={`mt-2 text-xs font-bold ${t.textSub}`}>{wifiConfig.signalDbm} dBm / {wifiSignalPercent}% signal</div>
+              <div className="mx-auto max-w-5xl space-y-4">
+                <section className={`overflow-hidden rounded-2xl border ${t.borderCard} ${t.bgPanel}`}>
+                    <div className={`flex flex-wrap items-center justify-between gap-4 border-b ${t.border} px-5 py-4`}>
+                        <div className="flex min-w-0 items-center gap-3">
+                            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-md shadow-blue-900/15">
+                                <WifiGlyph className="h-5 w-5" />
+                            </span>
+                            <span className="min-w-0">
+                                <span className={`block text-lg font-black ${t.textMain}`}>Wi-Fi</span>
+                                <span className={`block text-xs ${t.textSub}`}>Internet, RTK correction and data sync</span>
+                            </span>
                         </div>
-                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                            {renderWifiMetric('Mode', wifiConfig.mode)}
-                            {renderWifiMetric('IP', wifiConfig.ipAddress)}
-                            {renderWifiMetric('DHCP', wifiConfig.dhcp ? 'On' : 'Static', wifiConfig.dhcp ? 'text-green-500' : 'text-yellow-500')}
-                            {renderWifiMetric('Last Scan', wifiConfig.lastScanAt ? new Date(wifiConfig.lastScanAt).toLocaleTimeString() : 'Not yet')}
+                        <div className="flex items-center gap-3">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setWifiScanning(true);
+                                    window.setTimeout(() => {
+                                        handleWifiSettingChange('lastScanAt', new Date().toISOString());
+                                        setWifiScanning(false);
+                                        showNotification('WiFi scan completed', 'success');
+                                    }, 700);
+                                }}
+                                disabled={!wifiConfig.enabled || wifiScanning}
+                                className={`flex h-10 min-w-[82px] items-center justify-center gap-2 rounded-xl border ${t.borderCard} px-3.5 text-xs font-bold ${t.textMain} hover:border-blue-500 hover:text-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-40`}
+                            >
+                                <RotateCw className={`h-4 w-4 ${wifiScanning ? 'animate-spin' : ''}`} />
+                                {wifiScanning ? 'Scanning' : 'Scan'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={toggleWifiEnabled}
+                                role="switch"
+                                aria-checked={Boolean(wifiConfig.enabled)}
+                                aria-label="Wi-Fi"
+                                className={`flex h-10 items-center gap-2.5 rounded-xl px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${wifiConfig.enabled ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-200'} ${t.textSub}`}`}
+                            >
+                                <span className="text-xs font-black">{wifiConfig.enabled ? 'ON' : 'OFF'}</span>
+                                <span className={`h-6 w-11 rounded-full p-0.5 ${wifiConfig.enabled ? 'bg-white/25' : 'bg-slate-400'}`}>
+                                    <span className={`block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${wifiConfig.enabled ? 'translate-x-5' : ''}`} />
+                                </span>
+                            </button>
                         </div>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        {renderWifiToggle({ label: 'WiFi Enabled', detail: 'Allow network connection.', flagKey: 'enabled', icon: Signal })}
-                        {renderWifiToggle({ label: 'Auto Reconnect', detail: 'Recover after weak signal or reboot.', flagKey: 'autoReconnect', icon: RotateCw })}
-                        {renderWifiToggle({ label: 'DHCP', detail: 'Router assigns network address.', flagKey: 'dhcp', icon: Globe })}
-                    </div>
-                </SettingsSection>
 
-                <SettingsSection title="Available Networks" detail="Tap Connect to use a scanned or saved network." icon={Globe}>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 gap-4 p-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(310px,0.85fr)]">
+                        <div className={`relative overflow-hidden rounded-2xl p-5 ${connected ? 'bg-gradient-to-br from-blue-600 to-blue-700 text-white shadow-lg shadow-blue-900/15' : theme === 'dark' ? 'bg-slate-900' : 'bg-slate-100'}`}>
+                            <div className="flex items-start justify-between gap-4">
+                                <div className="min-w-0">
+                                    <div className={`flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.12em] ${connected ? 'text-blue-100' : t.textSub}`}>
+                                        <span className={`h-2 w-2 rounded-full ${connected ? 'bg-emerald-300' : wifiConfig.enabled ? 'bg-amber-400' : 'bg-slate-400'}`} />
+                                        {connected ? 'Connected' : wifiConfig.enabled ? 'Not connected' : 'Wi-Fi off'}
+                                    </div>
+                                    <div className={`mt-2 truncate text-xl font-black ${connected ? 'text-white' : t.textMain}`}>{connected ? wifiConfig.ssid : 'Choose a network below'}</div>
+                                    <div className={`mt-1 text-xs ${connected ? 'text-blue-100' : t.textSub}`}>
+                                        {connected ? `${wifiConfig.security} · ${wifiConfig.band} · Channel ${wifiConfig.channel}` : 'Scan nearby access points to connect.'}
+                                    </div>
+                                </div>
+                                <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${connected ? 'bg-white/14' : 'bg-blue-500/10'}`}>
+                                    <WifiSignalBars strength={connected ? wifiSignalPercent : 0} active={connected} />
+                                </span>
+                            </div>
+
+                            {connected && (
+                                <>
+                                    <div className="mt-5 flex items-center gap-3">
+                                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/20">
+                                            <div className="h-full rounded-full bg-emerald-300" style={{ width: `${wifiSignalPercent}%` }} />
+                                        </div>
+                                        <span className="text-xs font-black text-white">{signalLabel(wifiSignalPercent)}</span>
+                                    </div>
+                                    <div className="mt-4 grid grid-cols-3 gap-2">
+                                        {[
+                                            ['Signal', `${wifiConfig.signalDbm} dBm`],
+                                            ['IP address', wifiConfig.ipAddress],
+                                            ['Mode', wifiConfig.dhcp ? 'Automatic' : 'Manual']
+                                        ].map(([label, value]) => (
+                                            <div key={label} className="min-w-0 rounded-xl bg-white/10 px-3 py-2.5">
+                                                <div className="text-[9px] font-bold uppercase text-blue-100">{label}</div>
+                                                <div className="mt-0.5 truncate text-xs font-black text-white">{value}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="mt-4 flex gap-2">
+                                        <button type="button" onClick={() => setWifiAdvancedOpen(true)} className="h-9 rounded-lg bg-white px-4 text-xs font-black text-blue-700 hover:bg-blue-50">Details</button>
+                                        <button type="button" onClick={disconnectWifi} className="h-9 rounded-lg border border-white/30 px-4 text-xs font-black text-white hover:bg-white/10">Disconnect</button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        <div className={`overflow-hidden rounded-2xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white'}`}>
+                            {renderWifiSettingRow({ label: 'Auto reconnect', detail: 'Reconnect after reboot or signal loss.', flagKey: 'autoReconnect', icon: RotateCw })}
+                            {renderWifiSettingRow({ label: 'Automatic IP (DHCP)', detail: 'Let the router assign the IP address.', flagKey: 'dhcp', icon: Globe })}
+                            {renderWifiSettingRow({ label: 'LTE fallback', detail: 'Keep correction data online if Wi-Fi drops.', flagKey: 'lteFallback', icon: Radio })}
+                        </div>
+                    </div>
+                </section>
+
+                <section className={`overflow-hidden rounded-2xl border ${t.borderCard} ${t.bgPanel}`}>
+                    <div className={`flex items-center justify-between gap-4 border-b ${t.border} px-5 py-4`}>
+                        <div>
+                            <div className={`text-base font-black ${t.textMain}`}>Available networks</div>
+                            <div className={`mt-0.5 text-xs ${t.textSub}`}>
+                                {wifiConfig.enabled ? `${scanNetworks.length} networks found` : 'Turn on Wi-Fi to view nearby networks'}
+                            </div>
+                        </div>
+                        {wifiConfig.lastScanAt && <span className={`text-[10px] font-bold ${t.textDim}`}>Updated {new Date(wifiConfig.lastScanAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+                    </div>
+
+                    {wifiConfig.enabled ? (
+                    <div>
                         {scanNetworks.map((network) => {
-                            const connected = network.ssid === wifiConfig.ssid && wifiConfig.status === 'Connected';
-                            const saved = connected || network.status === 'Saved';
+                            const networkConnected = network.ssid === wifiConfig.ssid && connected;
+                            const saved = networkConnected || savedNetworkSsids.has(network.ssid);
                             const strength = Math.max(0, Math.min(100, Math.round(((Number(network.signalDbm) + 90) / 55) * 100)));
                             return (
                                 <div
                                     key={network.ssid}
-                                    className={`rounded-xl border p-4 flex items-center justify-between gap-4 ${connected ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'}`}`}
+                                    className={`flex min-h-[72px] items-center justify-between gap-4 border-b ${t.border} px-5 py-3 last:border-b-0 ${networkConnected ? 'bg-blue-500/7' : 'hover:bg-blue-500/5'}`}
                                 >
                                     <div className="min-w-0 flex items-center gap-3">
-                                        <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${connected ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} text-blue-500`}`}>
-                                            <Signal className="w-5 h-5" />
-                                        </div>
+                                        <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${networkConnected ? 'bg-blue-600' : theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                                            <WifiSignalBars strength={strength} active={networkConnected} />
+                                        </span>
                                         <div className="min-w-0">
-                                            <div className={`font-black truncate ${t.textMain}`}>{network.ssid}</div>
-                                            <div className={`text-xs ${t.textSub}`}>{network.security} / {network.signalDbm} dBm</div>
-                                            <div className={`mt-2 w-28 h-1.5 rounded-full overflow-hidden ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-200'}`}>
-                                                <div className="h-full bg-green-500" style={{ width: `${strength}%` }}></div>
+                                            <div className="flex min-w-0 items-center gap-2">
+                                                <span className={`truncate text-sm font-black ${t.textMain}`}>{network.ssid}</span>
+                                                {networkConnected && <span className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-[9px] font-black uppercase text-emerald-500">Connected</span>}
+                                                {!networkConnected && saved && <span className={`text-[9px] font-bold uppercase ${t.textDim}`}>Saved</span>}
                                             </div>
+                                            <div className={`mt-0.5 text-[11px] ${t.textSub}`}>{network.security} · {signalLabel(strength)}</div>
                                         </div>
                                     </div>
-                                    <div className="shrink-0 flex flex-col items-end gap-2">
-                                        <span className={`text-xs font-black uppercase ${connected ? 'text-blue-500' : saved ? 'text-slate-500' : t.textSub}`}>{connected ? 'Connected' : network.status}</span>
-                                        <div className="flex gap-2">
+                                    <div className="flex shrink-0 items-center gap-2">
+                                        {saved && !networkConnected && (
                                             <button
                                                 type="button"
-                                                onClick={() => connectWifiNetwork(network)}
-                                                className={`px-3 py-2 rounded-lg border text-xs font-black ${connected ? 'border-blue-500 text-blue-500 bg-blue-500/10' : 'border-blue-500/40 text-blue-500 hover:bg-blue-500/10'}`}
+                                                onClick={() => requestForgetWifiNetwork(network)}
+                                                className={`h-9 rounded-lg px-2 text-[10px] font-bold ${wifiForgetConfirmSsid === network.ssid ? 'bg-red-500/10 text-red-500' : `${t.textDim} hover:text-red-500`}`}
                                             >
-                                                {connected ? 'Using' : 'Connect'}
+                                                {wifiForgetConfirmSsid === network.ssid ? 'Confirm' : 'Forget'}
                                             </button>
-                                            {saved && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => forgetWifiNetwork(network)}
-                                                    className="px-3 py-2 rounded-lg border border-red-500/35 text-red-500 text-xs font-black hover:bg-red-500/10"
-                                                >
-                                                    Forget
-                                                </button>
-                                            )}
-                                        </div>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={() => networkConnected ? setWifiAdvancedOpen(true) : requestWifiConnection(network)}
+                                            className={`h-9 min-w-[82px] rounded-lg px-3 text-xs font-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${networkConnected ? `border ${t.borderCard} ${t.textMain} hover:border-blue-500` : 'bg-blue-600 text-white hover:bg-blue-500'}`}
+                                        >
+                                            {networkConnected ? 'Details' : 'Connect'}
+                                        </button>
                                     </div>
                                 </div>
                             );
                         })}
                     </div>
-                </SettingsSection>
+                    ) : (
+                        <div className="flex min-h-[180px] flex-col items-center justify-center px-6 py-10 text-center">
+                            <span className={`flex h-14 w-14 items-center justify-center rounded-2xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textDim}`}>
+                                <WifiGlyph className="h-6 w-6" />
+                            </span>
+                            <div className={`mt-4 text-sm font-black ${t.textMain}`}>Wi-Fi is off</div>
+                            <div className={`mt-1 max-w-sm text-xs ${t.textSub}`}>Turn Wi-Fi on to find nearby correction and service networks.</div>
+                            <button type="button" onClick={toggleWifiEnabled} className="mt-4 h-10 rounded-xl bg-blue-600 px-5 text-xs font-black text-white hover:bg-blue-500">Turn on Wi-Fi</button>
+                        </div>
+                    )}
+                </section>
 
-                <SettingsSection title="Manual Join" detail="Use this when the access point is hidden or not found during scan." icon={Cpu}>
-                    <div className="grid grid-cols-1 md:grid-cols-[1fr_160px_1fr_auto] gap-4 items-end">
-                        <SettingInput theme={t} label="SSID" value={wifiConfig.ssid} onChange={(e) => handleWifiSettingChange('ssid', e.target.value)} />
-                        <SettingSelect label="Security" value={wifiConfig.security} onChange={(value) => handleWifiSettingChange('security', value)} options={['WPA2/WPA3', 'WPA2', 'WPA3', 'Open']} />
-                        <SettingInput theme={t} label="Password" value={wifiConfig.password} type="password" onChange={(e) => handleWifiSettingChange('password', e.target.value)} />
-                        <SettingsActionButton
-                            variant="primary"
-                            onClick={() => {
-                                handleWifiSettingChange('status', wifiConfig.ssid ? 'Connected' : 'Disconnected');
-                                handleWifiSettingChange('signalDbm', wifiConfig.ssid ? -58 : -90);
-                                showNotification(wifiConfig.ssid ? `WiFi connected: ${wifiConfig.ssid}` : 'Enter SSID first', wifiConfig.ssid ? 'success' : 'warning');
-                            }}
-                        >
-                            Connect
-                        </SettingsActionButton>
+                <section className={`overflow-hidden rounded-2xl border ${t.borderCard} ${t.bgPanel}`}>
+                    <button
+                        type="button"
+                        onClick={() => setWifiAdvancedOpen(previous => !previous)}
+                        aria-expanded={wifiAdvancedOpen}
+                        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left hover:bg-blue-500/5"
+                    >
+                        <span className="flex items-center gap-3">
+                            <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} text-blue-500`}>
+                                <Cpu className="h-4 w-4" />
+                            </span>
+                            <span>
+                                <span className={`block text-sm font-black ${t.textMain}`}>Network details & manual join</span>
+                                <span className={`mt-0.5 block text-[11px] ${t.textSub}`}>IP, DNS and hidden network settings</span>
+                            </span>
+                        </span>
+                        <ChevronDown className={`h-5 w-5 ${t.textDim} transition-transform ${wifiAdvancedOpen ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {wifiAdvancedOpen && (
+                        <div className={`border-t ${t.border} p-5`}>
+                            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                                {[
+                                    ['IP address', wifiConfig.ipAddress],
+                                    ['Gateway', wifiConfig.gateway],
+                                    ['Subnet mask', wifiConfig.subnetMask],
+                                    ['DNS server', wifiConfig.dnsPrimary]
+                                ].map(([label, value]) => (
+                                    <div key={label} className={`min-w-0 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/60' : 'bg-slate-50'} px-3.5 py-3`}>
+                                        <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>{label}</div>
+                                        <div className={`mt-1 truncate text-xs font-black ${t.textMain}`}>{value}</div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className={`my-5 h-px ${t.divider}`} />
+                            <div className={`mb-3 text-xs font-black uppercase tracking-wide ${t.textSub}`}>Join a hidden network</div>
+                            <div className="grid grid-cols-1 items-end gap-3 xl:grid-cols-[minmax(0,1fr)_160px_minmax(0,1fr)_auto]">
+                                <SettingInput
+                                    theme={t}
+                                    label="Network name"
+                                    value={wifiHiddenNetwork.ssid}
+                                    onChange={(event) => setWifiHiddenNetwork(previous => ({ ...previous, ssid: event.target.value }))}
+                                />
+                                <SettingSelect
+                                    label="Security"
+                                    value={wifiHiddenNetwork.security}
+                                    onChange={(value) => setWifiHiddenNetwork(previous => ({ ...previous, security: value }))}
+                                    options={['WPA2/WPA3', 'WPA2', 'WPA3', 'Open']}
+                                />
+                                <SettingInput
+                                    theme={t}
+                                    label="Password"
+                                    value={wifiHiddenNetwork.password}
+                                    type="password"
+                                    onChange={(event) => setWifiHiddenNetwork(previous => ({ ...previous, password: event.target.value }))}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (!wifiHiddenNetwork.ssid.trim()) {
+                                            showNotification('Enter a network name first', 'warning');
+                                            return;
+                                        }
+                                        connectWifiNetwork({
+                                            ssid: wifiHiddenNetwork.ssid.trim(),
+                                            security: wifiHiddenNetwork.security,
+                                            signalDbm: -58,
+                                            status: 'Available'
+                                        }, wifiHiddenNetwork.password);
+                                        setWifiHiddenNetwork({ ssid: '', security: 'WPA2/WPA3', password: '' });
+                                    }}
+                                    className="h-11 rounded-xl bg-blue-600 px-5 text-sm font-black text-white hover:bg-blue-500"
+                                >
+                                    Join
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </section>
+
+                {wifiJoinTarget && (
+                    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/50 p-5 backdrop-blur-sm">
+                        <div className={`w-full max-w-md overflow-hidden rounded-2xl border ${t.borderCard} ${t.bgPanel} shadow-2xl`}>
+                            <div className={`flex items-start justify-between gap-4 border-b ${t.border} px-5 py-4`}>
+                                <div className="flex min-w-0 items-center gap-3">
+                                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white">
+                                        <WifiGlyph className="h-5 w-5" />
+                                    </span>
+                                    <div className="min-w-0">
+                                        <div className={`text-[10px] font-black uppercase tracking-wide ${t.textSub}`}>Join network</div>
+                                        <div className={`truncate text-lg font-black ${t.textMain}`}>{wifiJoinTarget.ssid}</div>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    aria-label="Cancel joining network"
+                                    onClick={() => {
+                                        setWifiJoinTarget(null);
+                                        setWifiJoinPassword('');
+                                    }}
+                                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${t.borderCard} ${t.textMain}`}
+                                >
+                                    <X className="h-4 w-4" />
+                                </button>
+                            </div>
+                            <div className="p-5">
+                                <div className={`mb-4 rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} px-4 py-3 text-xs ${t.textSub}`}>
+                                    Secured with <span className={`font-black ${t.textMain}`}>{wifiJoinTarget.security}</span>. Enter the network password to continue.
+                                </div>
+                                <SettingInput
+                                    theme={t}
+                                    label="Network password"
+                                    value={wifiJoinPassword}
+                                    type="password"
+                                    onChange={(event) => setWifiJoinPassword(event.target.value)}
+                                />
+                                <div className="mt-5 flex justify-end gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setWifiJoinTarget(null);
+                                            setWifiJoinPassword('');
+                                        }}
+                                        className={`h-11 rounded-xl border ${t.borderCard} px-5 text-sm font-bold ${t.textMain}`}
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="button"
+                                        disabled={wifiJoinPassword.length < 8}
+                                        onClick={() => connectWifiNetwork(wifiJoinTarget, wifiJoinPassword)}
+                                        className="h-11 rounded-xl bg-blue-600 px-5 text-sm font-black text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                        Connect
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                        {renderWifiMetric('Gateway', wifiConfig.gateway)}
-                        {renderWifiMetric('Subnet', wifiConfig.subnetMask)}
-                        {renderWifiMetric('DNS', wifiConfig.dnsPrimary)}
-                        {renderWifiMetric('LTE Fallback', wifiConfig.lteFallback ? 'Ready' : 'Off', wifiConfig.lteFallback ? 'text-green-500' : t.textSub)}
-                    </div>
-                </SettingsSection>
+                )}
               </div>
             );
         }
@@ -6820,7 +7284,7 @@ const App = () => {
                     <div className="grid min-h-[560px] grid-cols-[232px_minmax(0,1fr)]">
                         <VehicleLibrarySidebar />
 
-                        <div className="min-w-0 p-4 lg:p-5">
+                        <div className="min-w-0 p-5 lg:p-6">
                             {vehicleSetupStep === 'information' && (
                                 <div className={`overflow-hidden rounded-2xl border ${t.borderCard}`}>
                                     <div className={`flex flex-wrap items-center justify-between gap-3 border-b ${t.border} px-4 py-3`}>
@@ -6829,7 +7293,9 @@ const App = () => {
                                                 <Tractor className="h-5 w-5" />
                                             </span>
                                             <div className="min-w-0">
-                                                <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>Active machine</div>
+                                                <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>
+                                                    {vehicleSettings.profileId === activeVehicleSettings.profileId ? 'Active machine' : vehicleSettings.profileId ? 'Selected machine' : 'New vehicle draft'}
+                                                </div>
                                                 <div className={`truncate text-base font-black ${t.textMain}`}>{vehicleSettings.label || activeVehicleProfile.label}</div>
                                                 <div className={`truncate text-[10px] ${t.textSub}`}>{vehicleSettings.brand || 'Generic'} · {vehicleSettings.model || vehicleSettings.type}</div>
                                             </div>
@@ -6887,7 +7353,7 @@ const App = () => {
                             )}
 
                             {vehicleSetupStep === 'geometry' && (
-                                <div className="space-y-3">
+                                <div className="space-y-4">
                                     <div className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border ${t.borderCard} p-3`}>
                                         <div>
                                             <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>Dimension setup</div>
@@ -7182,35 +7648,37 @@ const App = () => {
                             {implementSetupStep === 'information' && (
                                 <div className="space-y-3">
                                     <div className={`overflow-hidden rounded-2xl border ${t.borderCard}`}>
-                                        <div className={`flex flex-wrap items-center justify-between gap-3 border-b ${t.border} px-4 py-3`}>
-                                            <div className="flex min-w-0 items-center gap-3">
-                                                <span className={`flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-slate-50'}`}>
-                                                    <img src={getImplementAsset(implementSettings)} alt="" aria-hidden="true" className="h-full w-full object-contain p-1" />
+                                        <div className={`flex flex-wrap items-center justify-between gap-4 border-b ${t.border} px-5 py-4`}>
+                                            <div className="flex min-w-0 items-center gap-4">
+                                                <span className={`flex h-16 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-slate-50'}`}>
+                                                    <img src={getImplementAsset(implementSettings)} alt="" aria-hidden="true" className="h-full w-full object-contain p-1.5" />
                                                 </span>
                                                 <div className="min-w-0">
-                                                    <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>Active implement</div>
-                                                    <div className={`truncate text-base font-black ${t.textMain}`}>{cleanProfileLabel(implementSettings.name, activeImplementProfile.label)}</div>
+                                                    <div className={`text-[10px] font-black uppercase tracking-wide ${t.textSub}`}>
+                                                        {implementSettings.profileId === activeImplementSettings.profileId ? 'Active implement' : implementSettings.profileId ? 'Selected implement' : 'New implement draft'}
+                                                    </div>
+                                                    <div className={`truncate text-lg font-black leading-6 ${t.textMain}`}>{cleanProfileLabel(implementSettings.name, activeImplementProfile.label)}</div>
                                                     <div className={`truncate text-[10px] ${t.textSub}`}>{implementTypeLabel} · {implementSettings.connectionType || 'Connection required'}</div>
                                                 </div>
                                             </div>
-                                            <div className="flex flex-wrap items-center justify-end gap-1.5">
-                                                <span className={`rounded-lg border ${t.borderCard} px-2.5 py-1.5 text-[9px] font-black ${t.textMain}`}>{implementWidth.toFixed(1)} m work</span>
-                                                <span className={`rounded-lg border ${t.borderCard} px-2.5 py-1.5 text-[9px] font-black ${t.textMain}`}>{implementSections} sections</span>
-                                                <span className={`rounded-full px-2.5 py-1 text-[8px] font-black uppercase ${informationReady ? 'bg-green-500/10 text-green-500' : 'bg-orange-500/10 text-orange-500'}`}>
+                                            <div className="flex flex-wrap items-center justify-end gap-2">
+                                                <span className={`rounded-lg border ${t.borderCard} px-3 py-2 text-[10px] font-black ${t.textMain}`}>{implementWidth.toFixed(1)} m work</span>
+                                                <span className={`rounded-lg border ${t.borderCard} px-3 py-2 text-[10px] font-black ${t.textMain}`}>{implementSections} sections</span>
+                                                <span className={`rounded-full px-3 py-1.5 text-[9px] font-black uppercase ${informationReady ? 'bg-green-500/10 text-green-500' : 'bg-orange-500/10 text-orange-500'}`}>
                                                     {informationReady ? 'Complete' : 'Required'}
                                                 </span>
                                             </div>
                                         </div>
 
-                                        <div className="p-4">
-                                            <div className="mb-3 flex items-end justify-between gap-3">
+                                        <div className="p-5">
+                                            <div className="mb-4 flex items-end justify-between gap-3">
                                                 <div>
-                                                    <div className={`text-xs font-black ${t.textMain}`}>Choose implement type</div>
-                                                    <div className={`text-[9px] ${t.textDim}`}>Pick by picture first; dimensions and control defaults update automatically.</div>
+                                                    <div className={`text-sm font-black ${t.textMain}`}>Choose implement type</div>
+                                                    <div className={`mt-0.5 text-[10px] ${t.textDim}`}>Pick by picture first; dimensions and control defaults update automatically.</div>
                                                 </div>
-                                                <span className={`text-[9px] font-black uppercase ${t.textSub}`}>7 categories</span>
+                                                <span className={`text-[10px] font-black uppercase ${t.textSub}`}>7 categories</span>
                                             </div>
-                                            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                                            <div className="grid grid-cols-[repeat(auto-fit,minmax(132px,1fr))] gap-3">
                                                 {implementTypeOptions.map((option) => {
                                                     const active = getImplementAssetKey(implementSettings) === option.id;
                                                     return (
@@ -7218,14 +7686,14 @@ const App = () => {
                                                             key={option.id}
                                                             type="button"
                                                             onClick={() => applyImplementType(option)}
-                                                            className={`group relative min-w-0 overflow-hidden rounded-xl border p-2 text-left transition-colors ${active ? 'border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/15' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/55' : 'bg-white'} hover:border-blue-500/50`}`}
+                                                            className={`group relative min-w-0 overflow-hidden rounded-xl border p-3 text-left transition-colors ${active ? 'border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/15' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/55' : 'bg-white'} hover:border-blue-500/50`}`}
                                                         >
-                                                            <div className={`flex h-[74px] items-center justify-center rounded-lg ${theme === 'dark' ? 'bg-slate-950/70' : 'bg-slate-50'}`}>
-                                                                <img src={`src/assets/implements/${option.id}.png`} alt="" aria-hidden="true" className="h-full w-full object-contain p-1" />
+                                                            <div className={`flex h-24 items-center justify-center rounded-lg ${theme === 'dark' ? 'bg-slate-950/70' : 'bg-slate-50'}`}>
+                                                                <img src={`src/assets/implements/${option.id}.png`} alt="" aria-hidden="true" className="h-full w-full object-contain p-1.5" />
                                                             </div>
-                                                            <div className={`mt-2 truncate text-[10px] font-black ${active ? 'text-blue-500' : t.textMain}`}>{option.label}</div>
-                                                            <div className={`mt-0.5 truncate text-[8px] ${t.textDim}`}>{option.detail}</div>
-                                                            {active && <CheckCircle2 className="absolute right-2 top-2 h-4 w-4 text-blue-500" />}
+                                                            <div className={`mt-2.5 truncate text-[11px] font-black ${active ? 'text-blue-500' : t.textMain}`}>{option.label}</div>
+                                                            <div className={`mt-0.5 truncate text-[9px] ${t.textDim}`}>{option.detail}</div>
+                                                            {active && <CheckCircle2 className="absolute right-2.5 top-2.5 h-[18px] w-[18px] text-blue-500" />}
                                                         </button>
                                                     );
                                                 })}
@@ -7234,11 +7702,11 @@ const App = () => {
                                     </div>
 
                                     <div className={`overflow-hidden rounded-2xl border ${t.borderCard}`}>
-                                        <div className={`border-b ${t.border} px-4 py-3`}>
-                                            <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>Implement identity</div>
-                                            <div className={`text-sm font-black ${t.textMain}`}>Name, connection and control</div>
+                                        <div className={`border-b ${t.border} px-5 py-4`}>
+                                            <div className={`text-[10px] font-black uppercase tracking-wide ${t.textSub}`}>Implement identity</div>
+                                            <div className={`text-base font-black ${t.textMain}`}>Name, connection and control</div>
                                         </div>
-                                        <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2">
+                                        <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2">
                                             <SettingInput theme={t} label="Implement Name" value={implementSettings.name || ''} onChange={(event) => handleImplementChange('name', event.target.value)} />
                                             <SettingSelect label="Implement Type" value={implementTypeLabel} onChange={(value) => {
                                                 const option = implementTypeOptions.find(item => item.label === value);
@@ -7743,8 +8211,8 @@ const App = () => {
               {
                 id: 'vehicle',
                 title: 'Vehicle',
-                value: vehicleSettings.type,
-                detail: `${vehicleSettings.wheelbase} m wheelbase / ${vehicleSettings.steeringType || 'Front axle'}`,
+                value: activeVehicleSettings.type,
+                detail: `${activeVehicleSettings.wheelbase} m wheelbase / ${activeVehicleSettings.steeringType || 'Front axle'}`,
                 icon: Tractor,
                 status: 'SET',
                 tone: 'text-blue-500 border-blue-500/40 bg-blue-500/10'
@@ -7752,10 +8220,10 @@ const App = () => {
               {
                 id: 'implement',
                 title: 'Implement',
-                value: implementSettings.name,
-                detail: `${Number(implementSettings.width || 0).toFixed(1)} m / ${implementSettings.sections || 1} sections`,
+                value: activeImplementSettings.name,
+                detail: `${Number(activeImplementSettings.width || 0).toFixed(1)} m / ${activeImplementSettings.sections || 1} sections`,
                 icon: Ruler,
-                status: implementSettings.profileId ? 'PROFILE' : 'CUSTOM',
+                status: activeImplementSettings.profileId ? 'PROFILE' : 'CUSTOM',
                 tone: 'text-blue-500 border-blue-500/40 bg-blue-500/10'
               },
               {
@@ -7830,7 +8298,7 @@ const App = () => {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         <ConfigTile icon={Tractor} label="Vehicle Profile" value={activeVehicleProfile.label} />
                         <ConfigTile icon={Ruler} label="Implement Profile" value={activeImplementProfile.label} />
-                        <ConfigTile icon={Activity} label="Coverage Width" value={`${Number(implementSettings.width || 0).toFixed(1)} m`} />
+                        <ConfigTile icon={Activity} label="Coverage Width" value={`${Number(activeImplementSettings.width || 0).toFixed(1)} m`} />
                     </div>
                 </SettingsSection>
 
@@ -8279,7 +8747,11 @@ const App = () => {
                               </div>
                           ))}
                       </div>
-                      <button onClick={() => setSettingsOpen(false)} className={`p-3 ${t.activeItem} hover:brightness-95 rounded-xl border ${t.borderCard}`}>
+                      <button
+                          onClick={closeSettingsPanel}
+                          aria-label={settingsTab === 'wifi' ? 'Close network settings' : 'Close settings and discard unsaved changes'}
+                          className={`p-3 ${t.activeItem} hover:brightness-95 rounded-xl border ${t.borderCard}`}
+                      >
                           <X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} />
                       </button>
                   </div>
@@ -8316,9 +8788,28 @@ const App = () => {
                           <div className={`${['vehicle', 'implement'].includes(settingsTab) ? 'w-full' : 'max-w-5xl'} pb-24`}>{renderSettingsContent()}</div>
                       </div>
                       <div className={`p-4 lg:p-5 border-t ${t.borderCard} flex items-center gap-3 ${['vehicle', 'implement'].includes(settingsTab) ? 'justify-between' : 'justify-end'} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
-                          <button className={`px-5 lg:px-7 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-sm lg:text-base`} onClick={() => setSettingsOpen(false)}>Cancel</button>
-                          {settingsTab === 'vehicle' ? (
+                          {settingsTab !== 'wifi' && (
+                              <button className={`px-5 lg:px-7 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-sm lg:text-base`} onClick={closeSettingsPanel}>Cancel</button>
+                          )}
+                          {settingsTab === 'wifi' ? (
+                              <button
+                                  className="rounded-lg bg-blue-600 px-7 py-3 text-base font-bold text-white shadow-lg shadow-blue-900/20 hover:bg-blue-500"
+                                  onClick={closeSettingsPanel}
+                              >
+                                  Done
+                              </button>
+                          ) : settingsTab === 'vehicle' ? (
                               <div className="flex items-center gap-3">
+                                  {selectedVehicleProfile && activeVehicleSettings.profileId !== selectedVehicleProfile.id && (
+                                      <button
+                                          type="button"
+                                          onClick={() => activateVehicleProfile(selectedVehicleProfile)}
+                                          className="flex items-center gap-2 rounded-lg border border-green-500/40 bg-green-500/10 px-4 py-2.5 text-sm font-black text-green-600 hover:bg-green-500/15"
+                                      >
+                                          <CheckCircle2 className="h-4 w-4" />
+                                          Activate
+                                      </button>
+                                  )}
                                   <button
                                       onClick={() => goToVehicleStep(vehicleSetupStepIds.indexOf(vehicleSetupStep) - 1)}
                                       disabled={vehicleSetupStep === 'information'}
@@ -8333,21 +8824,42 @@ const App = () => {
                                   <button
                                       onClick={() => {
                                           const index = vehicleSetupStepIds.indexOf(vehicleSetupStep);
+                                          if (vehicleSetupStep === 'information' && !vehicleInformationReady) {
+                                              return showNotification('Vehicle name and type are required', 'warning');
+                                          }
+                                          if (vehicleSetupStep !== 'information' && !vehicleGeometryReady) {
+                                              return showNotification('Complete all required vehicle dimensions first', 'warning');
+                                          }
                                           if (index < vehicleSetupStepIds.length - 1) {
                                               goToVehicleStep(index + 1);
                                           } else {
-                                              const profile = savedVehicleProfiles.find(item => item.id === vehicleSettings.profileId);
-                                              saveVehicleProfile(profile?.custom ? 'update' : 'new');
+                                              saveVehicleProfile();
                                           }
                                       }}
                                       className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-black text-white shadow-lg shadow-blue-900/20 hover:bg-blue-500"
                                   >
-                                      {vehicleSetupStep === 'summary' ? 'Save Vehicle' : 'Continue'}
+                                      {vehicleSetupStep === 'summary'
+                                          ? !selectedVehicleProfile
+                                              ? 'Create Vehicle'
+                                              : selectedVehicleProfile.custom
+                                                  ? 'Save Changes'
+                                                  : 'Save Copy'
+                                          : 'Continue'}
                                       {vehicleSetupStep === 'summary' ? <Check className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                                   </button>
                               </div>
                           ) : settingsTab === 'implement' ? (
                               <div className="flex items-center gap-3">
+                                  {selectedImplementProfile && activeImplementSettings.profileId !== selectedImplementProfile.id && (
+                                      <button
+                                          type="button"
+                                          onClick={() => activateImplementProfile(selectedImplementProfile)}
+                                          className="flex items-center gap-2 rounded-lg border border-green-500/40 bg-green-500/10 px-4 py-2.5 text-sm font-black text-green-600 hover:bg-green-500/15"
+                                      >
+                                          <CheckCircle2 className="h-4 w-4" />
+                                          Activate
+                                      </button>
+                                  )}
                                   <button
                                       onClick={() => goToImplementStep(implementSetupStepIds.indexOf(implementSetupStep) - 1)}
                                       disabled={implementSetupStep === 'information'}
@@ -8362,16 +8874,27 @@ const App = () => {
                                   <button
                                       onClick={() => {
                                           const index = implementSetupStepIds.indexOf(implementSetupStep);
+                                          if (implementSetupStep === 'information' && !implementInformationReady) {
+                                              return showNotification('Implement name, type and connection are required', 'warning');
+                                          }
+                                          if (implementSetupStep !== 'information' && !implementGeometryReady) {
+                                              return showNotification('Complete all required implement dimensions first', 'warning');
+                                          }
                                           if (index < implementSetupStepIds.length - 1) {
                                               goToImplementStep(index + 1);
                                           } else {
-                                              const profile = savedImplementProfiles.find(item => item.id === implementSettings.profileId);
-                                              saveImplementProfile(profile?.custom ? 'update' : 'new');
+                                              saveImplementProfile();
                                           }
                                       }}
                                       className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-black text-white shadow-lg shadow-blue-900/20 hover:bg-blue-500"
                                   >
-                                      {implementSetupStep === 'summary' ? 'Save Implement' : 'Continue'}
+                                      {implementSetupStep === 'summary'
+                                          ? !selectedImplementProfile
+                                              ? 'Create Implement'
+                                              : selectedImplementProfile.custom
+                                                  ? 'Save Changes'
+                                                  : 'Save Copy'
+                                          : 'Continue'}
                                       {implementSetupStep === 'summary' ? <Check className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                                   </button>
                               </div>
@@ -10414,7 +10937,7 @@ const renderLinesPanel = () => {
                     </div>
                     <div className={`absolute bottom-0 left-1/2 h-px w-1/2 -translate-x-1/2 ${t.divider}`} />
                 </div>
-                <nav className="flex-1 min-h-0 w-full flex flex-col items-center gap-1.5 pt-2">
+                <nav className="flex-1 min-h-0 w-full flex flex-col items-center gap-1.5 overflow-y-auto overflow-x-hidden pt-2 [scrollbar-width:none]">
                     <RailButton theme={t} icon={MapIcon} label="Run" active={!settingsOpen && !fieldManagerOpen && !linesPanelOpen} onClick={openRunScreen} />
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
                     <RailButton theme={t} icon={LayoutGrid} label="Field" active={fieldManagerOpen && fieldAssetTab === 'lines'} onClick={() => openFieldAssetPanel('lines')} />
@@ -10445,17 +10968,41 @@ const renderLinesPanel = () => {
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
                     <RailButton theme={t} icon={Settings} label="System" active={settingsOpen} onClick={openSystemPanel} />
                 </nav>
-                <button
-                    type="button"
-                    onClick={openWifiPanel}
-                    className={`mb-1 flex flex-col items-center gap-1 rounded-xl px-2 py-1.5 active:scale-95 hover:brightness-95 ${settingsOpen && settingsTab === 'wifi' ? 'bg-blue-600/12' : ''}`}
-                    title="WiFi / Network"
-                    aria-label="Open WiFi and network settings"
-                >
-                    <Signal className={`w-4 h-4 lg:w-5 lg:h-5 ${wifiSettings?.status === 'Connected' ? 'text-green-500' : 'text-slate-400'}`} />
-                    <span className={`text-[9px] lg:text-[10px] ${t.textDim} font-mono`}>NET</span>
-                    <span className={`text-[10px] lg:text-xs ${t.textMain} font-bold mt-1`}>{currentTime}</span>
-                </button>
+                <div className={`mb-2 flex w-full shrink-0 flex-col items-center border-t ${t.border} pt-2`}>
+                    <button
+                        type="button"
+                        onClick={openWifiPanel}
+                        className={`group flex h-[62px] w-[74px] flex-col items-center justify-center rounded-xl border px-2 text-center transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                            settingsOpen && settingsTab === 'wifi'
+                                ? 'border-blue-500 bg-blue-600 text-white shadow-md shadow-blue-900/20'
+                                : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'} hover:border-blue-500 hover:bg-blue-500/5 hover:shadow-sm`
+                        }`}
+                        title="WiFi / Network"
+                        aria-label="Open WiFi and network settings"
+                    >
+                        <span className={`relative flex h-7 w-7 items-center justify-center ${
+                            settingsOpen && settingsTab === 'wifi' ? 'text-white' : 'text-blue-600'
+                        }`}>
+                            <WifiGlyph className="h-5 w-5" />
+                            <span className={`absolute right-0 top-0 h-2.5 w-2.5 rounded-full border-2 ${
+                                settingsOpen && settingsTab === 'wifi'
+                                    ? 'border-blue-600'
+                                    : theme === 'dark' ? 'border-slate-900' : 'border-white'
+                            } ${wifiSettings?.status === 'Connected' ? 'bg-emerald-400' : 'bg-slate-400'}`} />
+                        </span>
+                        <span className={`mt-0.5 text-[10px] font-black leading-none ${
+                            settingsOpen && settingsTab === 'wifi' ? 'text-white' : t.textMain
+                        }`}>Wi-Fi</span>
+                        <span className={`mt-1 text-[8px] font-bold uppercase tracking-wide ${
+                            settingsOpen && settingsTab === 'wifi'
+                                ? 'text-blue-100'
+                                : wifiSettings?.status === 'Connected' ? 'text-emerald-500' : t.textDim
+                        }`}>
+                            {wifiSettings?.status === 'Connected' ? 'Online' : 'Offline'}
+                        </span>
+                    </button>
+                    <span className={`mt-1 text-[9px] font-bold ${t.textDim}`} aria-label={`Current time ${currentTime}`}>{currentTime}</span>
+                </div>
             </aside>
 
             {/* MAIN AREA */}
