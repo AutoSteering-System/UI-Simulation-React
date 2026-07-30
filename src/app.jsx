@@ -46,6 +46,21 @@ const WifiGlyph = ({ className = '' }) => (
     </svg>
 );
 
+const CloseGlyph = ({ className = '' }) => (
+    <svg
+        aria-hidden="true"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        className={className}
+    >
+        <path d="M4 4l8 8" />
+        <path d="M12 4l-8 8" />
+    </svg>
+);
+
 const App = () => {
   const { state, actions } = window.MockBackend.useStore();
   const {
@@ -201,6 +216,16 @@ const App = () => {
   const [wifiJoinPassword, setWifiJoinPassword] = useState('');
   const [wifiForgetConfirmSsid, setWifiForgetConfirmSsid] = useState(null);
   const [wifiHiddenNetwork, setWifiHiddenNetwork] = useState({ ssid: '', security: 'WPA2/WPA3', password: '' });
+  const [wifiConnectionAttempt, setWifiConnectionAttempt] = useState({
+      status: 'idle',
+      ssid: '',
+      phase: '',
+      step: 0,
+      message: '',
+      network: null
+  });
+  const wifiConnectionTimersRef = useRef([]);
+  const wifiConnectionAttemptIdRef = useRef(0);
   const [rtkQualityOpen, setRtkQualityOpen] = useState(false);
   const [eventHistoryOpen, setEventHistoryOpen] = useState(false);
   const [productivityOpen, setProductivityOpen] = useState(false);
@@ -217,6 +242,11 @@ const App = () => {
           setImplementSettingsDraft({ ...activeImplementSettings });
       }
   }, [activeImplementSettings, settingsOpen, settingsTab]);
+
+  useEffect(() => () => {
+      wifiConnectionTimersRef.current.forEach(timer => window.clearTimeout(timer));
+      wifiConnectionTimersRef.current = [];
+  }, []);
 
   const [satelliteCount, setSatelliteCount] = useState(() => Number(savedUiLocalState.satelliteCount || gnssTelemetry?.roverUsedSats || 12));
   const [notification, setNotification] = useState(null);
@@ -2269,12 +2299,8 @@ const App = () => {
               >
                   <span aria-hidden="true" className={`absolute left-0 top-1/2 h-11 -translate-y-1/2 border-l ${t.borderCard}`} />
                   <span aria-hidden="true" className={`absolute right-0 top-1/2 h-11 -translate-y-1/2 border-r ${t.borderCard}`} />
-                  <div className="flex items-center justify-center gap-1.5">
+                  <div className="flex items-center justify-center">
                       <span className={`text-[8px] uppercase font-black leading-none tracking-[0.12em] ${t.textSub}`}>Line error</span>
-                      <span className={`inline-flex items-center gap-1 text-[7px] uppercase font-black leading-none tracking-[0.08em] ${errorFeedLive ? 'text-green-500' : t.textDim}`}>
-                          <span className={`h-1.5 w-1.5 rounded-full ${errorFeedLive ? 'bg-green-500' : 'bg-slate-400'}`} />
-                          {errorFeedLive ? 'Live' : 'Hold'}
-                      </span>
                   </div>
                   <div className="relative mt-1 h-[27px] w-full">
                       <span data-error-value className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[27px] font-black leading-none tabular-nums ${errorTextTone}`}>
@@ -6781,12 +6807,42 @@ const App = () => {
             const connected = wifiConfig.enabled && wifiConfig.status === 'Connected' && Boolean(wifiConfig.ssid);
             const wifiSignalPercent = Math.max(0, Math.min(100, Math.round(((Number(wifiConfig.signalDbm) + 90) / 55) * 100)));
             const savedNetworkSsids = new Set((wifiConfig.savedNetworks || []).map(network => network.ssid));
-            const scanNetworks = [
-                ...(wifiConfig.savedNetworks || []),
+            const nearbyNetworkCatalog = [
+                { ssid: 'Farm_RTK_Network', security: 'WPA2/WPA3', signalDbm: -58, status: 'Available' },
+                { ssid: 'Tractor_Hotspot', security: 'WPA2', signalDbm: -67, status: 'Available' },
+                { ssid: 'Workshop_AP', security: 'WPA2', signalDbm: -72, status: 'Available' },
                 { ssid: 'Field_Base_AP', security: 'WPA2', signalDbm: -61, status: 'Available' },
-                { ssid: 'NTRIP_Mobile', security: 'WPA2', signalDbm: -70, status: 'Available' }
-            ]
-                .filter((network, index, list) => list.findIndex(item => item.ssid === network.ssid) === index)
+                { ssid: 'NTRIP_Mobile', security: 'WPA2', signalDbm: -70, status: 'Available' },
+                { ssid: 'Farm_Office', security: 'WPA3', signalDbm: -64, status: 'Available' },
+                { ssid: 'AGCO_Service', security: 'WPA2', signalDbm: -73, status: 'Available' },
+                { ssid: 'JohnDeere_Link', security: 'WPA2', signalDbm: -69, status: 'Available' },
+                { ssid: 'Greenhouse_AP', security: 'WPA2', signalDbm: -76, status: 'Available' },
+                { ssid: 'North_Field_RTK', security: 'WPA2/WPA3', signalDbm: -66, status: 'Available' },
+                { ssid: 'South_Field_RTK', security: 'WPA2/WPA3', signalDbm: -68, status: 'Available' },
+                { ssid: 'Barn_Camera', security: 'WPA2', signalDbm: -77, status: 'Available' },
+                { ssid: 'Sprayer_Unit_04', security: 'WPA2', signalDbm: -74, status: 'Available' },
+                { ssid: 'Seeder_Controller', security: 'WPA2', signalDbm: -79, status: 'Available' },
+                { ssid: 'Irrigation_Gateway', security: 'WPA2', signalDbm: -81, status: 'Available' },
+                { ssid: 'Harvester_Cab', security: 'WPA2', signalDbm: -71, status: 'Available' },
+                { ssid: 'Field_Guest', security: 'Open', signalDbm: -75, status: 'Available' },
+                {
+                    ssid: 'Workshop_Extender',
+                    security: 'WPA2',
+                    signalDbm: -84,
+                    status: 'Available',
+                    connectFailure: 'The access point stopped responding. Move closer or check the router, then try again.'
+                },
+                { ssid: 'Mobile_Hotspot', security: 'WPA3', signalDbm: -65, status: 'Available' },
+                { ssid: 'BaseStation_Backup', security: 'WPA2', signalDbm: -78, status: 'Available' }
+            ];
+            const scanNetworkMap = new Map(nearbyNetworkCatalog.map(network => [network.ssid, network]));
+            (wifiConfig.savedNetworks || []).forEach(network => {
+                scanNetworkMap.set(network.ssid, {
+                    ...(scanNetworkMap.get(network.ssid) || {}),
+                    ...network
+                });
+            });
+            const scanNetworks = Array.from(scanNetworkMap.values())
                 .sort((left, right) => {
                     const leftConnected = left.ssid === wifiConfig.ssid && connected;
                     const rightConnected = right.ssid === wifiConfig.ssid && connected;
@@ -6796,6 +6852,7 @@ const App = () => {
                     if (leftSaved !== rightSaved) return leftSaved ? -1 : 1;
                     return Number(right.signalDbm || -90) - Number(left.signalDbm || -90);
                 });
+            const connectingToWifi = wifiConnectionAttempt.status === 'connecting';
             const toggleWifiFlag = (key) => handleWifiSettingChange(key, !wifiConfig[key]);
             const signalLabel = (strength) => strength >= 70 ? 'Excellent' : strength >= 48 ? 'Good' : strength >= 28 ? 'Fair' : 'Weak';
             const WifiSignalBars = ({ strength, active = false }) => (
@@ -6809,7 +6866,24 @@ const App = () => {
                     ))}
                 </span>
             );
-            const connectWifiNetwork = (network, password = '') => {
+            const clearWifiConnectionTimers = () => {
+                wifiConnectionTimersRef.current.forEach(timer => window.clearTimeout(timer));
+                wifiConnectionTimersRef.current = [];
+            };
+            const resetWifiConnectionAttempt = () => {
+                clearWifiConnectionTimers();
+                wifiConnectionAttemptIdRef.current += 1;
+                setWifiConnectionAttempt({
+                    status: 'idle',
+                    ssid: '',
+                    phase: '',
+                    step: 0,
+                    message: '',
+                    network: null
+                });
+            };
+            const finalizeWifiConnection = (network) => {
+                const { connectFailure, ...savedNetwork } = network;
                 const existingSavedNetworks = wifiConfig.savedNetworks || [];
                 const nextSavedNetworks = existingSavedNetworks
                     .filter(item => item.ssid !== network.ssid)
@@ -6822,29 +6896,93 @@ const App = () => {
                 handleWifiSettingChange('security', network.security);
                 handleWifiSettingChange('signalDbm', network.signalDbm);
                 handleWifiSettingChange('status', 'Connected');
-                handleWifiSettingChange('password', password);
+                handleWifiSettingChange('password', '');
                 handleWifiSettingChange('savedNetworks', [
                     {
-                        ...network,
-                        password,
+                        ...savedNetwork,
                         status: 'Connected'
                     },
                     ...nextSavedNetworks
                 ]);
+                resetWifiConnectionAttempt();
                 setWifiJoinTarget(null);
                 setWifiJoinPassword('');
                 setWifiForgetConfirmSsid(null);
                 showNotification(`WiFi connected: ${network.ssid}`, 'success');
             };
+            const connectWifiNetwork = (network, password = '') => {
+                if (connectingToWifi) return;
+                const requiresPassword = network.security !== 'Open' && !savedNetworkSsids.has(network.ssid);
+                if (requiresPassword && password.length < 8) {
+                    showNotification('WiFi password must contain at least 8 characters', 'warning');
+                    return;
+                }
+                const connectionFailureMessage = network.connectFailure
+                    || (requiresPassword && /wrong|incorrect/i.test(password)
+                        ? 'The password is incorrect. Check it and try again.'
+                        : '');
+
+                clearWifiConnectionTimers();
+                const attemptId = wifiConnectionAttemptIdRef.current + 1;
+                wifiConnectionAttemptIdRef.current = attemptId;
+                setWifiJoinTarget(null);
+                setWifiJoinPassword('');
+                setWifiForgetConfirmSsid(null);
+                setWifiConnectionAttempt({
+                    status: 'connecting',
+                    ssid: network.ssid,
+                    phase: 'Checking network availability',
+                    step: 1,
+                    message: '',
+                    network
+                });
+
+                const setConnectionPhase = (step, phase) => {
+                    if (wifiConnectionAttemptIdRef.current !== attemptId) return;
+                    setWifiConnectionAttempt(previous => (
+                        previous.status === 'connecting' && previous.ssid === network.ssid
+                            ? { ...previous, step, phase }
+                            : previous
+                    ));
+                };
+
+                wifiConnectionTimersRef.current = [
+                    window.setTimeout(() => setConnectionPhase(2, 'Authenticating credentials'), 450),
+                    window.setTimeout(() => setConnectionPhase(3, 'Requesting an IP address'), 1050),
+                    window.setTimeout(() => {
+                        if (wifiConnectionAttemptIdRef.current !== attemptId) return;
+                        if (connectionFailureMessage) {
+                            setWifiConnectionAttempt({
+                                status: 'failed',
+                                ssid: network.ssid,
+                                phase: '',
+                                step: 0,
+                                message: connectionFailureMessage,
+                                network
+                            });
+                            wifiConnectionTimersRef.current = [];
+                            showNotification(`Could not connect to ${network.ssid}`, 'error');
+                            return;
+                        }
+                        finalizeWifiConnection(network);
+                    }, 1750)
+                ];
+            };
             const requestWifiConnection = (network) => {
+                if (connectingToWifi) return;
                 const alreadySaved = savedNetworkSsids.has(network.ssid);
                 if (alreadySaved || network.security === 'Open') {
-                    connectWifiNetwork(network, network.password || '');
+                    connectWifiNetwork(network);
                     return;
                 }
                 setWifiJoinTarget(network);
                 setWifiJoinPassword('');
                 setWifiForgetConfirmSsid(null);
+            };
+            const cancelWifiConnection = () => {
+                const cancelledSsid = wifiConnectionAttempt.ssid;
+                resetWifiConnectionAttempt();
+                showNotification(`Connection cancelled${cancelledSsid ? `: ${cancelledSsid}` : ''}`, 'info');
             };
             const forgetWifiNetwork = (network) => {
                 const nextSavedNetworks = (wifiConfig.savedNetworks || []).filter(item => item.ssid !== network.ssid);
@@ -6865,6 +7003,7 @@ const App = () => {
                 forgetWifiNetwork(network);
             };
             const disconnectWifi = () => {
+                resetWifiConnectionAttempt();
                 handleWifiSettingChange('status', 'Disconnected');
                 handleWifiSettingChange('signalDbm', -90);
                 showNotification('WiFi disconnected', 'info');
@@ -6873,6 +7012,7 @@ const App = () => {
                 const nextEnabled = !wifiConfig.enabled;
                 handleWifiSettingChange('enabled', nextEnabled);
                 if (!nextEnabled) {
+                    resetWifiConnectionAttempt();
                     handleWifiSettingChange('status', 'Disconnected');
                     handleWifiSettingChange('signalDbm', -90);
                     setWifiJoinTarget(null);
@@ -6880,188 +7020,382 @@ const App = () => {
                 }
                 showNotification(nextEnabled ? 'WiFi enabled' : 'WiFi disabled', nextEnabled ? 'success' : 'info');
             };
+            const scanWifiNetworks = () => {
+                if (!wifiConfig.enabled || wifiScanning || connectingToWifi) return;
+                setWifiScanning(true);
+                window.setTimeout(() => {
+                    handleWifiSettingChange('lastScanAt', new Date().toISOString());
+                    setWifiScanning(false);
+                    showNotification('Nearby WiFi networks updated', 'success');
+                }, 700);
+            };
             const renderWifiSettingRow = ({ label, detail, flagKey, icon: Icon = CheckCircle2 }) => (
                 <button
                     type="button"
                     onClick={() => toggleWifiFlag(flagKey)}
                     role="switch"
                     aria-checked={Boolean(wifiConfig[flagKey])}
-                    className={`flex w-full items-center justify-between gap-4 border-b ${t.border} px-4 py-3.5 text-left last:border-b-0 hover:bg-blue-500/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500`}
+                    title={detail}
+                    className="flex min-h-[44px] w-full items-center justify-between gap-2 px-3 py-1.5 text-left transition-colors hover:bg-blue-500/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
                 >
-                    <div className="flex items-center gap-3 min-w-0">
-                        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${wifiConfig[flagKey] ? 'bg-blue-500/12 text-blue-500' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textDim}`}`}>
-                            <Icon className="h-[18px] w-[18px]" />
+                    <div className="flex min-w-0 items-center gap-2">
+                        <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${wifiConfig[flagKey] ? 'bg-blue-500/10 text-blue-500' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textDim}`}`}>
+                            <Icon className="h-3.5 w-3.5" />
                         </div>
                         <div className="min-w-0">
-                            <div className={`text-sm font-bold ${t.textMain}`}>{label}</div>
-                            <div className={`mt-0.5 text-[11px] leading-4 ${t.textSub}`}>{detail}</div>
+                            <div className={`truncate text-xs font-bold leading-tight ${t.textMain}`}>{label}</div>
+                            <div className={`hidden truncate text-[10px] font-medium leading-tight ${t.textSub} xl:block`}>{detail}</div>
                         </div>
                     </div>
-                    <span className={`h-6 w-11 shrink-0 rounded-full p-0.5 transition-colors ${wifiConfig[flagKey] ? 'bg-blue-600' : 'bg-slate-400'}`}>
-                        <span className={`block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${wifiConfig[flagKey] ? 'translate-x-5' : ''}`} />
+                    <span className={`h-4 w-7 shrink-0 rounded-full p-0.5 transition-colors ${wifiConfig[flagKey] ? 'bg-blue-600' : 'bg-slate-400'}`}>
+                        <span className={`block h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${wifiConfig[flagKey] ? 'translate-x-3' : ''}`} />
                     </span>
                 </button>
             );
 
             return (
-              <div className="mx-auto max-w-5xl space-y-4">
-                <section className={`overflow-hidden rounded-2xl border ${t.borderCard} ${t.bgPanel}`}>
-                    <div className={`flex flex-wrap items-center justify-between gap-4 border-b ${t.border} px-5 py-4`}>
-                        <div className="flex min-w-0 items-center gap-3">
-                            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-md shadow-blue-900/15">
-                                <WifiGlyph className="h-5 w-5" />
-                            </span>
-                            <span className="min-w-0">
-                                <span className={`block text-lg font-black ${t.textMain}`}>Wi-Fi</span>
-                                <span className={`block text-xs ${t.textSub}`}>Internet, RTK correction and data sync</span>
-                            </span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setWifiScanning(true);
-                                    window.setTimeout(() => {
-                                        handleWifiSettingChange('lastScanAt', new Date().toISOString());
-                                        setWifiScanning(false);
-                                        showNotification('WiFi scan completed', 'success');
-                                    }, 700);
-                                }}
-                                disabled={!wifiConfig.enabled || wifiScanning}
-                                className={`flex h-10 min-w-[82px] items-center justify-center gap-2 rounded-xl border ${t.borderCard} px-3.5 text-xs font-bold ${t.textMain} hover:border-blue-500 hover:text-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-40`}
-                            >
-                                <RotateCw className={`h-4 w-4 ${wifiScanning ? 'animate-spin' : ''}`} />
-                                {wifiScanning ? 'Scanning' : 'Scan'}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={toggleWifiEnabled}
-                                role="switch"
-                                aria-checked={Boolean(wifiConfig.enabled)}
-                                aria-label="Wi-Fi"
-                                className={`flex h-10 items-center gap-2.5 rounded-xl px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${wifiConfig.enabled ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-200'} ${t.textSub}`}`}
-                            >
-                                <span className="text-xs font-black">{wifiConfig.enabled ? 'ON' : 'OFF'}</span>
-                                <span className={`h-6 w-11 rounded-full p-0.5 ${wifiConfig.enabled ? 'bg-white/25' : 'bg-slate-400'}`}>
-                                    <span className={`block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${wifiConfig.enabled ? 'translate-x-5' : ''}`} />
+              <div data-wifi-page className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col gap-2">
+                <section data-wifi-summary className={`shrink-0 overflow-hidden rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
+                    <div>
+                        <div
+                            data-wifi-current-status
+                            className={`overflow-hidden ${
+                                connectingToWifi
+                                    ? 'bg-blue-500/5'
+                                    : connected
+                                        ? `${theme === 'dark' ? 'bg-slate-900/30' : 'bg-emerald-500/[0.035]'}`
+                                        : `${theme === 'dark' ? 'bg-slate-900/25' : 'bg-slate-50'}`
+                            }`}
+                        >
+                            <div className={`flex min-h-[60px] flex-nowrap items-center gap-3 border-l-[3px] px-3 py-2 ${
+                                connectingToWifi ? 'border-l-blue-500' : connected ? 'border-l-emerald-500' : 'border-l-slate-400'
+                            }`}>
+                                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                                    connectingToWifi
+                                        ? 'bg-blue-600 text-white'
+                                        : connected
+                                            ? 'bg-blue-500/10 text-blue-500'
+                                            : 'bg-blue-500/10 text-blue-500'
+                                }`}>
+                                    {connectingToWifi
+                                        ? <span className="h-5 w-5 rounded-full border-2 border-current border-r-transparent animate-spin" aria-hidden="true" />
+                                        : connected
+                                            ? <WifiSignalBars strength={wifiSignalPercent} />
+                                            : <WifiGlyph className="h-5 w-5" />}
                                 </span>
-                            </button>
-                        </div>
-                    </div>
 
-                    <div className="grid grid-cols-1 gap-4 p-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(310px,0.85fr)]">
-                        <div className={`relative overflow-hidden rounded-2xl p-5 ${connected ? 'bg-gradient-to-br from-blue-600 to-blue-700 text-white shadow-lg shadow-blue-900/15' : theme === 'dark' ? 'bg-slate-900' : 'bg-slate-100'}`}>
-                            <div className="flex items-start justify-between gap-4">
-                                <div className="min-w-0">
-                                    <div className={`flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.12em] ${connected ? 'text-blue-100' : t.textSub}`}>
-                                        <span className={`h-2 w-2 rounded-full ${connected ? 'bg-emerald-300' : wifiConfig.enabled ? 'bg-amber-400' : 'bg-slate-400'}`} />
-                                        {connected ? 'Connected' : wifiConfig.enabled ? 'Not connected' : 'Wi-Fi off'}
+                                <div className="min-w-0 flex-1">
+                                    <div className={`flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.1em] ${
+                                        connectingToWifi ? 'text-blue-500' : connected ? 'text-emerald-500' : t.textSub
+                                    }`}>
+                                        <span className={`h-1.5 w-1.5 rounded-full ${
+                                            connectingToWifi ? 'animate-pulse bg-blue-500' : connected ? 'bg-emerald-500' : wifiConfig.enabled ? 'bg-amber-400' : 'bg-slate-400'
+                                        }`} />
+                                        Wi-Fi · {connectingToWifi ? 'Connecting' : connected ? 'Connected' : wifiConfig.enabled ? 'Not connected' : 'Off'}
                                     </div>
-                                    <div className={`mt-2 truncate text-xl font-black ${connected ? 'text-white' : t.textMain}`}>{connected ? wifiConfig.ssid : 'Choose a network below'}</div>
-                                    <div className={`mt-1 text-xs ${connected ? 'text-blue-100' : t.textSub}`}>
-                                        {connected ? `${wifiConfig.security} · ${wifiConfig.band} · Channel ${wifiConfig.channel}` : 'Scan nearby access points to connect.'}
+                                    <div className={`mt-0.5 truncate text-sm font-bold leading-tight ${t.textMain}`}>
+                                        {connectingToWifi ? wifiConnectionAttempt.ssid : connected ? wifiConfig.ssid : 'Choose a network'}
+                                    </div>
+                                    <div className={`mt-0.5 truncate text-[10px] font-medium leading-tight ${t.textSub}`} aria-live="polite">
+                                        {connectingToWifi
+                                            ? wifiConnectionAttempt.phase
+                                            : connected
+                                                ? `${wifiConfig.security} · ${wifiConfig.band} · Ch ${wifiConfig.channel}`
+                                                : 'Use the list below to connect'}
                                     </div>
                                 </div>
-                                <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${connected ? 'bg-white/14' : 'bg-blue-500/10'}`}>
-                                    <WifiSignalBars strength={connected ? wifiSignalPercent : 0} active={connected} />
-                                </span>
-                            </div>
 
-                            {connected && (
-                                <>
-                                    <div className="mt-5 flex items-center gap-3">
-                                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/20">
-                                            <div className="h-full rounded-full bg-emerald-300" style={{ width: `${wifiSignalPercent}%` }} />
-                                        </div>
-                                        <span className="text-xs font-black text-white">{signalLabel(wifiSignalPercent)}</span>
-                                    </div>
-                                    <div className="mt-4 grid grid-cols-3 gap-2">
+                                {!connectingToWifi && connected && (
+                                    <div className={`hidden min-w-[188px] grid-cols-2 divide-x ${theme === 'dark' ? 'divide-slate-700' : 'divide-slate-200'} lg:grid`}>
                                         {[
-                                            ['Signal', `${wifiConfig.signalDbm} dBm`],
-                                            ['IP address', wifiConfig.ipAddress],
-                                            ['Mode', wifiConfig.dhcp ? 'Automatic' : 'Manual']
+                                            ['Signal', `${signalLabel(wifiSignalPercent)} · ${wifiConfig.signalDbm} dBm`],
+                                            ['IP address', wifiConfig.ipAddress]
                                         ].map(([label, value]) => (
-                                            <div key={label} className="min-w-0 rounded-xl bg-white/10 px-3 py-2.5">
-                                                <div className="text-[9px] font-bold uppercase text-blue-100">{label}</div>
-                                                <div className="mt-0.5 truncate text-xs font-black text-white">{value}</div>
+                                            <div key={label} className="min-w-0 px-2.5">
+                                                <div className={`text-[9px] font-bold uppercase tracking-wide ${t.textDim}`}>{label}</div>
+                                                <div className={`mt-0.5 truncate text-[11px] font-semibold ${t.textMain}`}>{value}</div>
                                             </div>
                                         ))}
                                     </div>
-                                    <div className="mt-4 flex gap-2">
-                                        <button type="button" onClick={() => setWifiAdvancedOpen(true)} className="h-9 rounded-lg bg-white px-4 text-xs font-black text-blue-700 hover:bg-blue-50">Details</button>
-                                        <button type="button" onClick={disconnectWifi} className="h-9 rounded-lg border border-white/30 px-4 text-xs font-black text-white hover:bg-white/10">Disconnect</button>
+                                )}
+
+                                <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                                    {connectingToWifi ? (
+                                        <button
+                                            type="button"
+                                            onClick={cancelWifiConnection}
+                                            className={`h-9 rounded-lg border ${t.borderCard} px-3 text-xs font-bold leading-none ${t.textMain} hover:border-red-500 hover:text-red-500`}
+                                        >
+                                            Cancel
+                                        </button>
+                                    ) : connected ? (
+                                        <>
+                                            <button
+                                                type="button"
+                                                onClick={() => setWifiAdvancedOpen(true)}
+                                                className="h-9 rounded-lg bg-blue-600 px-3 text-xs font-bold leading-none text-white hover:bg-blue-500"
+                                            >
+                                                Details
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={disconnectWifi}
+                                                className={`hidden h-9 rounded-lg border ${t.borderCard} px-3 text-xs font-bold leading-none ${t.textSub} hover:border-red-500 hover:text-red-500 md:block`}
+                                            >
+                                                Disconnect
+                                            </button>
+                                        </>
+                                    ) : null}
+                                    <button
+                                        type="button"
+                                        onClick={toggleWifiEnabled}
+                                        role="switch"
+                                        aria-checked={Boolean(wifiConfig.enabled)}
+                                        aria-label="Wi-Fi"
+                                        className={`ml-1 flex h-9 items-center gap-1.5 rounded-lg px-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${wifiConfig.enabled ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-200'} ${t.textSub}`}`}
+                                    >
+                                        <span className="text-xs font-bold leading-none">{wifiConfig.enabled ? 'ON' : 'OFF'}</span>
+                                        <span className={`h-5 w-9 rounded-full p-0.5 ${wifiConfig.enabled ? 'bg-white/25' : 'bg-slate-400'}`}>
+                                            <span className={`block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${wifiConfig.enabled ? 'translate-x-4' : ''}`} />
+                                        </span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            {connectingToWifi && (
+                                <div className={`flex items-center gap-3 border-t ${t.border} px-3 py-1.5`} aria-live="polite">
+                                    <span className={`min-w-0 flex-1 truncate text-[10px] font-semibold ${t.textMain}`}>{wifiConnectionAttempt.phase}</span>
+                                    <div className={`h-1.5 w-28 overflow-hidden rounded-full ${theme === 'dark' ? 'bg-slate-800' : 'bg-blue-100'}`}>
+                                        <div
+                                            className="h-full rounded-full bg-blue-600 transition-all duration-300"
+                                            style={{ width: `${Math.max(12, (wifiConnectionAttempt.step / 3) * 100)}%` }}
+                                        />
                                     </div>
-                                </>
+                                    <span className={`text-[10px] font-bold ${t.textDim}`}>{wifiConnectionAttempt.step}/3</span>
+                                </div>
                             )}
                         </div>
 
-                        <div className={`overflow-hidden rounded-2xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white'}`}>
-                            {renderWifiSettingRow({ label: 'Auto reconnect', detail: 'Reconnect after reboot or signal loss.', flagKey: 'autoReconnect', icon: RotateCw })}
-                            {renderWifiSettingRow({ label: 'Automatic IP (DHCP)', detail: 'Let the router assign the IP address.', flagKey: 'dhcp', icon: Globe })}
-                            {renderWifiSettingRow({ label: 'LTE fallback', detail: 'Keep correction data online if Wi-Fi drops.', flagKey: 'lteFallback', icon: Radio })}
+                        <div className={`grid border-t ${t.border} ${theme === 'dark' ? 'divide-slate-700' : 'divide-slate-200'} divide-y lg:grid-cols-3 lg:divide-x lg:divide-y-0`}>
+                            {renderWifiSettingRow({ label: 'Auto reconnect', detail: 'Reconnect after signal loss.', flagKey: 'autoReconnect', icon: WifiGlyph })}
+                            {renderWifiSettingRow({ label: 'Automatic IP', detail: 'Router assigns the IP address.', flagKey: 'dhcp', icon: Globe })}
+                            {renderWifiSettingRow({ label: 'LTE fallback', detail: 'Keep RTK correction online.', flagKey: 'lteFallback', icon: Radio })}
                         </div>
                     </div>
                 </section>
 
-                <section className={`overflow-hidden rounded-2xl border ${t.borderCard} ${t.bgPanel}`}>
-                    <div className={`flex items-center justify-between gap-4 border-b ${t.border} px-5 py-4`}>
-                        <div>
-                            <div className={`text-base font-black ${t.textMain}`}>Available networks</div>
-                            <div className={`mt-0.5 text-xs ${t.textSub}`}>
-                                {wifiConfig.enabled ? `${scanNetworks.length} networks found` : 'Turn on Wi-Fi to view nearby networks'}
+                <section className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border ${t.borderCard} ${t.bgPanel}`}>
+                    <div className={`flex min-h-[50px] shrink-0 items-center justify-between gap-3 border-b ${t.border} px-4 py-2`}>
+                        <div className="min-w-0">
+                            <div className="flex items-center gap-2.5">
+                                <div className={`text-sm font-bold ${t.textMain}`}>Available networks</div>
+                                {wifiConfig.enabled && (
+                                    <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-bold text-blue-500">
+                                        {scanNetworks.length} found
+                                    </span>
+                                )}
+                            </div>
+                            <div className={`mt-0.5 truncate text-[10px] font-medium leading-tight ${t.textSub}`}>
+                                {wifiConfig.enabled ? 'Select a network to connect' : 'Turn on Wi-Fi to view nearby networks'}
                             </div>
                         </div>
-                        {wifiConfig.lastScanAt && <span className={`text-[10px] font-bold ${t.textDim}`}>Updated {new Date(wifiConfig.lastScanAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+                        <div className="flex shrink-0 items-center gap-2">
+                            {wifiConfig.lastScanAt && (
+                                <div className={`hidden text-right text-[9px] font-bold uppercase tracking-wide ${t.textDim} md:block`}>
+                                    <span className="block">Updated</span>
+                                    <span className={`block text-[10px] font-medium normal-case tracking-normal ${t.textSub}`}>
+                                        {new Date(wifiConfig.lastScanAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                </div>
+                            )}
+                            <button
+                                type="button"
+                                onClick={() => setWifiAdvancedOpen(true)}
+                                className={`h-9 rounded-lg border ${t.borderCard} px-3 text-xs font-bold leading-none ${t.textMain} hover:border-blue-500 hover:text-blue-500`}
+                            >
+                                Advanced
+                            </button>
+                            <button
+                                type="button"
+                                onClick={scanWifiNetworks}
+                                disabled={!wifiConfig.enabled || wifiScanning || connectingToWifi}
+                                className={`inline-flex h-9 min-w-[112px] items-center justify-center gap-1.5 rounded-lg border px-3 text-xs font-bold leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-40 ${
+                                    theme === 'dark'
+                                        ? 'border-blue-400/35 bg-blue-400/8 text-blue-300 hover:bg-blue-400/15'
+                                        : 'border-blue-500/25 bg-blue-50 text-blue-600 hover:border-blue-500 hover:bg-blue-100'
+                                }`}
+                            >
+                                {wifiScanning && (
+                                    <span className="h-3.5 w-3.5 shrink-0 rounded-full border-2 border-current border-r-transparent animate-spin" aria-hidden="true" />
+                                )}
+                                <span className="leading-none">{wifiScanning ? 'Scanning…' : 'Find networks'}</span>
+                            </button>
+                        </div>
                     </div>
 
+                    {wifiConnectionAttempt.status === 'failed' && (
+                        <div role="alert" className={`shrink-0 flex flex-wrap items-center justify-between gap-3 border-b border-red-500/25 ${theme === 'dark' ? 'bg-red-500/10' : 'bg-red-50'} px-5 py-3.5`}>
+                            <div className="flex min-w-0 items-start gap-3">
+                                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-500/12 text-red-500">
+                                    <AlertCircle className="h-5 w-5" />
+                                </span>
+                                <div className="min-w-0">
+                                    <div className="text-sm font-bold text-red-500">Couldn’t connect to {wifiConnectionAttempt.ssid}</div>
+                                    <div className={`mt-0.5 text-[10px] font-medium leading-4 ${t.textSub}`}>{wifiConnectionAttempt.message}</div>
+                                </div>
+                            </div>
+                            <div className="flex shrink-0 gap-2">
+                                <button
+                                    type="button"
+                                    onClick={resetWifiConnectionAttempt}
+                                    className={`h-9 rounded-lg border ${t.borderCard} px-3 text-xs font-bold ${t.textMain}`}
+                                >
+                                    Dismiss
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => requestWifiConnection(wifiConnectionAttempt.network)}
+                                    className="h-9 rounded-lg bg-red-500 px-4 text-xs font-bold text-white hover:bg-red-400"
+                                >
+                                    Retry
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
                     {wifiConfig.enabled ? (
-                    <div>
+                    <div className="relative min-h-0 flex-1">
+                    <div
+                        data-wifi-network-list
+                        aria-label="Available Wi-Fi networks"
+                        tabIndex={0}
+                        className="h-full min-h-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+                    >
                         {scanNetworks.map((network) => {
                             const networkConnected = network.ssid === wifiConfig.ssid && connected;
                             const saved = networkConnected || savedNetworkSsids.has(network.ssid);
+                            const networkConnecting = connectingToWifi && wifiConnectionAttempt.ssid === network.ssid;
+                            const networkFailed = wifiConnectionAttempt.status === 'failed' && wifiConnectionAttempt.ssid === network.ssid;
                             const strength = Math.max(0, Math.min(100, Math.round(((Number(network.signalDbm) + 90) / 55) * 100)));
                             return (
                                 <div
                                     key={network.ssid}
-                                    className={`flex min-h-[72px] items-center justify-between gap-4 border-b ${t.border} px-5 py-3 last:border-b-0 ${networkConnected ? 'bg-blue-500/7' : 'hover:bg-blue-500/5'}`}
+                                    data-network-ssid={network.ssid}
+                                    data-connection-state={networkConnecting ? 'connecting' : networkFailed ? 'failed' : networkConnected ? 'connected' : 'idle'}
+                                className={`grid min-h-[58px] grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-2.5 border-b ${t.border} px-3 py-1.5 last:border-b-0 ${
+                                        networkFailed
+                                            ? 'bg-red-500/7 shadow-[inset_3px_0_0_#ef4444]'
+                                            : networkConnecting || networkConnected
+                                                ? 'bg-blue-500/7 shadow-[inset_3px_0_0_#2563eb]'
+                                                : 'transition-colors hover:bg-blue-500/5'
+                                    }`}
                                 >
-                                    <div className="min-w-0 flex items-center gap-3">
-                                        <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${networkConnected ? 'bg-blue-600' : theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'}`}>
-                                            <WifiSignalBars strength={strength} active={networkConnected} />
-                                        </span>
-                                        <div className="min-w-0">
-                                            <div className="flex min-w-0 items-center gap-2">
-                                                <span className={`truncate text-sm font-black ${t.textMain}`}>{network.ssid}</span>
-                                                {networkConnected && <span className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-[9px] font-black uppercase text-emerald-500">Connected</span>}
-                                                {!networkConnected && saved && <span className={`text-[9px] font-bold uppercase ${t.textDim}`}>Saved</span>}
-                                            </div>
-                                            <div className={`mt-0.5 text-[11px] ${t.textSub}`}>{network.security} · {signalLabel(strength)}</div>
+                                    <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                                            networkFailed
+                                                ? 'bg-red-500/12 text-red-500'
+                                                : networkConnecting || networkConnected
+                                                    ? 'bg-blue-600 text-white'
+                                                    : theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'
+                                        }`}>
+                                            {networkConnecting
+                                                ? <span className="h-4 w-4 rounded-full border-2 border-current border-r-transparent animate-spin" aria-hidden="true" />
+                                                : networkFailed
+                                                    ? <AlertCircle className="h-4 w-4" />
+                                                    : <WifiSignalBars strength={strength} active={networkConnected} />}
+                                    </span>
+                                    <div className="min-w-0">
+                                        <div className="flex min-w-0 items-center gap-2">
+                                            <span className={`truncate text-sm font-bold ${t.textMain}`}>{network.ssid}</span>
+                                            {networkConnected && <span className="rounded-full bg-emerald-500/12 px-1.5 py-0.5 text-[9px] font-bold uppercase text-emerald-500">Connected</span>}
+                                            {networkConnecting && <span className="rounded-full bg-blue-500/12 px-1.5 py-0.5 text-[9px] font-bold uppercase text-blue-500">Connecting</span>}
+                                            {networkFailed && <span className="rounded-full bg-red-500/12 px-1.5 py-0.5 text-[9px] font-bold uppercase text-red-500">Failed</span>}
+                                        </div>
+                                        <div className={`mt-0.5 truncate text-[10px] font-medium ${networkFailed ? 'text-red-500' : t.textSub}`} aria-live={networkConnecting || networkFailed ? 'polite' : undefined}>
+                                            {networkConnecting
+                                                ? wifiConnectionAttempt.phase
+                                                : networkFailed
+                                                    ? 'Connection failed · Retry available'
+                                                    : `${network.security} · ${signalLabel(strength)} signal${saved ? ' · Saved' : ''}`}
                                         </div>
                                     </div>
-                                    <div className="flex shrink-0 items-center gap-2">
-                                        {saved && !networkConnected && (
+                                    <div className="flex shrink-0 items-center justify-end gap-2">
+                                        {networkConnecting ? (
                                             <button
                                                 type="button"
-                                                onClick={() => requestForgetWifiNetwork(network)}
-                                                className={`h-9 rounded-lg px-2 text-[10px] font-bold ${wifiForgetConfirmSsid === network.ssid ? 'bg-red-500/10 text-red-500' : `${t.textDim} hover:text-red-500`}`}
+                                                onClick={cancelWifiConnection}
+                                                className={`h-9 min-w-[96px] rounded-lg border ${t.borderCard} px-3 text-xs font-bold ${t.textMain} hover:border-red-500 hover:text-red-500`}
                                             >
-                                                {wifiForgetConfirmSsid === network.ssid ? 'Confirm' : 'Forget'}
+                                                Cancel
                                             </button>
+                                        ) : networkFailed ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => requestWifiConnection(network)}
+                                                className="h-9 min-w-[96px] rounded-lg bg-red-500 px-3 text-xs font-bold text-white hover:bg-red-400"
+                                            >
+                                                Retry
+                                            </button>
+                                        ) : networkConnected ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => setWifiAdvancedOpen(true)}
+                                                className={`h-9 min-w-[96px] rounded-lg border ${t.borderCard} px-3 text-xs font-bold ${t.textMain} hover:border-blue-500 hover:text-blue-500`}
+                                            >
+                                                Details
+                                            </button>
+                                        ) : wifiForgetConfirmSsid === network.ssid ? (
+                                            <>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => requestForgetWifiNetwork(network)}
+                                                    className="h-9 min-w-[80px] rounded-lg bg-red-500 px-3 text-xs font-bold text-white hover:bg-red-400"
+                                                >
+                                                    Confirm
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    aria-label={`Cancel forgetting ${network.ssid}`}
+                                                    onClick={() => setWifiForgetConfirmSsid(null)}
+                                                    className={`h-9 rounded-lg border ${t.borderCard} px-2.5 text-xs font-bold ${t.textMain} hover:border-blue-500`}
+                                                >
+                                                    Cancel
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <>
+                                                {saved && (
+                                                    <button
+                                                        type="button"
+                                                        disabled={connectingToWifi}
+                                                        aria-label={`Forget ${network.ssid}`}
+                                                        onClick={() => setWifiForgetConfirmSsid(network.ssid)}
+                                                        className="h-9 rounded-lg border border-red-500/25 bg-red-500/5 px-3 text-xs font-bold leading-none text-red-500 transition-colors hover:border-red-500/40 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-35"
+                                                    >
+                                                        Forget
+                                                    </button>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    disabled={connectingToWifi}
+                                                    onClick={() => requestWifiConnection(network)}
+                                                    className="inline-flex h-9 min-w-[96px] items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-bold text-white transition-colors hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-35"
+                                                >
+                                                    Connect
+                                                    <ChevronRight className="h-4 w-4" />
+                                                </button>
+                                            </>
                                         )}
-                                        <button
-                                            type="button"
-                                            onClick={() => networkConnected ? setWifiAdvancedOpen(true) : requestWifiConnection(network)}
-                                            className={`h-9 min-w-[82px] rounded-lg px-3 text-xs font-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${networkConnected ? `border ${t.borderCard} ${t.textMain} hover:border-blue-500` : 'bg-blue-600 text-white hover:bg-blue-500'}`}
-                                        >
-                                            {networkConnected ? 'Details' : 'Connect'}
-                                        </button>
                                     </div>
                                 </div>
                             );
                         })}
                     </div>
+                    {scanNetworks.length > 5 && (
+                        <div className={`pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t ${theme === 'dark' ? 'from-slate-950/80' : 'from-white/90'} to-transparent`} />
+                    )}
+                    </div>
                     ) : (
-                        <div className="flex min-h-[180px] flex-col items-center justify-center px-6 py-10 text-center">
+                        <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 py-8 text-center">
                             <span className={`flex h-14 w-14 items-center justify-center rounded-2xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textDim}`}>
                                 <WifiGlyph className="h-6 w-6" />
                             </span>
@@ -7072,90 +7406,123 @@ const App = () => {
                     )}
                 </section>
 
-                <section className={`overflow-hidden rounded-2xl border ${t.borderCard} ${t.bgPanel}`}>
-                    <button
-                        type="button"
-                        onClick={() => setWifiAdvancedOpen(previous => !previous)}
-                        aria-expanded={wifiAdvancedOpen}
-                        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left hover:bg-blue-500/5"
-                    >
-                        <span className="flex items-center gap-3">
-                            <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} text-blue-500`}>
-                                <Cpu className="h-4 w-4" />
-                            </span>
-                            <span>
-                                <span className={`block text-sm font-black ${t.textMain}`}>Network details & manual join</span>
-                                <span className={`mt-0.5 block text-[11px] ${t.textSub}`}>IP, DNS and hidden network settings</span>
-                            </span>
-                        </span>
-                        <ChevronDown className={`h-5 w-5 ${t.textDim} transition-transform ${wifiAdvancedOpen ? 'rotate-180' : ''}`} />
-                    </button>
-
-                    {wifiAdvancedOpen && (
-                        <div className={`border-t ${t.border} p-5`}>
-                            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                                {[
-                                    ['IP address', wifiConfig.ipAddress],
-                                    ['Gateway', wifiConfig.gateway],
-                                    ['Subnet mask', wifiConfig.subnetMask],
-                                    ['DNS server', wifiConfig.dnsPrimary]
-                                ].map(([label, value]) => (
-                                    <div key={label} className={`min-w-0 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/60' : 'bg-slate-50'} px-3.5 py-3`}>
-                                        <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>{label}</div>
-                                        <div className={`mt-1 truncate text-xs font-black ${t.textMain}`}>{value}</div>
+                {wifiAdvancedOpen && (
+                    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/55 p-5 backdrop-blur-sm">
+                        <div
+                            data-wifi-advanced-dialog
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby="wifi-advanced-dialog-title"
+                            className={`flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border ${t.borderCard} ${t.bgPanel} shadow-2xl`}
+                        >
+                            <div className={`flex shrink-0 items-center justify-between gap-4 border-b ${t.border} px-5 py-4`}>
+                                <div className="flex min-w-0 items-center gap-3">
+                                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white">
+                                        <Cpu className="h-5 w-5" />
+                                    </span>
+                                    <div className="min-w-0">
+                                        <div id="wifi-advanced-dialog-title" className={`text-lg font-black ${t.textMain}`}>Advanced network settings</div>
+                                        <div className={`text-[11px] ${t.textSub}`}>IP information and hidden network access</div>
                                     </div>
-                                ))}
-                            </div>
-
-                            <div className={`my-5 h-px ${t.divider}`} />
-                            <div className={`mb-3 text-xs font-black uppercase tracking-wide ${t.textSub}`}>Join a hidden network</div>
-                            <div className="grid grid-cols-1 items-end gap-3 xl:grid-cols-[minmax(0,1fr)_160px_minmax(0,1fr)_auto]">
-                                <SettingInput
-                                    theme={t}
-                                    label="Network name"
-                                    value={wifiHiddenNetwork.ssid}
-                                    onChange={(event) => setWifiHiddenNetwork(previous => ({ ...previous, ssid: event.target.value }))}
-                                />
-                                <SettingSelect
-                                    label="Security"
-                                    value={wifiHiddenNetwork.security}
-                                    onChange={(value) => setWifiHiddenNetwork(previous => ({ ...previous, security: value }))}
-                                    options={['WPA2/WPA3', 'WPA2', 'WPA3', 'Open']}
-                                />
-                                <SettingInput
-                                    theme={t}
-                                    label="Password"
-                                    value={wifiHiddenNetwork.password}
-                                    type="password"
-                                    onChange={(event) => setWifiHiddenNetwork(previous => ({ ...previous, password: event.target.value }))}
-                                />
+                                </div>
                                 <button
                                     type="button"
-                                    onClick={() => {
-                                        if (!wifiHiddenNetwork.ssid.trim()) {
-                                            showNotification('Enter a network name first', 'warning');
-                                            return;
-                                        }
-                                        connectWifiNetwork({
-                                            ssid: wifiHiddenNetwork.ssid.trim(),
-                                            security: wifiHiddenNetwork.security,
-                                            signalDbm: -58,
-                                            status: 'Available'
-                                        }, wifiHiddenNetwork.password);
-                                        setWifiHiddenNetwork({ ssid: '', security: 'WPA2/WPA3', password: '' });
-                                    }}
-                                    className="h-11 rounded-xl bg-blue-600 px-5 text-sm font-black text-white hover:bg-blue-500"
+                                    aria-label="Close advanced network settings"
+                                    onClick={() => setWifiAdvancedOpen(false)}
+                                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${t.borderCard} ${t.activeItem} ${t.textMain} transition-colors hover:border-blue-500 hover:text-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50`}
                                 >
-                                    Join
+                                    <CloseGlyph className="h-4 w-4" />
+                                </button>
+                            </div>
+
+                            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+                                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                                    {[
+                                        ['IP address', wifiConfig.ipAddress],
+                                        ['Gateway', wifiConfig.gateway],
+                                        ['Subnet mask', wifiConfig.subnetMask],
+                                        ['DNS server', wifiConfig.dnsPrimary]
+                                    ].map(([label, value]) => (
+                                        <div key={label} className={`min-w-0 rounded-xl ${theme === 'dark' ? 'bg-slate-900/60' : 'bg-slate-50'} px-3.5 py-3 ring-1 ring-inset ${theme === 'dark' ? 'ring-slate-700' : 'ring-slate-200'}`}>
+                                            <div className={`text-[9px] font-black uppercase tracking-wide ${t.textSub}`}>{label}</div>
+                                            <div className={`mt-1 truncate text-xs font-black ${t.textMain}`}>{value}</div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <div className={`mt-4 rounded-2xl border ${t.borderCard} p-4`}>
+                                    <div className={`text-sm font-black ${t.textMain}`}>Join a hidden network</div>
+                                    <div className={`mt-0.5 text-[11px] ${t.textSub}`}>Enter the exact network name and security details.</div>
+                                    <div className="mt-4 grid grid-cols-1 items-end gap-3 xl:grid-cols-[minmax(0,1fr)_150px_minmax(0,1fr)_auto]">
+                                        <SettingInput
+                                            theme={t}
+                                            label="Network name"
+                                            value={wifiHiddenNetwork.ssid}
+                                            onChange={(event) => setWifiHiddenNetwork(previous => ({ ...previous, ssid: event.target.value }))}
+                                        />
+                                        <SettingSelect
+                                            label="Security"
+                                            value={wifiHiddenNetwork.security}
+                                            onChange={(value) => setWifiHiddenNetwork(previous => ({ ...previous, security: value }))}
+                                            options={['WPA2/WPA3', 'WPA2', 'WPA3', 'Open']}
+                                        />
+                                        <SettingInput
+                                            theme={t}
+                                            label="Password"
+                                            value={wifiHiddenNetwork.password}
+                                            type="password"
+                                            onChange={(event) => setWifiHiddenNetwork(previous => ({ ...previous, password: event.target.value }))}
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                if (!wifiHiddenNetwork.ssid.trim()) {
+                                                    showNotification('Enter a network name first', 'warning');
+                                                    return;
+                                                }
+                                                if (wifiHiddenNetwork.security !== 'Open' && wifiHiddenNetwork.password.length < 8) {
+                                                    showNotification('WiFi password must contain at least 8 characters', 'warning');
+                                                    return;
+                                                }
+                                                connectWifiNetwork({
+                                                    ssid: wifiHiddenNetwork.ssid.trim(),
+                                                    security: wifiHiddenNetwork.security,
+                                                    signalDbm: -58,
+                                                    status: 'Available'
+                                                }, wifiHiddenNetwork.password);
+                                                setWifiHiddenNetwork({ ssid: '', security: 'WPA2/WPA3', password: '' });
+                                                setWifiAdvancedOpen(false);
+                                            }}
+                                            className="h-11 rounded-xl bg-blue-600 px-5 text-sm font-black text-white hover:bg-blue-500"
+                                        >
+                                            Join
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className={`flex shrink-0 justify-end border-t ${t.border} px-5 py-4`}>
+                                <button
+                                    type="button"
+                                    onClick={() => setWifiAdvancedOpen(false)}
+                                    className="h-10 rounded-xl bg-blue-600 px-6 text-sm font-black text-white hover:bg-blue-500"
+                                >
+                                    Done
                                 </button>
                             </div>
                         </div>
-                    )}
-                </section>
+                    </div>
+                )}
 
                 {wifiJoinTarget && (
                     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/50 p-5 backdrop-blur-sm">
-                        <div className={`w-full max-w-md overflow-hidden rounded-2xl border ${t.borderCard} ${t.bgPanel} shadow-2xl`}>
+                        <div
+                            data-wifi-join-dialog
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby="wifi-join-dialog-title"
+                            className={`w-full max-w-md overflow-hidden rounded-2xl border ${t.borderCard} ${t.bgPanel} shadow-2xl`}
+                        >
                             <div className={`flex items-start justify-between gap-4 border-b ${t.border} px-5 py-4`}>
                                 <div className="flex min-w-0 items-center gap-3">
                                     <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white">
@@ -7163,7 +7530,7 @@ const App = () => {
                                     </span>
                                     <div className="min-w-0">
                                         <div className={`text-[10px] font-black uppercase tracking-wide ${t.textSub}`}>Join network</div>
-                                        <div className={`truncate text-lg font-black ${t.textMain}`}>{wifiJoinTarget.ssid}</div>
+                                        <div id="wifi-join-dialog-title" className={`truncate text-lg font-black ${t.textMain}`}>{wifiJoinTarget.ssid}</div>
                                     </div>
                                 </div>
                                 <button
@@ -7204,9 +7571,10 @@ const App = () => {
                                         type="button"
                                         disabled={wifiJoinPassword.length < 8}
                                         onClick={() => connectWifiNetwork(wifiJoinTarget, wifiJoinPassword)}
-                                        className="h-11 rounded-xl bg-blue-600 px-5 text-sm font-black text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+                                        className="inline-flex h-11 min-w-[116px] items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-black text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
                                     >
                                         Connect
+                                        <ChevronRight className="h-4 w-4" />
                                     </button>
                                 </div>
                             </div>
@@ -8750,9 +9118,9 @@ const App = () => {
                       <button
                           onClick={closeSettingsPanel}
                           aria-label={settingsTab === 'wifi' ? 'Close network settings' : 'Close settings and discard unsaved changes'}
-                          className={`p-3 ${t.activeItem} hover:brightness-95 rounded-xl border ${t.borderCard}`}
+                          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${t.borderCard} ${t.activeItem} ${t.textMain} transition-colors hover:border-blue-500 hover:text-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50`}
                       >
-                          <X className={`w-5 h-5 lg:w-6 lg:h-6 ${t.textMain}`} />
+                          <CloseGlyph className="h-4 w-4" />
                       </button>
                   </div>
               </div>
@@ -8784,16 +9152,31 @@ const App = () => {
                   </div>
 
                   <div className={`flex-1 min-w-0 min-h-0 flex flex-col ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
-                      <div ref={settingsContentScrollRef} className={`flex-1 min-h-0 overflow-y-auto scroll-pb-28 ${['vehicle', 'implement'].includes(settingsTab) ? 'p-0' : 'p-5 lg:p-7'}`}>
-                          <div className={`${['vehicle', 'implement'].includes(settingsTab) ? 'w-full' : 'max-w-5xl'} pb-24`}>{renderSettingsContent()}</div>
+                      <div
+                          ref={settingsContentScrollRef}
+                          data-settings-content
+                          data-settings-tab={settingsTab}
+                          className={`flex-1 min-h-0 ${
+                              settingsTab === 'wifi'
+                                  ? 'overflow-hidden p-2.5 lg:p-3'
+                                  : `overflow-y-auto scroll-pb-28 ${['vehicle', 'implement'].includes(settingsTab) ? 'p-0' : 'p-5 lg:p-7'}`
+                          }`}
+                      >
+                          <div className={
+                              settingsTab === 'wifi'
+                                  ? 'h-full min-h-0 w-full'
+                                  : `${['vehicle', 'implement'].includes(settingsTab) ? 'w-full' : 'max-w-5xl'} pb-24`
+                          }>
+                              {renderSettingsContent()}
+                          </div>
                       </div>
-                      <div className={`p-4 lg:p-5 border-t ${t.borderCard} flex items-center gap-3 ${['vehicle', 'implement'].includes(settingsTab) ? 'justify-between' : 'justify-end'} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
+                      <div className={`${settingsTab === 'wifi' ? 'px-4 py-2.5' : 'p-4 lg:p-5'} border-t ${t.borderCard} flex items-center gap-3 ${['vehicle', 'implement'].includes(settingsTab) ? 'justify-between' : 'justify-end'} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
                           {settingsTab !== 'wifi' && (
                               <button className={`px-5 lg:px-7 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-sm lg:text-base`} onClick={closeSettingsPanel}>Cancel</button>
                           )}
                           {settingsTab === 'wifi' ? (
                               <button
-                                  className="rounded-lg bg-blue-600 px-7 py-3 text-base font-bold text-white shadow-lg shadow-blue-900/20 hover:bg-blue-500"
+                                  className="h-10 rounded-lg bg-blue-600 px-6 text-sm font-bold text-white shadow-md shadow-blue-900/15 hover:bg-blue-500"
                                   onClick={closeSettingsPanel}
                               >
                                   Done
@@ -10966,42 +11349,77 @@ const renderLinesPanel = () => {
                         onClick={() => openFieldAssetPanel('tasks')}
                     />
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
-                    <RailButton theme={t} icon={Settings} label="System" active={settingsOpen} onClick={openSystemPanel} />
+                    <RailButton theme={t} icon={Settings} label="System" active={settingsOpen && settingsTab !== 'wifi'} onClick={openSystemPanel} />
                 </nav>
-                <div className={`mb-2 flex w-full shrink-0 flex-col items-center border-t ${t.border} pt-2`}>
+                <div className="mb-1 flex w-full shrink-0 flex-col items-center">
+                    <div className={`h-px w-1/2 ${t.divider}`} />
                     <button
                         type="button"
                         onClick={openWifiPanel}
-                        className={`group flex h-[62px] w-[74px] flex-col items-center justify-center rounded-xl border px-2 text-center transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                        className={`group relative flex w-full flex-col items-center gap-1 rounded-lg py-[10%] text-center transition-all duration-150 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 ${
                             settingsOpen && settingsTab === 'wifi'
-                                ? 'border-blue-500 bg-blue-600 text-white shadow-md shadow-blue-900/20'
-                                : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'} hover:border-blue-500 hover:bg-blue-500/5 hover:shadow-sm`
+                                ? 'bg-blue-600 text-white shadow-md shadow-blue-900/20'
+                                : wifiConnectionAttempt.status === 'connecting'
+                                    ? `${theme === 'dark' ? 'bg-amber-500/10 text-amber-400' : 'bg-amber-50 text-amber-600'}`
+                                    : wifiConnectionAttempt.status === 'failed'
+                                        ? `${theme === 'dark' ? 'bg-red-500/10 text-red-400' : 'bg-red-50 text-red-600'}`
+                                        : `${t.textDim} ${theme === 'dark' ? 'bg-transparent hover:bg-slate-800/45' : 'bg-transparent hover:bg-slate-100/70'}`
                         }`}
                         title="WiFi / Network"
-                        aria-label="Open WiFi and network settings"
+                        aria-label={
+                            wifiConnectionAttempt.status === 'connecting'
+                                ? `Open WiFi settings, connecting to ${wifiConnectionAttempt.ssid}`
+                                : wifiConnectionAttempt.status === 'failed'
+                                    ? `Open WiFi settings, connection to ${wifiConnectionAttempt.ssid} failed`
+                                    : 'Open WiFi and network settings'
+                        }
                     >
-                        <span className={`relative flex h-7 w-7 items-center justify-center ${
-                            settingsOpen && settingsTab === 'wifi' ? 'text-white' : 'text-blue-600'
-                        }`}>
-                            <WifiGlyph className="h-5 w-5" />
-                            <span className={`absolute right-0 top-0 h-2.5 w-2.5 rounded-full border-2 ${
+                        <span className="relative flex h-5 w-5 items-center justify-center lg:h-6 lg:w-6">
+                            <span className={`flex h-full w-full items-center justify-center ${
+                            settingsOpen && settingsTab === 'wifi'
+                                ? 'text-white'
+                                : wifiConnectionAttempt.status === 'connecting'
+                                    ? 'text-amber-500'
+                                    : wifiConnectionAttempt.status === 'failed' ? 'text-red-500' : 'group-hover:text-blue-500'
+                            }`}>
+                            {wifiConnectionAttempt.status === 'connecting'
+                                ? <span className="h-5 w-5 rounded-full border-2 border-current border-r-transparent animate-spin" aria-hidden="true" />
+                                : wifiConnectionAttempt.status === 'failed'
+                                    ? <AlertCircle className="h-5 w-5" />
+                                    : <WifiGlyph className="h-full w-full" />}
+                            </span>
+                            <span className={`absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 ${
                                 settingsOpen && settingsTab === 'wifi'
                                     ? 'border-blue-600'
-                                    : theme === 'dark' ? 'border-slate-900' : 'border-white'
-                            } ${wifiSettings?.status === 'Connected' ? 'bg-emerald-400' : 'bg-slate-400'}`} />
+                                    : theme === 'dark' ? 'border-slate-950' : 'border-white'
+                            } ${
+                                wifiConnectionAttempt.status === 'connecting'
+                                    ? 'animate-pulse bg-amber-300'
+                                    : wifiConnectionAttempt.status === 'failed'
+                                        ? 'bg-red-400'
+                                    : wifiSettings?.status === 'Connected' ? 'bg-emerald-400' : 'bg-slate-400'
+                            }`} />
                         </span>
-                        <span className={`mt-0.5 text-[10px] font-black leading-none ${
+                        <span className={`text-[9px] font-semibold lg:text-[10px] ${
                             settingsOpen && settingsTab === 'wifi' ? 'text-white' : t.textMain
                         }`}>Wi-Fi</span>
-                        <span className={`mt-1 text-[8px] font-bold uppercase tracking-wide ${
-                            settingsOpen && settingsTab === 'wifi'
-                                ? 'text-blue-100'
-                                : wifiSettings?.status === 'Connected' ? 'text-emerald-500' : t.textDim
-                        }`}>
-                            {wifiSettings?.status === 'Connected' ? 'Online' : 'Offline'}
-                        </span>
                     </button>
-                    <span className={`mt-1 text-[9px] font-bold ${t.textDim}`} aria-label={`Current time ${currentTime}`}>{currentTime}</span>
+                    <div className={`h-px w-1/2 ${t.divider}`} />
+                    <div
+                        role="status"
+                        title="Local time"
+                        aria-label={`Local time ${currentTime}`}
+                        className={`flex w-full flex-col items-center gap-1 rounded-lg py-[10%] ${t.textDim}`}
+                    >
+                        <Clock className="h-5 w-5 lg:h-6 lg:w-6" aria-hidden="true" />
+                        <time
+                            dateTime={currentTime}
+                            className={`text-[11px] font-semibold leading-none tabular-nums lg:text-xs ${t.textMain}`}
+                            aria-label={`Current time ${currentTime}`}
+                        >
+                            {currentTime}
+                        </time>
+                    </div>
                 </div>
             </aside>
 

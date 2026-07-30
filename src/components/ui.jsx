@@ -3,7 +3,7 @@ const RailButton = ({ icon: Icon, label, active, onClick, theme, className }) =>
 	return (
 		<button
 			onClick={onClick}
-			className={`group relative flex flex-col items-center gap-1 w-full py-[14%] rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 transition-all duration-150 active:scale-[0.99] ${
+			className={`group relative flex flex-col items-center gap-1 w-full py-[10%] rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 transition-all duration-150 active:scale-[0.99] ${
 				active
 					? 'bg-blue-600 text-white shadow-md shadow-blue-900/20'
 					: `${theme.textDim} ${isDark ? 'bg-transparent hover:bg-slate-800/45' : 'bg-transparent hover:bg-slate-100/70'}`

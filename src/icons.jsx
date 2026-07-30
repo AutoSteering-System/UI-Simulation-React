@@ -47,6 +47,7 @@ const RotateCcw = makeIconComponent('rotate-ccw');
 const RotateCw = makeIconComponent('rotate-cw');
 const Flag = makeIconComponent('flag');
 const Calendar = makeIconComponent('calendar');
+const Clock = makeIconComponent('clock');
 const Sprout = makeIconComponent('sprout');
 const Droplets = makeIconComponent('droplets');
 const Scissors = makeIconComponent('scissors');

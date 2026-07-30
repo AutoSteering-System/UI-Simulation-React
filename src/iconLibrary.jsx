@@ -14,8 +14,14 @@
     const request = fetch(path)
       .then((res) => (res.ok ? res.text() : null))
       .then((text) => {
-        ICON_CACHE.set(name, text);
-        return text;
+        const normalizedSvg = text
+          ? text.replace(
+              /<svg\b/,
+              '<svg style="width:100%;height:100%;display:block"'
+            )
+          : null;
+        ICON_CACHE.set(name, normalizedSvg);
+        return normalizedSvg;
       })
       .catch(() => {
         ICON_CACHE.set(name, null);
