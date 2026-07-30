@@ -171,6 +171,8 @@ const App = () => {
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [rtkTestState, setRtkTestState] = useState('idle');
   const [baseSurveyState, setBaseSurveyState] = useState('idle');
+  const [rtkRefreshState, setRtkRefreshState] = useState('idle');
+  const [rtkLastUpdated, setRtkLastUpdated] = useState('Live now');
   const readUiLocalState = () => {
       try {
           return JSON.parse(localStorage.getItem('autosteer-ui-settings-v1') || '{}') || {};
@@ -2278,7 +2280,8 @@ const App = () => {
       const passValue = `${currentRunKpi.passIndex >= 0 ? '+' : ''}${currentRunKpi.passIndex}`;
       const errorTextTone = abs >= 10 ? 'text-red-500' : abs >= 4 ? 'text-yellow-600 dark:text-yellow-400' : t.textMain;
       const meterPosition = Math.max(4, Math.min(96, 50 + (crossTrackError / 30) * 46));
-      const errorFeedLive = steeringMode === 'AUTO';
+      const crossTrackUnitLabel = 'cm';
+      const directionArrow = direction === 'LEFT' ? '\u2190' : direction === 'RIGHT' ? '\u2192' : '\u2194';
       const meterTrack = theme === 'dark'
           ? 'linear-gradient(90deg, rgba(239,68,68,.35) 0%, rgba(245,158,11,.25) 28%, rgba(59,130,246,.28) 50%, rgba(245,158,11,.25) 72%, rgba(239,68,68,.35) 100%)'
           : 'linear-gradient(90deg, rgba(239,68,68,.24) 0%, rgba(245,158,11,.18) 28%, rgba(59,130,246,.20) 50%, rgba(245,158,11,.18) 72%, rgba(239,68,68,.24) 100%)';
@@ -2302,30 +2305,35 @@ const App = () => {
                   <div className="flex items-center justify-center">
                       <span className={`text-[8px] uppercase font-black leading-none tracking-[0.12em] ${t.textSub}`}>Line error</span>
                   </div>
-                  <div className="relative mt-1 h-[27px] w-full">
-                      <span data-error-value className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[27px] font-black leading-none tabular-nums ${errorTextTone}`}>
+                  <div
+                      data-error-readout
+                      className={`relative mt-1 h-[27px] w-full ${errorTextTone}`}
+                  >
+                      <span data-error-value className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[27px] font-black leading-none tabular-nums">
                           {abs.toFixed(abs >= 10 ? 0 : 1)}
                       </span>
                       <span
                           data-error-meta
-                          className={`absolute top-1/2 -translate-y-1/2 flex flex-col items-start text-[8px] font-black uppercase leading-[1.05] tracking-[0.06em] ${errorTextTone}`}
-                          style={{ left: 'calc(50% + 40px)' }}
+                          className="absolute top-1/2 inline-flex -translate-y-1/2 flex-col items-start justify-center whitespace-nowrap text-[9px] font-black uppercase leading-[1.05]"
+                          style={{ left: 'calc(50% + 36px)' }}
                       >
-                          <span>cm</span>
-                          <span>{direction}</span>
+                          <span>{crossTrackUnitLabel}</span>
+                          <span data-error-direction aria-hidden="true" className="text-[11px] font-black leading-none">
+                              {directionArrow}
+                          </span>
                       </span>
                   </div>
                   <div
                       data-error-meter
                       role="meter"
-                      aria-label={`Cross-track error ${abs.toFixed(1)} centimeters ${direction}`}
+                      aria-label={`Cross-track error ${abs.toFixed(1)} ${crossTrackUnitLabel} ${direction}`}
                       aria-valuemin="-30"
                       aria-valuemax="30"
                       aria-valuenow={Math.max(-30, Math.min(30, crossTrackError))}
-                      className="mt-1.5 flex w-full max-w-[220px] items-center gap-2"
+                      className="mt-1.5 flex w-full max-w-[240px] items-center gap-1.5"
                   >
                       <span className={`text-[8px] font-black leading-none ${t.textDim}`}>L</span>
-                      <span className="relative h-1.5 flex-1 rounded-full" style={{ background: meterTrack }}>
+                      <span className="relative h-2 flex-1 rounded-full" style={{ background: meterTrack }}>
                           <span className={`absolute left-1/2 top-1/2 h-3 w-px -translate-x-1/2 -translate-y-1/2 ${theme === 'dark' ? 'bg-white/70' : 'bg-slate-700/70'}`} />
                           <span
                               className={`absolute top-1/2 z-10 h-4 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white shadow-sm ${barTone} transition-[left] duration-300 ease-out`}
@@ -8853,15 +8861,78 @@ const App = () => {
               ...rtkSettings
             };
             const rtkQuality = rtkStatus === 'FIX' ? 95 : rtkStatus === 'FLOAT' ? 75 : rtkStatus === 'DIFF' ? 55 : 20;
-            const rtkLabel = rtkStatus === 'FIX' ? 'CONNECTED' : rtkStatus === 'FLOAT' ? 'FLOAT' : rtkStatus === 'DIFF' ? 'DIFF' : 'DISCONNECTED';
-            const rtkBadge = rtkStatus === 'FIX' ? 'text-green-500' : rtkStatus === 'FLOAT' ? 'text-yellow-500' : rtkStatus === 'DIFF' ? 'text-orange-500' : 'text-red-500';
-            const rtkBar = rtkStatus === 'FIX' ? 'bg-green-500' : rtkStatus === 'FLOAT' ? 'bg-yellow-500' : rtkStatus === 'DIFF' ? 'bg-orange-500' : 'bg-red-500';
+            const rtkStatusMap = {
+                FIX: {
+                    detail: 'Correction locked',
+                    icon: CheckCircle2,
+                    text: theme === 'dark' ? 'text-green-400' : 'text-green-700',
+                    soft: theme === 'dark' ? 'bg-green-500/10' : 'bg-green-50',
+                    bar: 'bg-green-500'
+                },
+                FLOAT: {
+                    detail: 'Converging solution',
+                    icon: Radio,
+                    text: theme === 'dark' ? 'text-amber-300' : 'text-amber-700',
+                    soft: theme === 'dark' ? 'bg-amber-500/10' : 'bg-amber-50',
+                    bar: 'bg-amber-500'
+                },
+                DIFF: {
+                    detail: 'Differential correction',
+                    icon: Radio,
+                    text: theme === 'dark' ? 'text-orange-300' : 'text-orange-700',
+                    soft: theme === 'dark' ? 'bg-orange-500/10' : 'bg-orange-50',
+                    bar: 'bg-orange-500'
+                },
+                NONE: {
+                    detail: 'No correction link',
+                    icon: AlertTriangle,
+                    text: theme === 'dark' ? 'text-red-400' : 'text-red-700',
+                    soft: theme === 'dark' ? 'bg-red-500/10' : 'bg-red-50',
+                    bar: 'bg-red-500'
+                }
+            };
+            const activeRtkStatus = rtkStatusMap[rtkStatus] || rtkStatusMap.NONE;
+            const RtkStatusIcon = activeRtkStatus.icon;
             const rtkMode = rtkConfig.correctionSource === 'NTRIP'
                 ? 'NTRIP'
                 : 'BASE';
             const sourceModes = [
                 { id: 'BASE', source: 'Base Station', label: 'Local Base', detail: 'Survey-in + radio link', icon: LocateFixed },
                 { id: 'NTRIP', source: 'NTRIP', label: 'NTRIP Rover', detail: 'Internet caster / VRS', icon: Globe }
+            ];
+            const selectedSourceMode = sourceModes.find(mode => mode.id === rtkMode) || sourceModes[0];
+            const rtkSummaryMetrics = [
+                {
+                    label: 'H accuracy',
+                    value: `${currentGnssTelemetry.horizontalAccuracyCm.toFixed(1)} cm`,
+                    tone: currentGnssTelemetry.horizontalAccuracyCm <= 5 ? 'text-green-500' : 'text-yellow-500'
+                },
+                {
+                    label: 'V accuracy',
+                    value: `${currentGnssTelemetry.verticalAccuracyCm.toFixed(1)} cm`,
+                    tone: currentGnssTelemetry.verticalAccuracyCm <= 8 ? 'text-green-500' : 'text-yellow-500'
+                },
+                { label: 'Correction age', value: `${currentGnssTelemetry.correctionAgeSec.toFixed(1)} s` },
+                {
+                    label: 'Latency',
+                    value: `${currentRtkTelemetry.latencyMs} ms`,
+                    tone: currentRtkTelemetry.latencyMs <= 100 ? 'text-green-500' : 'text-yellow-500'
+                },
+                {
+                    label: 'HDOP',
+                    value: currentRtkTelemetry.hdop.toFixed(1),
+                    tone: currentRtkTelemetry.hdop <= 1.2 ? 'text-green-500' : 'text-yellow-500'
+                },
+                {
+                    label: 'PDOP',
+                    value: currentRtkTelemetry.pdop.toFixed(1),
+                    tone: currentRtkTelemetry.pdop <= 2 ? 'text-green-500' : 'text-yellow-500'
+                },
+                { label: 'Baseline', value: `${currentGnssTelemetry.baselineKm.toFixed(1)} km` },
+                {
+                    label: 'Antenna',
+                    value: currentGnssTelemetry.antenna === 'Rover roof' ? 'Roof' : currentGnssTelemetry.antenna
+                }
             ];
             const constellationSource = [
                 { label: 'GPS', visible: 12 },
@@ -8882,127 +8953,191 @@ const App = () => {
             const toggleRtkFlag = (key) => handleRtkSettingChange(key, !rtkConfig[key]);
             const renderToggleFlag = ({ label, detail, flagKey, icon: Icon = CheckCircle2 }) => (
                 <button
+                    type="button"
                     onClick={() => toggleRtkFlag(flagKey)}
-                    className={`p-4 rounded-xl border text-left flex items-center justify-between gap-4 ${rtkConfig[flagKey] ? 'border-green-500/50 bg-green-500/10' : `${t.borderCard} ${t.bgInput}`}`}
+                    role="switch"
+                    aria-checked={Boolean(rtkConfig[flagKey])}
+                    className={`min-h-[58px] rounded-xl border p-2.5 text-left flex items-center justify-between gap-3 transition-colors ${rtkConfig[flagKey] ? 'border-green-500/45 bg-green-500/10' : `${t.borderCard} ${t.bgInput}`}`}
                 >
-                    <div className="flex items-center gap-3 min-w-0">
-                        <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${rtkConfig[flagKey] ? 'bg-green-500 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} ${t.textDim}`}`}>
-                            <Icon className="w-5 h-5" />
+                    <div className="flex min-w-0 items-center gap-2.5">
+                        <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${rtkConfig[flagKey] ? 'bg-green-500/15 text-green-500' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} ${t.textDim}`}`}>
+                            <Icon className="w-4 h-4" />
                         </div>
                         <div className="min-w-0">
-                            <div className={`font-bold ${t.textMain}`}>{label}</div>
-                            <div className={`text-xs ${t.textSub}`}>{detail}</div>
+                            <div className={`text-xs font-bold ${t.textMain}`}>{label}</div>
+                            <div className={`truncate text-[10px] ${t.textSub}`}>{detail}</div>
                         </div>
                     </div>
-                    <div className={`shrink-0 w-12 h-7 rounded-full p-1 transition-colors ${rtkConfig[flagKey] ? 'bg-green-500' : 'bg-slate-400'}`}>
-                        <div className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform ${rtkConfig[flagKey] ? 'translate-x-5' : ''}`}></div>
+                    <div className={`shrink-0 w-9 h-5 rounded-full p-0.5 transition-colors ${rtkConfig[flagKey] ? 'bg-green-500' : 'bg-slate-400'}`}>
+                        <div className={`w-4 h-4 rounded-full bg-white shadow-sm transform transition-transform ${rtkConfig[flagKey] ? 'translate-x-4' : ''}`}></div>
                     </div>
                 </button>
             );
+            const selectRtkMode = (mode) => {
+                handleRtkSettingChange('correctionSource', mode.source);
+                setRtkTestState('idle');
+                setBaseSurveyState('idle');
+            };
             const renderModeCard = (mode) => {
                 const active = rtkMode === mode.id;
                 const Icon = mode.icon;
                 return (
                     <button
+                        type="button"
                         key={mode.id}
-                        onClick={() => {
-                            handleRtkSettingChange('correctionSource', mode.source);
-                            setRtkTestState('idle');
-                            setBaseSurveyState('idle');
+                        onClick={() => selectRtkMode(mode)}
+                        onKeyDown={(event) => {
+                            if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+                            event.preventDefault();
+                            const currentIndex = sourceModes.findIndex(item => item.id === mode.id);
+                            const direction = ['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1;
+                            const nextMode = sourceModes[(currentIndex + direction + sourceModes.length) % sourceModes.length];
+                            selectRtkMode(nextMode);
+                            requestAnimationFrame(() => document.querySelector(`[data-rtk-source="${nextMode.id}"]`)?.focus());
                         }}
-                        className={`text-left rounded-xl border p-3 min-h-[96px] transition-all ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'} hover:brightness-95`}`}
+                        data-rtk-source={mode.id}
+                        role="radio"
+                        aria-checked={active}
+                        tabIndex={active ? 0 : -1}
+                        title={`${mode.label} — ${mode.detail}`}
+                        aria-label={`${mode.label}. ${mode.detail}`}
+                        className={`flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg border px-1.5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 ${
+                            active
+                                ? 'border-blue-600 bg-blue-600 text-white shadow-sm'
+                                : `border-transparent ${t.textSub} hover:border-blue-500/45 hover:text-blue-500`
+                        }`}
                     >
-                        <div className="flex items-start justify-between gap-3">
-                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} text-blue-500`}`}>
-                                <Icon className="w-5 h-5" />
-                            </div>
-                            {active && <CheckCircle2 className="w-5 h-5 text-blue-500" />}
-                        </div>
-                        <div className={`mt-3 font-black ${t.textMain}`}>{mode.label}</div>
-                        <div className={`text-xs ${t.textSub}`}>{mode.detail}</div>
+                        <Icon className="h-3.5 w-3.5 shrink-0" />
+                        <span className="text-[10px] font-black leading-3">{mode.label}</span>
                     </button>
                 );
             };
 
             return (
-              <div className="space-y-5">
-                <SettingsSection
-                    title="RTK Setup"
-                    detail="Pick one correction workflow first, then configure only that workflow."
-                    icon={Radio}
-                    actions={<SettingsActionButton onClick={() => showNotification('GNSS rover status refreshed', 'info')}>Refresh Status</SettingsActionButton>}
-                >
-                    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-3 items-stretch">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div data-rtk-workspace className="space-y-4">
+                <section data-rtk-overview className={`${t.bgPanel} overflow-hidden rounded-2xl border ${t.borderCard}`}>
+                    <div className={`flex min-h-[58px] items-center justify-between gap-3 border-b px-4 py-2.5 ${t.borderCard}`}>
+                        <div className="flex min-w-0 items-center gap-3">
+                            <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-blue-50'} text-blue-500`}>
+                                <Radio className="h-[18px] w-[18px]" />
+                            </span>
+                            <div className="min-w-0">
+                                <h4 className={`text-sm font-black ${t.textMain}`}>GNSS overview</h4>
+                                <div className={`text-[11px] leading-4 ${t.textSub}`}>
+                                    {selectedSourceMode.detail} · <span aria-live="polite">{rtkLastUpdated}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                            <span className={`hidden h-8 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-black sm:flex ${activeRtkStatus.soft} ${activeRtkStatus.text}`}>
+                                <RtkStatusIcon className="h-3.5 w-3.5" />
+                                {rtkStatus}
+                            </span>
+                            <button
+                                type="button"
+                                disabled={rtkRefreshState === 'refreshing'}
+                                onClick={() => {
+                                    setRtkRefreshState('refreshing');
+                                    window.setTimeout(() => {
+                                        setRtkRefreshState('idle');
+                                        setRtkLastUpdated(`Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+                                        showNotification('GNSS rover status refreshed', 'info');
+                                    }, 450);
+                                }}
+                                className={`flex h-11 shrink-0 items-center gap-2 rounded-xl border px-3.5 text-xs font-bold transition-colors ${t.borderCard} ${t.textMain} hover:border-blue-500/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 disabled:cursor-wait disabled:opacity-70`}
+                            >
+                                <RotateCw className={`h-3.5 w-3.5 text-blue-500 ${rtkRefreshState === 'refreshing' ? 'animate-spin' : ''}`} />
+                                {rtkRefreshState === 'refreshing' ? 'Refreshing' : 'Refresh'}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2.5 p-3 lg:grid-cols-4">
+                        <div
+                            data-rtk-tile="solution"
+                            role="status"
+                            aria-live="polite"
+                            className={`flex h-[72px] min-w-0 items-center gap-2.5 rounded-xl border px-3 py-2 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50/80'}`}
+                        >
+                            <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${activeRtkStatus.soft} ${activeRtkStatus.text}`}>
+                                <RtkStatusIcon className="h-4 w-4" />
+                            </span>
+                            <div className="min-w-0">
+                                <div className={`text-[10px] font-bold leading-3 ${t.textSub}`}>Rover solution</div>
+                                <div className={`text-xl font-black leading-6 tabular-nums ${activeRtkStatus.text}`}>{rtkStatus}</div>
+                                <div className={`text-[10px] leading-3 ${t.textSub}`}>{activeRtkStatus.detail}</div>
+                            </div>
+                        </div>
+
+                        <div
+                            data-rtk-tile="source"
+                            role="radiogroup"
+                            aria-label="Correction source"
+                            className={`grid h-[72px] min-w-0 grid-cols-2 gap-1 rounded-xl border p-1.5 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50/80'}`}
+                        >
                             {sourceModes.map(renderModeCard)}
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
-                            <SettingsMetric label="Mode" value={sourceModes.find(mode => mode.id === rtkMode)?.label || 'Local Base'} />
-                            <SettingsMetric label="RTK Status" value={rtkStatus} tone={rtkStatus === 'FIX' ? 'text-green-500' : 'text-yellow-500'} />
-                            <SettingsMetric label="Rover Sats" value={`${currentGnssTelemetry.roverUsedSats}/${currentGnssTelemetry.roverVisibleSats}`} />
-                            <SettingsMetric label="Base Sats" value={currentGnssTelemetry.baseVisibleSats} />
-                        </div>
-                    </div>
-                    <div className={`h-2 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-200'} rounded-full overflow-hidden`}>
-                        <div className={`h-full ${rtkBar}`} style={{ width: `${rtkQuality}%` }}></div>
-                    </div>
-                </SettingsSection>
 
-                <SettingsSection
-                    title="GNSS Rover"
-                    detail="Live status from the rover receiver and antenna. RTK setup below only configures correction input."
-                    icon={Globe}
-                >
-                    <div className="grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)] gap-4">
-                        <div className={`rounded-xl border ${rtkStatus === 'FIX' ? 'border-green-500/45 bg-green-500/10' : 'border-yellow-500/45 bg-yellow-500/10'} p-4`}>
-                            <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Rover Fix</div>
-                            <div className={`mt-1 text-4xl font-black leading-none ${rtkStatus === 'FIX' ? 'text-green-500' : 'text-yellow-500'}`}>{currentGnssTelemetry.roverStatus}</div>
-                            <div className={`mt-3 grid grid-cols-2 gap-2`}>
-                                <div className={`rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white/70'} p-3`}>
-                                    <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Used</div>
-                                    <div className={`text-xl font-black ${t.textMain}`}>{currentGnssTelemetry.roverUsedSats}</div>
-                                </div>
-                                <div className={`rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white/70'} p-3`}>
-                                    <div className={`text-[9px] uppercase font-black ${t.textSub}`}>Visible</div>
-                                    <div className={`text-xl font-black ${t.textMain}`}>{currentGnssTelemetry.roverVisibleSats}</div>
-                                </div>
+                        <dl
+                            data-rtk-tile="satellites"
+                            className={`flex h-[72px] min-w-0 flex-col justify-center rounded-xl border px-3 py-2 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50/80'}`}
+                        >
+                            <dt className={`text-[10px] font-bold leading-3 ${t.textSub}`}>Satellites</dt>
+                            <dd className={`text-lg font-black leading-6 tabular-nums ${t.textMain}`}>
+                                {currentGnssTelemetry.roverUsedSats} <span className={t.textDim}>/</span> {currentGnssTelemetry.roverVisibleSats}
+                            </dd>
+                            <dd className={`text-[10px] leading-3 ${t.textSub}`}>Used / visible · base {currentGnssTelemetry.baseVisibleSats}</dd>
+                        </dl>
+
+                        <div
+                            data-rtk-tile="quality"
+                            aria-label={`RTK signal quality ${rtkQuality} percent. ${activeRtkStatus.detail}`}
+                            className={`flex h-[72px] min-w-0 flex-col justify-center rounded-xl border px-3 py-2 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50/80'}`}
+                        >
+                            <div className="flex items-end justify-between gap-2">
+                                <div className={`text-[10px] font-bold leading-3 ${t.textSub}`}>Signal quality</div>
+                                <div className={`text-lg font-black leading-5 tabular-nums ${activeRtkStatus.text}`}>{rtkQuality}%</div>
                             </div>
-                            <div className={`mt-3 text-xs font-bold ${t.textSub}`}>Base reference: {currentGnssTelemetry.baseVisibleSats} sats</div>
+                            <div
+                                role="progressbar"
+                                aria-label="RTK signal quality"
+                                aria-valuemin="0"
+                                aria-valuemax="100"
+                                aria-valuenow={rtkQuality}
+                                className={`mt-2 h-2 overflow-hidden rounded-full ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-200'}`}
+                            >
+                                <span className={`block h-full rounded-full ${activeRtkStatus.bar}`} style={{ width: `${rtkQuality}%` }} />
+                            </div>
+                            <div className={`mt-1 text-[10px] leading-3 ${t.textSub}`}>{activeRtkStatus.detail}</div>
                         </div>
 
-                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                            <SettingsMetric label="H Accuracy" value={`${currentGnssTelemetry.horizontalAccuracyCm.toFixed(1)} cm`} tone={currentGnssTelemetry.horizontalAccuracyCm <= 5 ? 'text-green-500' : 'text-yellow-500'} />
-                            <SettingsMetric label="V Accuracy" value={`${currentGnssTelemetry.verticalAccuracyCm.toFixed(1)} cm`} tone={currentGnssTelemetry.verticalAccuracyCm <= 8 ? 'text-green-500' : 'text-yellow-500'} />
-                            <SettingsMetric label="Correction Age" value={`${currentGnssTelemetry.correctionAgeSec.toFixed(1)} s`} />
-                            <SettingsMetric label="Baseline" value={`${currentGnssTelemetry.baselineKm.toFixed(1)} km`} />
-                            <SettingsMetric label="HDOP" value={currentRtkTelemetry.hdop.toFixed(1)} tone={currentRtkTelemetry.hdop <= 1.2 ? 'text-green-500' : 'text-yellow-500'} />
-                            <SettingsMetric label="PDOP" value={currentRtkTelemetry.pdop.toFixed(1)} tone={currentRtkTelemetry.pdop <= 2.0 ? 'text-green-500' : 'text-yellow-500'} />
-                            <SettingsMetric label="Latency" value={`${currentRtkTelemetry.latencyMs} ms`} tone={currentRtkTelemetry.latencyMs <= 100 ? 'text-green-500' : 'text-yellow-500'} />
-                            <SettingsMetric label="Antenna" value={currentGnssTelemetry.antenna === 'Rover roof' ? 'Roof' : currentGnssTelemetry.antenna} />
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <ConfigTile icon={Globe} label="Constellation" value={currentGnssTelemetry.constellations} />
-                        <ConfigTile icon={Radio} label="Correction Source" value={sourceModes.find(mode => mode.id === rtkMode)?.label || 'Local Base'} />
-                        <ConfigTile icon={LocateFixed} label="Base Source" value={currentRtkTelemetry.baseSource} />
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                        {rtkSummaryMetrics.map((item) => (
+                            <dl
+                                key={item.label}
+                                data-rtk-tile={item.label}
+                                className={`flex h-[72px] min-w-0 flex-col justify-center rounded-xl border px-3 py-2 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50/80'}`}
+                            >
+                                <dt className={`text-[10px] font-bold leading-3 ${t.textSub}`}>{item.label}</dt>
+                                <dd className={`break-words text-base font-black leading-6 tabular-nums ${item.tone || t.textMain}`}>{item.value}</dd>
+                            </dl>
+                        ))}
+
                         {constellationStats.map((item) => (
-                            <div key={item.label} className={`rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'} p-3`}>
-                                <div className={`text-[10px] uppercase font-black ${t.textSub}`}>{item.label}</div>
-                                <div className={`text-xl font-black ${t.textMain}`}>{Math.min(item.used, item.visible)}/{item.visible}</div>
-                                <div className={`text-[10px] uppercase font-black ${t.textSub}`}>used / visible</div>
-                            </div>
+                            <dl
+                                key={item.label}
+                                data-rtk-tile={item.label}
+                                aria-label={`${item.label}, ${Math.min(item.used, item.visible)} used of ${item.visible} visible satellites`}
+                                className={`flex h-[72px] min-w-0 flex-col justify-center rounded-xl border px-3 py-2 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50/80'}`}
+                            >
+                                <dt className={`text-[10px] font-bold leading-3 ${t.textSub}`}>{item.label}</dt>
+                                <dd className={`text-base font-black leading-6 tabular-nums ${t.textMain}`}>
+                                    {Math.min(item.used, item.visible)} <span className={t.textDim}>/</span> {item.visible}
+                                </dd>
+                                <dd className={`text-[10px] leading-3 ${t.textSub}`}>Used / visible</dd>
+                            </dl>
                         ))}
                     </div>
-                    <div className={`rounded-xl border ${t.borderCard} ${t.bgInput} p-4 flex flex-wrap items-center justify-between gap-3`}>
-                        <div className="min-w-0">
-                            <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Status Rule</div>
-                            <div className={`font-black ${t.textMain}`}>FIX requires RTK correction age under 2s and HDOP under 1.2.</div>
-                        </div>
-                        <div className={`text-sm font-bold ${t.textSub}`}>Header shows visible rover/base sats as {currentGnssTelemetry.roverVisibleSats}/{currentGnssTelemetry.baseVisibleSats}.</div>
-                    </div>
-                </SettingsSection>
+                </section>
 
                 {rtkMode === 'NTRIP' && (
                     <SettingsSection
@@ -9062,14 +9197,6 @@ const App = () => {
                     </SettingsSection>
                 )}
 
-                <SettingsSection title="Correction Link Health" detail="Compact correction input health for the selected RTK workflow." icon={Activity}>
-                    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-                        <SettingsMetric label="Link" value={rtkLabel} tone={rtkBadge} />
-                        <SettingsMetric label="Correction Age" value={`${currentRtkTelemetry.ageSec.toFixed(1)}s`} />
-                        <SettingsMetric label="Latency" value={`${currentRtkTelemetry.latencyMs}ms`} />
-                        <SettingsMetric label="Baseline" value={rtkMode === 'BASE' ? 'Local base' : `${currentGnssTelemetry.baselineKm.toFixed(1)} km`} />
-                    </div>
-                </SettingsSection>
               </div>
             );
         }
