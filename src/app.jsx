@@ -111,10 +111,8 @@ const App = () => {
   const [rtkStatus, setRtkStatus] = useState('FIX');
   const [crossTrackError, setCrossTrackError] = useState(0.0);
 
-  // ACTION DOCK STATES
+  // ACTION DOCK STATE
   const [isCreating, setIsCreating] = useState(false);
-  // false | 'line' | 'nudge' | 'tools'. The dock stays compact; panels overlay the map when requested.
-  const [dockMenuOpen, setDockMenuOpen] = useState(false);
 
   // Driving & Physics
   const [speed, setSpeed] = useState(0);
@@ -181,12 +179,26 @@ const App = () => {
       }
   };
   const savedUiLocalState = readUiLocalState();
-  const [calibrationStatus, setCalibrationStatus] = useState(() => ({
-      vehicle: 'OK',
-      implement: 'Needs Check',
-      angle: 'OK',
-      ...(savedUiLocalState.calibrationStatus || {})
-  }));
+  const [calibrationStatus, setCalibrationStatus] = useState(() => {
+      const savedCalibration = savedUiLocalState.calibrationStatus || {};
+      const vehicle = savedCalibration.vehicle || 'OK';
+      const implement = savedCalibration.implement || 'Needs Check';
+      const vehicleProfileId = activeVehicleSettings.profileId || activeVehicleSettings.type;
+      const implementProfileId = activeImplementSettings.profileId || activeImplementSettings.name;
+      return {
+          vehicle,
+          implement,
+          angle: savedCalibration.angle || 'OK',
+          ...savedCalibration,
+          vehicleProfileId: savedCalibration.vehicleProfileId ?? (vehicle === 'OK' ? vehicleProfileId : null),
+          implementProfileId: savedCalibration.implementProfileId ?? (implement === 'OK' ? implementProfileId : null),
+          implementVehicleProfileId: savedCalibration.implementVehicleProfileId ?? (implement === 'OK' ? vehicleProfileId : null)
+      };
+  });
+  const [calibrationWizard, setCalibrationWizard] = useState({
+      scope: null,
+      step: 0
+  });
 
   // NEW: Locked Lane Index for Auto Steer
   const activeLaneRef = useRef(null);
@@ -232,6 +244,12 @@ const App = () => {
   const [eventHistoryOpen, setEventHistoryOpen] = useState(false);
   const [productivityOpen, setProductivityOpen] = useState(false);
   const [uTurnPanelOpen, setUTurnPanelOpen] = useState(false);
+
+  useEffect(() => {
+      if (!settingsOpen || settingsTab !== 'calibration') {
+          setCalibrationWizard(prev => prev.scope ? { scope: null, step: 0 } : prev);
+      }
+  }, [settingsOpen, settingsTab]);
 
   useEffect(() => {
       if (!settingsOpen || settingsTab !== 'vehicle') {
@@ -283,27 +301,6 @@ const App = () => {
   const [currentTime, setCurrentTime] = useState('');
   const setupOverlayOpen = menuOpen || settingsOpen || cameraPanelOpen || diagnosticsPanelOpen || linesPanelOpen || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || manualHeadingModalOpen || boundaryAlertOpen || deleteModalOpen || (fieldManagerOpen && !isRecordingBoundary);
   const runDockSuppressed = setupOverlayOpen || rtkQualityOpen || eventHistoryOpen || productivityOpen || uTurnPanelOpen;
-
-  useEffect(() => {
-      if (!dockMenuOpen) return;
-      const shouldCloseDockTools = isCreating
-           || isRecordingBoundary
-           || uTurnPanelOpen
-           || rtkQualityOpen
-           || eventHistoryOpen
-           || productivityOpen
-           || menuOpen
-          || settingsOpen
-          || fieldManagerOpen
-          || linesPanelOpen
-          || lineModeModalOpen
-          || lineNameModalOpen
-          || boundaryNameModalOpen
-          || manualHeadingModalOpen
-          || boundaryAlertOpen
-          || deleteModalOpen;
-      if (shouldCloseDockTools) setDockMenuOpen(false);
-  }, [dockMenuOpen, isCreating, isRecordingBoundary, uTurnPanelOpen, rtkQualityOpen, eventHistoryOpen, productivityOpen, menuOpen, settingsOpen, fieldManagerOpen, linesPanelOpen, lineModeModalOpen, lineNameModalOpen, boundaryNameModalOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen]);
 
   useEffect(() => {
       const mapCanvas = mapCanvasRef.current;
@@ -710,10 +707,6 @@ const App = () => {
   // --- 2. INPUT ---
   useEffect(() => {
     const handleKeyDown = (e) => {
-        if (e.key === 'Escape' && dockMenuOpen) {
-            setDockMenuOpen(false);
-            return;
-        }
         const focusedControl = e.target?.closest?.('input, textarea, select, [contenteditable="true"]');
         const dockButtonActivation = e.target?.closest?.('[data-run-dock] button') && (e.key === ' ' || e.key === 'Enter');
         if (focusedControl || dockButtonActivation) return;
@@ -729,7 +722,7 @@ const App = () => {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
-  }, [dockMenuOpen, menuOpen, settingsOpen, cameraPanelOpen, diagnosticsPanelOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen]);
+  }, [menuOpen, settingsOpen, cameraPanelOpen, diagnosticsPanelOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen]);
 
   // --- 3. PHYSICS ---
   useEffect(() => {
@@ -1095,9 +1088,8 @@ const App = () => {
         }
         manualLaneRef.current = null;
 
-        // 1b. Close Action Dock & Stop Creating
+        // 1b. Stop any line-creation workflow before engaging
         setIsCreating(false);
-        setDockMenuOpen(false);
 
         showNotification("Auto Steer ENGAGED", "success");
     } else {
@@ -1124,6 +1116,19 @@ const App = () => {
 
   const toggleFeatureSetting = (key) => {
       setFeatureSettings(prev => ({ ...prev, [key]: !prev[key] }));
+      if (key === 'angleSensorEnabled') {
+          setCalibrationStatus(prev => ({
+              ...prev,
+              vehicle: 'Needs Check',
+              implement: 'Needs Check',
+              angle: 'Needs Check',
+              vehicleUpdatedAt: null,
+              implementUpdatedAt: null,
+              vehicleProfileId: null,
+              implementProfileId: null,
+              implementVehicleProfileId: null
+          }));
+      }
   };
 
   const handleFactoryReset = () => {
@@ -1164,7 +1169,6 @@ const App = () => {
       };
       setWorkedArea(0);
       setIsCreating(false);
-      setDockMenuOpen(false);
       setFieldManagerOpen(false);
       setLinesPanelOpen(false);
       setLineModeModalOpen(false);
@@ -1181,7 +1185,17 @@ const App = () => {
       setSettingsTab('overview');
       setRtkTestState('idle');
       setBaseSurveyState('idle');
-      setCalibrationStatus({ vehicle: 'OK', implement: 'Needs Check', angle: 'OK' });
+      setCalibrationStatus({
+          vehicle: 'Needs Check',
+          implement: 'Needs Check',
+          angle: 'Needs Check',
+          vehicleUpdatedAt: null,
+          implementUpdatedAt: null,
+          vehicleProfileId: null,
+          implementProfileId: null,
+          implementVehicleProfileId: null
+      });
+      setCalibrationWizard({ scope: null, step: 0 });
       activeLaneRef.current = null;
       manualLaneRef.current = null;
       bootstrappedLineRef.current = false;
@@ -1230,7 +1244,6 @@ const App = () => {
       setSettingsOpen(false);
       setFieldManagerOpen(false);
       setLinesPanelOpen(false);
-      setDockMenuOpen(false);
       setUTurnPanelOpen(false);
       actions.setViewMode('LIST');
   };
@@ -1242,7 +1255,6 @@ const App = () => {
       setFieldManagerOpen(true);
       setSettingsOpen(false);
       setLinesPanelOpen(false);
-      setDockMenuOpen(false);
       setUTurnPanelOpen(false);
   };
   const openLinesCatalog = () => {
@@ -1250,7 +1262,6 @@ const App = () => {
       setLinesPanelOpen(true);
       setFieldManagerOpen(false);
       setSettingsOpen(false);
-      setDockMenuOpen(false);
       setUTurnPanelOpen(false);
       actions.setViewMode('LIST');
   };
@@ -1259,7 +1270,6 @@ const App = () => {
       setSettingsOpen(true);
       setFieldManagerOpen(false);
       setLinesPanelOpen(false);
-      setDockMenuOpen(false);
       setUTurnPanelOpen(false);
   };
   const openWifiPanel = () => {
@@ -1268,7 +1278,6 @@ const App = () => {
   };
 
   const handleMapPointerDown = (e) => {
-      if (dockMenuOpen && !isCreating) setDockMenuOpen(false);
       setIsDraggingMap(false);
   };
   const handleMapPointerMove = (e) => {
@@ -1278,12 +1287,11 @@ const App = () => {
       setIsDraggingMap(false);
   };
 
-  const resetLines = () => { actions.setPointA(null); actions.setPointB(null); actions.setAPlusPoint(null); actions.setAPlusHeading(null); actions.setCurvePoints([]); actions.setIsRecordingCurve(false); actions.setPivotCenter(null); actions.setPivotRadius(null); actions.setGuidanceLine(null); actions.setActiveLineId(null); setIsCombinationPaused(false); };
+  const resetLines = () => { actions.setPointA(null); actions.setPointB(null); actions.setAPlusPoint(null); actions.setAPlusHeading(null); actions.setCurvePoints([]); actions.setIsRecordingCurve(false); actions.setPivotCenter(null); actions.setPivotRadius(null); actions.setGuidanceLine(null); actions.setActiveLineId(null); actions.setManualOffset(0); setIsCombinationPaused(false); };
 
   const cancelLineCreation = () => {
       resetLines();
       setIsCreating(false); // EXIT CREATION MODE
-      setDockMenuOpen(false);
       showNotification("Creation Cancelled", "info");
   };
 
@@ -1403,11 +1411,11 @@ const App = () => {
       actions.setPivotCenter(line.points.pivot?.center);
       actions.setPivotRadius(line.points.pivot?.radius);
       actions.setGuidanceLine(line.type);
-    actions.setShowGuidanceLines(true);
+      actions.setManualOffset(0);
+      actions.setShowGuidanceLines(true);
       if (line.isMulti !== undefined) actions.setIsMultiLineMode(line.isMulti);
       setLinesPanelOpen(false);
       setIsCreating(false);
-      setDockMenuOpen(false);
       setLineModeModalOpen(false);
       showNotification(`Loaded Line: ${line.name}`, "success");
   };
@@ -1463,7 +1471,6 @@ const App = () => {
 
   const finishGuidanceLineCreation = (message = "Line ready. Engage autosteer when aligned.") => {
       setIsCreating(false);
-      setDockMenuOpen(false);
       setLineModeModalOpen(false);
       showNotification(message, "success");
   };
@@ -1473,7 +1480,6 @@ const App = () => {
       resetLines();
       actions.setShowGuidanceLines(true);
       setIsCreating(true);
-      setDockMenuOpen(false);
       setLineModeModalOpen(false);
       showNotification("Straight AB: Set A, drive, set B", "info");
   };
@@ -1503,7 +1509,6 @@ const App = () => {
     actions.setFields(prev => prev.map(f => { if (f.id === selectedFieldId) { return { ...f, lines: [...(f.lines || []), newLine] }; } return f; }));
     setLineNameModalOpen(false); setTempLineName(''); actions.setActiveLineId(newLine.id); setSelectedCatalogLineId(newLine.id);
     setIsCreating(false); // Stop creating
-    setDockMenuOpen(false);
     showNotification("Line Saved Successfully", "success");
     if (loadedField && loadedField.id === selectedFieldId) { actions.setLoadedField(prev => ({ ...prev, lines: [...(prev.lines || []), newLine] })); }
   };
@@ -1605,14 +1610,12 @@ const App = () => {
       // Reset logic but keep mode
       resetLines();
       setIsCreating(true);
-      setDockMenuOpen(false); // Close menu when creating starts
       showNotification(`Mode Changed: ${type.replace('_', ' ')}`, "info");
   };
 
   const startBoundaryCreation = () => {
      boundaryCaptureContextRef.current = { reopenFieldManager: fieldManagerOpen };
      setFieldManagerOpen(false);
-     setDockMenuOpen(false); // Close menu
      setRtkQualityOpen(false);
      setEventHistoryOpen(false);
      setProductivityOpen(false);
@@ -1776,7 +1779,6 @@ const App = () => {
       setTempBoundaryName('');
       actions.setIsRecordingBoundary(false);
       setBoundaryCaptureReady(false);
-      setDockMenuOpen(false);
       if (boundaryCaptureContextRef.current.reopenFieldManager) {
           setFieldManagerOpen(true);
       }
@@ -1792,7 +1794,6 @@ const App = () => {
     setManualTargetSpeed(0);
     actions.setTempBoundary([]);
     setPreviewBoundary(null);
-    setDockMenuOpen(false);
     if (shouldReopenFieldManager) {
         setFieldManagerOpen(true);
     }
@@ -2089,7 +2090,6 @@ const App = () => {
               ? Route
               : SteeringWheelIcon;
   const handleAutosteerPrimary = () => {
-      setDockMenuOpen(false);
       if (isRecordingBoundary || boundaryCaptureReady || isCreating) {
           showNotification(
               isRecordingBoundary
@@ -2114,7 +2114,7 @@ const App = () => {
           setEventHistoryOpen(false);
           setProductivityOpen(false);
           setUTurnPanelOpen(false);
-          setDockMenuOpen('line');
+          openLinesCatalog();
           showNotification('Select or create a guidance line', 'info');
           return;
       }
@@ -4321,9 +4321,6 @@ const App = () => {
       const dockSurface = isDarkDock
           ? 'bg-slate-950/90 border-slate-700/90 shadow-black/40'
           : 'bg-white/90 border-slate-200 shadow-slate-900/15';
-      const drawerSurface = isDarkDock
-          ? 'bg-slate-950/95 border-slate-700 shadow-black/40'
-          : 'bg-white/95 border-slate-200 shadow-slate-900/20';
       const solidTone = {
           blue: 'bg-blue-600 text-white shadow-md shadow-blue-900/20 hover:bg-blue-500',
           green: 'bg-green-600 text-white shadow-md shadow-green-900/20 hover:bg-green-500',
@@ -4361,7 +4358,7 @@ const App = () => {
       const renderShell = ({ status, tone = 'gray', children }) => (
           <section
               aria-label={`${status} contextual controls`}
-              className={`pointer-events-auto w-[140px] xl:w-[148px] max-h-full overflow-y-auto rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl p-2 flex flex-col items-center gap-2 select-none shadow-xl`}
+              className={`pointer-events-auto w-[176px] xl:w-[180px] max-h-full overflow-y-auto rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl p-2 flex flex-col items-center gap-2 select-none shadow-xl`}
               onPointerDown={stopDockPointer}
               onPointerMove={stopDockPointer}
               onPointerUp={stopDockPointer}
@@ -4423,280 +4420,122 @@ const App = () => {
       );
       const compactStatus = (value) => String(value || '').replace(/_/g, ' ');
       const offsetCm = manualOffset / PIXELS_PER_METER * 100;
-      const activeGuideName = activeLineRecord?.name || (hasGuidanceToEngage ? compactStatus(guidanceLine || lineType) : 'No guidance line');
-      const guidanceBadge = autosteerReady
-          ? { label: 'READY', className: 'bg-blue-600 text-white' }
-          : currentRunStatus.overrideDetected
-              ? { label: 'OVERRIDE', className: 'bg-orange-500 text-white' }
-              : rtkStatus !== 'FIX'
-              ? { label: rtkStatus, className: 'bg-orange-500 text-white' }
-                  : { label: 'BLOCKED', className: 'bg-orange-500 text-white' };
-      const toggleDockPanel = (panel) => {
-          setRtkQualityOpen(false);
-          setEventHistoryOpen(false);
-          setProductivityOpen(false);
-          setUTurnPanelOpen(false);
-          setDockMenuOpen(open => open === panel ? false : panel);
-      };
-      const openUTurnSetup = () => {
-          setDockMenuOpen(false);
-          setUTurnPanelOpen(true);
-      };
-      const openLinesLibrary = () => openLinesCatalog();
-      const openLineTypePicker = () => {
-          setDockMenuOpen(false);
-          setLinesPanelOpen(false);
-          setFieldManagerOpen(false);
-          setUTurnPanelOpen(false);
-          setLineModeModalOpen(true);
-      };
-      const drawerTone = {
-          blue: isDarkDock ? 'border-blue-500/30 bg-blue-500/10 text-blue-300' : 'border-blue-200 bg-blue-50 text-blue-700',
-          orange: isDarkDock ? 'border-orange-500/30 bg-orange-500/10 text-orange-300' : 'border-orange-200 bg-orange-50 text-orange-700',
-          gray: isDarkDock ? 'border-slate-700 bg-slate-900/70 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-800'
-      };
       const railDivider = isDarkDock ? 'border-slate-800' : 'border-slate-200';
-      const renderDrawerShell = ({ icon: Icon, title, subtitle, children }) => (
+      const zoomPercent = Math.round(zoomLevel / DEFAULT_MAP_ZOOM * 100);
+      const runtimeSection = isDarkDock
+          ? 'border-slate-800 bg-slate-900/75'
+          : 'border-slate-200 bg-slate-50/90';
+      const runtimeButton = isDarkDock
+          ? 'border-slate-700 bg-slate-950 text-slate-100 hover:bg-slate-800'
+          : 'border-slate-200 bg-white text-slate-700 hover:bg-blue-50';
+      const renderRuntimeDock = () => (
           <section
-              className={`pointer-events-auto w-[272px] xl:w-[320px] max-h-full overflow-y-auto rounded-2xl border ${drawerSurface} backdrop-blur-xl shadow-2xl`}
+              aria-label="Quick runtime adjustments"
+              className={`pointer-events-auto w-[176px] xl:w-[180px] overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none`}
               onPointerDown={stopDockPointer}
               onPointerMove={stopDockPointer}
               onPointerUp={stopDockPointer}
               onClick={stopDockPointer}
           >
-              <div className={`sticky top-0 z-10 px-4 py-3 border-b ${t.divider} ${isDarkDock ? 'bg-slate-950/95' : 'bg-white/95'} backdrop-blur-xl flex items-center gap-3`}>
-                  <div className={`w-10 h-10 rounded-xl ${isDarkDock ? 'bg-blue-500/15 text-blue-300' : 'bg-blue-50 text-blue-600'} flex items-center justify-center`}>
-                      <Icon className="w-5 h-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                      <div className={`text-sm font-black ${t.textMain}`}>{title}</div>
-                      <div className={`text-xs ${t.textSub} truncate`}>{subtitle}</div>
-                  </div>
-                  <button type="button" aria-label={`Close ${title}`} onClick={runDockAction(() => setDockMenuOpen(false))} className={`w-9 h-9 rounded-lg border ${t.borderCard} ${t.textMain} flex items-center justify-center hover:brightness-95`}>
-                      <X className="w-4 h-4" />
-                  </button>
+              <div className={`h-10 border-b ${railDivider} px-3 flex items-center gap-2`}>
+                  <span className="h-4 w-1 rounded-full bg-blue-500" />
+                  <span className={`text-[10px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Quick adjust</span>
               </div>
-              <div className="p-4 space-y-3">{children}</div>
-          </section>
-      );
-      const renderDrawerAction = ({ icon: Icon, label, detail, onClick, tone = 'gray' }) => (
-          <button
-              type="button"
-              onClick={runDockAction(onClick)}
-              className={`w-full min-h-[58px] rounded-xl border ${drawerTone[tone] || drawerTone.gray} px-3 py-2.5 flex items-center gap-3 text-left active:scale-[0.99] transition focus:outline-none focus:ring-2 focus:ring-blue-500/40`}
-          >
-              <Icon className="w-5 h-5 shrink-0" />
-              <div className="min-w-0">
-                  <div className="text-[13px] font-black leading-tight">{label}</div>
-                  {detail && <div className={`mt-0.5 text-[11px] leading-tight ${t.textSub}`}>{detail}</div>}
-              </div>
-          </button>
-      );
-      const renderNudgeControls = () => (
-          <div className={`rounded-xl border ${t.borderCard} ${isDarkDock ? 'bg-slate-900/60' : 'bg-slate-50'} p-3`}>
-              <div className="flex items-center justify-between gap-3 mb-3">
-                  <div>
-                      <div className={`text-[11px] font-black uppercase ${t.textSub}`}>Guidance offset</div>
-                      <div className={`text-lg font-black ${Math.abs(offsetCm) > 0.05 ? 'text-blue-500' : t.textMain}`}>{offsetCm.toFixed(1)} cm</div>
-                  </div>
-                  <button type="button" onClick={runDockAction(() => actions.setManualOffset(0))} className={`h-9 px-3 rounded-lg border ${t.borderCard} ${t.textMain} text-xs font-black`}>Reset</button>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                  <button type="button" onClick={runDockAction(() => handleTrim('left'))} className={`h-14 rounded-xl border ${t.borderCard} ${t.textMain} font-black flex items-center justify-center gap-2 hover:bg-blue-500/10`}>
-                      <CornerUpLeft className="w-5 h-5 text-blue-500" /> -1 cm
-                  </button>
-                  <button type="button" onClick={runDockAction(() => handleTrim('right'))} className={`h-14 rounded-xl border ${t.borderCard} ${t.textMain} font-black flex items-center justify-center gap-2 hover:bg-blue-500/10`}>
-                      +1 cm <CornerUpRight className="w-5 h-5 text-blue-500" />
-                  </button>
-              </div>
-          </div>
-      );
-      const renderLinePanel = () => renderDrawerShell({
-          icon: Route,
-          title: 'Guidance Line',
-          subtitle: activeGuideName,
-          children: (
-              <>
-                  <div className={`rounded-xl border ${hasGuidanceToEngage ? drawerTone.blue : drawerTone.gray} p-3`}>
-                      <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                              <div className="text-[11px] font-black uppercase opacity-75">{hasGuidanceToEngage ? 'Current line' : 'Guidance required'}</div>
-                              <div className="mt-1 text-base font-black truncate">{activeGuideName}</div>
-                              <div className="mt-1 text-xs font-bold opacity-75">{hasGuidanceToEngage ? `${compactStatus(lineType)} / ${isMultiLineMode ? 'Parallel passes' : 'Single line'}` : 'Select a saved line or create a new one'}</div>
-                          </div>
-                          {hasGuidanceToEngage && <span className={`shrink-0 px-2 py-1 rounded-lg text-[10px] font-black ${guidanceBadge.className}`}>{guidanceBadge.label}</span>}
-                      </div>
-                  </div>
-                  {hasGuidanceToEngage ? (
-                      <div className="grid grid-cols-2 gap-2">
-                          {renderDrawerAction({ icon: ArrowLeftRight, label: 'Adjust Offset', detail: `${offsetCm.toFixed(1)} cm`, onClick: () => toggleDockPanel('nudge') })}
-                          {renderDrawerAction({ icon: MoreHorizontal, label: 'Run Tools', detail: 'Map and setup', onClick: () => toggleDockPanel('tools') })}
-                      </div>
-                  ) : renderDrawerAction({ icon: MoreHorizontal, label: 'Run Tools', detail: 'Map visibility, zoom and setup', onClick: () => toggleDockPanel('tools') })}
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
-                      {renderDrawerAction({ icon: FolderOpen, label: 'Line Library', detail: 'Load saved guidance', onClick: openLinesLibrary })}
-                      {renderDrawerAction({ icon: GitCommitHorizontal, label: 'New Line', detail: 'Choose line type', tone: 'blue', onClick: openLineTypePicker })}
-                  </div>
-                  {renderDrawerAction({ icon: Route, label: 'Create Straight AB', detail: 'Set point A, drive, then set point B', tone: 'blue', onClick: startStraightABCreation })}
-                  {!activeLineId && hasGuidanceToEngage && renderDrawerAction({ icon: Save, label: 'Save Current Line', detail: 'Store this guidance line in the active field', onClick: openSaveLineModal })}
-              </>
-          )
-      });
-      const renderNudgePanel = () => renderDrawerShell({
-          icon: ArrowLeftRight,
-          title: 'Nudge Guidance',
-          subtitle: activeGuideName,
-          children: (
-              <>
-                  <div className={`rounded-xl border ${drawerTone.blue} p-3`}>
-                      <div className="text-[11px] font-black uppercase opacity-75">Active guidance</div>
-                      <div className="mt-1 text-base font-black truncate">{activeGuideName}</div>
-                      <div className="mt-1 text-xs font-bold opacity-75">Move the active pass without changing the saved line</div>
-                  </div>
-                  {renderNudgeControls()}
-              </>
-          )
-      });
-      const renderToolsPanel = () => renderDrawerShell({
-          icon: MoreHorizontal,
-          title: 'Map & Run Tools',
-          subtitle: 'Secondary controls stay out of the main canvas',
-          children: (
-                  <>
-                  <div className={`text-[11px] font-black uppercase ${t.textSub}`}>Map presentation</div>
-                  {renderDrawerAction({ icon: showGuidanceLines ? EyeOff : Eye, label: showGuidanceLines ? 'Hide Lines' : 'Show Lines', onClick: () => actions.setShowGuidanceLines(!showGuidanceLines) })}
-                  <div className={`rounded-xl border ${t.borderCard} ${isDarkDock ? 'bg-slate-900/60' : 'bg-slate-50'} p-3`}>
-                      <div className="mb-2.5 flex items-center justify-between gap-3">
-                          <div>
-                              <div className={`text-[11px] font-black uppercase ${t.textSub}`}>Map scale</div>
-                              <div className={`mt-0.5 text-xs font-bold ${t.textMain}`}>{isMap3D ? 'Perspective view' : 'Top-down view'}</div>
-                          </div>
-                          <span className="rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-black text-white">
-                              {Math.round(zoomLevel / DEFAULT_MAP_ZOOM * 100)}%
+
+              <div className="space-y-2 p-2">
+                  <div className={`rounded-xl border ${runtimeSection} p-2`}>
+                      <div className="mb-2 flex h-10 items-center justify-between gap-2 px-1">
+                          <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Nudge</span>
+                          <span aria-live="polite" className={`min-w-[66px] text-right text-sm font-black tabular-nums ${hasGuidanceToEngage && Math.abs(offsetCm) > 0.05 ? 'text-blue-500' : t.textMain}`}>
+                              {hasGuidanceToEngage ? `${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(1)} cm` : 'No line'}
                           </span>
                       </div>
-                      <div className="grid grid-cols-[1fr_1.35fr_1fr] gap-2">
+                      <div className="grid grid-cols-3 gap-1.5">
                           <button
                               type="button"
-                              aria-label="Zoom Out"
+                              aria-label="Nudge guidance left 1 centimeter"
+                              disabled={!hasGuidanceToEngage}
+                              onClick={runDockAction(() => handleTrim('left'))}
+                              className={`h-12 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
+                          >
+                              <Minus className="h-4 w-4 text-blue-500" />
+                              <span className="text-[9px] font-black">1 CM</span>
+                          </button>
+                          <button
+                              type="button"
+                              aria-label="Reset guidance offset to zero"
+                              disabled={!hasGuidanceToEngage || Math.abs(offsetCm) <= 0.05}
+                              onClick={runDockAction(() => actions.setManualOffset(0))}
+                              className={`h-12 rounded-lg border flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35 ${Math.abs(offsetCm) > 0.05 ? 'border-blue-500/40 bg-blue-500/10 text-blue-500' : runtimeButton}`}
+                          >
+                              <RotateCcw className="h-4 w-4" />
+                              <span className="text-[9px] font-black">ZERO</span>
+                          </button>
+                          <button
+                              type="button"
+                              aria-label="Nudge guidance right 1 centimeter"
+                              disabled={!hasGuidanceToEngage}
+                              onClick={runDockAction(() => handleTrim('right'))}
+                              className={`h-12 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
+                          >
+                              <Plus className="h-4 w-4 text-blue-500" />
+                              <span className="text-[9px] font-black">1 CM</span>
+                          </button>
+                      </div>
+                  </div>
+
+                  <div className={`rounded-xl border ${runtimeSection} p-2`}>
+                      <div className="mb-2 flex h-8 items-center justify-between gap-2 px-1">
+                          <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>View</span>
+                          <div className="flex items-center gap-1.5">
+                              <span aria-live="polite" className={`text-xs font-black tabular-nums ${t.textMain}`}>{zoomPercent}%</span>
+                              <button
+                                  type="button"
+                                  aria-label="Guidance lines"
+                                  aria-pressed={showGuidanceLines}
+                                  onClick={runDockAction(() => actions.setShowGuidanceLines(!showGuidanceLines))}
+                                   className={`h-11 w-11 rounded-lg border flex items-center justify-center ${showGuidanceLines ? 'border-blue-600 bg-blue-600 text-white' : runtimeButton}`}
+                              >
+                                  {showGuidanceLines ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                              </button>
+                          </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1.5">
+                          <button
+                              type="button"
+                              aria-label="Zoom out"
                               disabled={zoomLevel <= MIN_MAP_ZOOM}
                               onClick={runDockAction(() => handleZoom('out'))}
-                              className={`h-11 rounded-lg border ${t.borderCard} ${t.textMain} flex items-center justify-center disabled:opacity-35 disabled:cursor-not-allowed hover:bg-blue-500/10`}
+                              className={`h-12 rounded-lg border ${runtimeButton} flex items-center justify-center active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
                           >
                               <Minus className="h-5 w-5" />
                           </button>
                           <button
                               type="button"
-                              aria-label="Reset Zoom"
+                              aria-label="Reset map zoom"
+                              disabled={Math.abs(zoomLevel - DEFAULT_MAP_ZOOM) < 0.01}
                               onClick={runDockAction(() => handleZoom('reset'))}
-                              className={`h-11 rounded-lg border ${t.borderCard} ${t.textMain} text-[11px] font-black hover:bg-blue-500/10`}
+                              className={`h-12 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-default disabled:opacity-45`}
                           >
-                              RESET
+                              <RotateCcw className="h-4 w-4" />
+                              <span className="text-[9px] font-black">100%</span>
                           </button>
                           <button
                               type="button"
-                              aria-label="Zoom In"
+                              aria-label="Zoom in"
                               disabled={zoomLevel >= MAX_MAP_ZOOM}
                               onClick={runDockAction(() => handleZoom('in'))}
-                              className={`h-11 rounded-lg border ${t.borderCard} ${t.textMain} flex items-center justify-center disabled:opacity-35 disabled:cursor-not-allowed hover:bg-blue-500/10`}
+                              className={`h-12 rounded-lg border ${runtimeButton} flex items-center justify-center active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
                           >
                               <Plus className="h-5 w-5" />
                           </button>
                       </div>
                   </div>
-                  {renderDrawerAction({ icon: Crosshair, label: 'Center Vehicle', detail: 'Return the map to the live vehicle position', onClick: handleRecenter })}
-                  <div className={`pt-1 text-[11px] font-black uppercase ${t.textSub}`}>Run setup</div>
-                  <div className="grid grid-cols-2 gap-2">
-                      {renderDrawerAction({ icon: MapPin, label: 'Record Boundary', detail: 'Drive the field edge', tone: 'orange', onClick: startBoundaryCreation })}
-                      {renderDrawerAction({ icon: Settings, label: 'U-Turn Plan', detail: 'Pattern and next pass', onClick: openUTurnSetup })}
-                  </div>
-              </>
-          )
-      });
-      const renderActionRail = () => {
-          const offsetLabel = `${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(0)} cm`;
-          const railItems = [
-              {
-                  id: 'line',
-                  icon: Route,
-                  label: 'Guidance',
-                  detail: hasGuidanceToEngage ? activeGuideName : 'Create / load',
-                  disabled: false
-              },
-              {
-                  id: 'nudge',
-                  icon: ArrowLeftRight,
-                  label: 'Nudge',
-                  detail: hasGuidanceToEngage ? offsetLabel : 'No line',
-                  disabled: !hasGuidanceToEngage
-              },
-              {
-                  id: 'tools',
-                  icon: MapIcon,
-                  label: 'Map',
-                  detail: 'View / setup',
-                  disabled: false
-              }
-          ];
-
-          return (
-              <section
-                  aria-label="Run action dock"
-                  className={`pointer-events-auto w-[184px] xl:w-[196px] rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl p-2 shadow-xl select-none`}
-                  onPointerDown={stopDockPointer}
-                  onPointerMove={stopDockPointer}
-                  onPointerUp={stopDockPointer}
-                  onClick={stopDockPointer}
-              >
-                  <div className={`h-9 px-1.5 flex items-center justify-start gap-2 text-[10px] font-black uppercase tracking-wider ${t.textSub}`}>
-                      <span className="w-1 h-4 rounded-full bg-blue-500" />
-                      Run controls
-                  </div>
-                  <div className="space-y-1">
-                      {railItems.map(({ id, icon: Icon, label, detail, disabled }) => {
-                          const active = dockMenuOpen === id;
-                          return (
-                              <button
-                                  key={id}
-                                  type="button"
-                                  title={`${label}: ${detail}`}
-                                  aria-label={`${label} actions: ${detail}`}
-                                  aria-expanded={active}
-                                  disabled={disabled}
-                                  onClick={runDockAction(() => toggleDockPanel(id))}
-                                  className={`w-full min-h-[58px] rounded-xl px-2.5 flex items-center gap-2.5 text-left transition-all focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/50 disabled:opacity-45 disabled:cursor-not-allowed ${
-                                      active
-                                          ? 'bg-blue-600 text-white shadow-md shadow-blue-900/20'
-                                          : `${isDarkDock ? 'bg-slate-900/45 text-slate-200 hover:bg-slate-800' : 'bg-slate-50/85 text-slate-700 hover:bg-blue-50'}`
-                                  }`}
-                              >
-                                  <span className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${
-                                      active
-                                          ? 'bg-white/15 text-white'
-                                          : isDarkDock ? 'bg-slate-800 text-blue-300' : 'bg-blue-50 text-blue-600'
-                                  }`}>
-                                      <Icon className="w-[18px] h-[18px]" />
-                                  </span>
-                                  <span className="min-w-0 flex-1">
-                                      <span className="block text-[11px] font-black uppercase leading-tight truncate">{label}</span>
-                                      <span className="block mt-0.5 text-[9px] font-bold leading-tight opacity-70 truncate">{detail}</span>
-                                  </span>
-                              </button>
-                          );
-                      })}
-                  </div>
-              </section>
-          );
-      };
-      const renderContextDrawer = () => {
-          if (dockMenuOpen === 'line') return renderLinePanel();
-          if (dockMenuOpen === 'nudge') return renderNudgePanel();
-          if (dockMenuOpen === 'tools') return renderToolsPanel();
-          return null;
-      };
-      const renderDockLayout = (dock) => (
-          <div className="h-full max-h-full flex items-start gap-2 pointer-events-none">
-              {renderContextDrawer()}
+              </div>
+          </section>
+      );
+      const renderDockLayout = (dock, centered = false) => (
+          <div className={`h-full max-h-full flex ${centered ? 'items-center' : 'items-start'} pointer-events-none`}>
               {dock}
           </div>
       );
@@ -4711,7 +4550,7 @@ const App = () => {
           return (
               <section
                   aria-label={`${recording ? 'Boundary recording' : 'Boundary ready'} contextual controls`}
-                  className={`pointer-events-auto w-[184px] xl:w-[196px] overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl shadow-xl select-none`}
+                  className={`pointer-events-auto w-[176px] xl:w-[180px] overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl shadow-xl select-none`}
                   onPointerDown={stopDockPointer}
                   onPointerMove={stopDockPointer}
                   onPointerUp={stopDockPointer}
@@ -4843,7 +4682,6 @@ const App = () => {
                           {renderStepLine([{ label: 'A', done: Boolean(pointA) }, { label: 'B', done: Boolean(pointB) }])}
                           {renderGrid(
                               <>
-                                  {renderTinyButton({ icon: GitCommitHorizontal, label: 'Type', onClick: openLineTypePicker })}
                                   {renderTinyButton({ icon: X, label: pointA && !pointB ? 'Reset' : 'Cancel', color: 'red', onClick: handleCancelAB })}
                               </>
                           )}
@@ -4858,7 +4696,6 @@ const App = () => {
                       primary = renderMainButton({ icon: Target, label: 'Set A', color: 'blue', onClick: handleSetAPlus_PointA });
                       content = renderGrid(
                           <>
-                              {renderTinyButton({ icon: GitCommitHorizontal, label: 'Type', onClick: openLineTypePicker })}
                               {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: cancelLineCreation })}
                           </>
                       );
@@ -4875,8 +4712,7 @@ const App = () => {
                                   <>
                                       {renderTinyButton({ icon: Keyboard, label: 'Input', onClick: () => { setManualHeadingModalOpen(true); setTempManualHeading(heading.toFixed(1)); } })}
                                       {renderTinyButton({ icon: RotateCcw, label: 'Reset', color: 'orange', onClick: () => { actions.setAPlusPoint({ ...worldPos }); actions.setAPlusHeading(null); showNotification('Point A Reset to Current Position', 'info'); } })}
-                                      {renderTinyButton({ icon: GitCommitHorizontal, label: 'Type', onClick: openLineTypePicker })}
-                                      {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: () => { actions.setAPlusPoint(null); actions.setAPlusHeading(null); } })}
+                                      {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: cancelLineCreation })}
                                   </>
                               )}
                           </>
@@ -4889,7 +4725,6 @@ const App = () => {
                   primary = renderMainButton({ icon: isRecordingCurve ? Disc : Spline, label: isRecordingCurve ? 'Stop' : 'Record', sub: `${curvePoints.length}`, color: isRecordingCurve ? 'red' : 'blue', onClick: handleRecordCurve, pulse: isRecordingCurve });
                   content = renderGrid(
                       <>
-                          {renderTinyButton({ icon: GitCommitHorizontal, label: 'Type', onClick: openLineTypePicker })}
                           {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: cancelLineCreation })}
                       </>
                   );
@@ -4902,7 +4737,6 @@ const App = () => {
                       <>
                           {curvePoints.length > 2 && renderTinyButton({ icon: Check, label: 'Finish', color: 'green', onClick: handleCombinationFinish })}
                           {isCombinationPaused && renderTinyButton({ icon: AlignJustify, label: 'Line', onClick: handleCombinationRecord })}
-                          {renderTinyButton({ icon: GitCommitHorizontal, label: 'Type', onClick: openLineTypePicker })}
                           {renderTinyButton({ icon: X, label: 'Cancel', color: 'red', onClick: cancelLineCreation })}
                       </>
                   );
@@ -4941,7 +4775,7 @@ const App = () => {
           }));
       }
 
-      return renderDockLayout(renderActionRail());
+      return renderDockLayout(renderRuntimeDock(), true);
   };
 
   const savedVehicleProfiles = vehicleProfiles || [];
@@ -5151,6 +4985,17 @@ const App = () => {
       setPendingProfileSwitchKey(null);
       setVehicleSettingsDraft(nextSettings);
       actions.setVehicleSettings(nextSettings);
+      setCalibrationStatus(prev => ({
+          ...prev,
+          vehicle: 'Needs Check',
+          implement: 'Needs Check',
+          angle: featureSettings.angleSensorEnabled ? 'Needs Check' : prev.angle,
+          vehicleUpdatedAt: null,
+          implementUpdatedAt: null,
+          vehicleProfileId: null,
+          implementProfileId: null,
+          implementVehicleProfileId: null
+      }));
       showNotification(`${profile.label} is now the active vehicle`, 'success');
   };
 
@@ -5181,9 +5026,31 @@ const App = () => {
           : [nextProfile, ...prev]
       );
       const nextDraft = { ...nextProfile, profileId: id };
+      const vehicleCalibrationKeys = [
+          'wheelbase', 'frontTrack', 'rearTrack', 'steeringType', 'controlType',
+          'gnssHeight', 'gnssLateralOffset', 'gnssBaseline', 'gnssPrimarySide',
+          'gnssHeadingOffset', 'gnssRollOffset', 'gnssPitchOffset',
+          'antennaToRearAxle', 'hitchOffset', 'hitchHeight'
+      ];
+      const vehicleCalibrationChanged = vehicleCalibrationKeys.some(key => (
+          String(activeVehicleSettings[key] ?? '') !== String(nextDraft[key] ?? '')
+      ));
       setVehicleSettingsDraft(nextDraft);
       if (shouldUpdate && activeVehicleSettings.profileId === id) {
           actions.setVehicleSettings(nextDraft);
+          if (vehicleCalibrationChanged) {
+              setCalibrationStatus(prev => ({
+                  ...prev,
+                  vehicle: 'Needs Check',
+                  implement: 'Needs Check',
+                  angle: featureSettings.angleSensorEnabled ? 'Needs Check' : prev.angle,
+                  vehicleUpdatedAt: null,
+                  implementUpdatedAt: null,
+                  vehicleProfileId: null,
+                  implementProfileId: null,
+                  implementVehicleProfileId: null
+              }));
+          }
       }
       setPendingProfileDeleteKey(null);
       setPendingProfileSwitchKey(null);
@@ -5268,6 +5135,13 @@ const App = () => {
       setPendingProfileSwitchKey(null);
       setImplementSettingsDraft(nextSettings);
       actions.setImplementSettings(nextSettings);
+      setCalibrationStatus(prev => ({
+          ...prev,
+          implement: 'Needs Check',
+          implementUpdatedAt: null,
+          implementProfileId: null,
+          implementVehicleProfileId: null
+      }));
       setImplementMeasureFocus('width');
       showNotification(`${profile.label} is now the active implement`, 'success');
   };
@@ -5299,9 +5173,26 @@ const App = () => {
           : [nextProfile, ...prev]
       );
       const nextDraft = { ...nextProfile, profileId: id };
+      const implementCalibrationKeys = [
+          'connectionType', 'width', 'overallWidth', 'offset', 'sections',
+          'delayOn', 'delayOff', 'hitchToWorkPoint', 'hitchToRear',
+          'sectionControl', 'controlMode'
+      ];
+      const implementCalibrationChanged = implementCalibrationKeys.some(key => (
+          String(activeImplementSettings[key] ?? '') !== String(nextDraft[key] ?? '')
+      ));
       setImplementSettingsDraft(nextDraft);
       if (shouldUpdate && activeImplementSettings.profileId === id) {
           actions.setImplementSettings(nextDraft);
+          if (implementCalibrationChanged) {
+              setCalibrationStatus(prev => ({
+                  ...prev,
+                  implement: 'Needs Check',
+                  implementUpdatedAt: null,
+                  implementProfileId: null,
+                  implementVehicleProfileId: null
+              }));
+          }
       }
       setPendingProfileDeleteKey(null);
       setPendingProfileSwitchKey(null);
@@ -8308,6 +8199,7 @@ const App = () => {
                         <FeatureToggle label="Easy Switch / Foot Pedal" detail="External switch or pedal toggles auto and manual modes" featureKey="easySwitch" icon={Disc} />
                         <FeatureToggle label="CANBUS Steer Ready" detail="Integrate with steer-ready tractors through CAN control" featureKey="canbusSteerReady" icon={Cpu} />
                         <FeatureToggle label="PWM Steering Output" detail="Fallback PWM control path for hydraulic retrofits" featureKey="pwmSteerReady" icon={Activity} />
+                        <FeatureToggle label="Steering Angle Sensor" detail="Use a wheel-angle sensor for center, range and steering feedback calibration" featureKey="angleSensorEnabled" icon={Gauge} />
                     </div>
                 </SettingsSection>
             </div>
@@ -8571,18 +8463,52 @@ const App = () => {
         );
         case 'overview': {
             const correctionSource = rtkSettings.correctionSource || 'Base Station';
-            const calibrationReady = (calibrationStatus.vehicle === 'OK' ? 1 : 0)
-                + (calibrationStatus.implement === 'OK' ? 1 : 0)
-                + (!featureSettings.angleSensorEnabled || calibrationStatus.angle === 'OK' ? 1 : 0);
+            const overviewVehicleProfileId = activeVehicleSettings.profileId || activeVehicleProfile?.id || activeVehicleSettings.type;
+            const overviewImplementProfileId = activeImplementSettings.profileId || activeImplementProfile?.id || activeImplementSettings.name;
+            const overviewVehicleCalibrationReady = calibrationStatus.vehicle === 'OK'
+                && calibrationStatus.vehicleProfileId === overviewVehicleProfileId;
+            const overviewImplementCalibrationReady = calibrationStatus.implement === 'OK'
+                && calibrationStatus.implementProfileId === overviewImplementProfileId
+                && calibrationStatus.implementVehicleProfileId === overviewVehicleProfileId;
+            const overviewAngleCalibrationReady = !featureSettings.angleSensorEnabled
+                || (calibrationStatus.angle === 'OK' && overviewVehicleCalibrationReady);
+            const calibrationTotal = featureSettings.angleSensorEnabled ? 3 : 2;
+            const calibrationReady = Number(overviewVehicleCalibrationReady)
+                + Number(overviewImplementCalibrationReady)
+                + Number(featureSettings.angleSensorEnabled && overviewAngleCalibrationReady);
+            const readyTone = theme === 'dark'
+                ? 'text-green-400 border-green-500/35 bg-green-500/10'
+                : 'text-green-700 border-green-500/35 bg-green-50';
+            const attentionTone = theme === 'dark'
+                ? 'text-amber-300 border-amber-500/35 bg-amber-500/10'
+                : 'text-amber-700 border-amber-500/40 bg-amber-50';
             const overviewChecks = [
               {
                 id: 'rtk',
-                title: 'Correction Source',
+                title: 'Correction source',
                 value: correctionSource === 'Base Station' ? 'Local Base' : correctionSource,
-                detail: correctionSource === 'Base Station' ? 'Base station is the primary workflow.' : 'Local Base is recommended when field base hardware is available.',
+                detail: `${rtkStatus} correction / ${correctionSource === 'Base Station' ? 'radio link' : 'internet caster'}`,
                 icon: LocateFixed,
-                status: rtkStatus,
-                tone: rtkStatus === 'FIX' ? 'text-green-500 border-green-500/40 bg-green-500/10' : 'text-yellow-500 border-yellow-500/40 bg-yellow-500/10'
+                ready: rtkStatus === 'FIX',
+                status: rtkStatus
+              },
+              {
+                id: 'guidance',
+                title: 'Guidance line',
+                value: activeLineRecord?.name || getGuidanceModeLabel(),
+                detail: isMultiLineMode ? 'Parallel lanes enabled' : 'Single active line',
+                icon: Route,
+                ready: hasGuidanceToEngage,
+                status: hasGuidanceToEngage ? 'Ready' : 'Select'
+              },
+              {
+                id: 'calibration',
+                title: 'Calibration',
+                value: `${calibrationReady} of ${calibrationTotal} checks`,
+                detail: 'Vehicle, implement and angle sensor',
+                icon: Gauge,
+                ready: calibrationReady === calibrationTotal,
+                status: calibrationReady === calibrationTotal ? 'Ready' : 'Check'
               },
               {
                 id: 'vehicle',
@@ -8590,246 +8516,706 @@ const App = () => {
                 value: activeVehicleSettings.type,
                 detail: `${activeVehicleSettings.wheelbase} m wheelbase / ${activeVehicleSettings.steeringType || 'Front axle'}`,
                 icon: Tractor,
-                status: 'SET',
-                tone: 'text-blue-500 border-blue-500/40 bg-blue-500/10'
+                ready: Boolean(activeVehicleSettings.type && Number(activeVehicleSettings.wheelbase) > 0),
+                status: 'Ready'
               },
               {
                 id: 'implement',
                 title: 'Implement',
                 value: activeImplementSettings.name,
-                detail: `${Number(activeImplementSettings.width || 0).toFixed(1)} m / ${activeImplementSettings.sections || 1} sections`,
+                detail: `${Number(activeImplementSettings.width || 0).toFixed(1)} m working width / ${activeImplementSettings.sections || 1} sections`,
                 icon: Ruler,
-                status: activeImplementSettings.profileId ? 'PROFILE' : 'CUSTOM',
-                tone: 'text-blue-500 border-blue-500/40 bg-blue-500/10'
-              },
-              {
-                id: 'calibration',
-                title: 'Calibration',
-                value: `${calibrationReady}/3 ready`,
-                detail: 'Vehicle, implement and angle sensor checks.',
-                icon: Gauge,
-                status: calibrationReady === 3 ? 'OK' : 'CHECK',
-                tone: calibrationReady === 3 ? 'text-green-500 border-green-500/40 bg-green-500/10' : 'text-yellow-500 border-yellow-500/40 bg-yellow-500/10'
-              },
-              {
-                id: 'guidance',
-                title: 'Guidance Line',
-                value: activeLineRecord?.name || getGuidanceModeLabel(),
-                detail: isMultiLineMode ? 'Parallel lanes enabled.' : 'Single active line.',
-                icon: Route,
-                status: guidanceLine ? 'READY' : 'SELECT',
-                tone: guidanceLine ? 'text-green-500 border-green-500/40 bg-green-500/10' : 'text-yellow-500 border-yellow-500/40 bg-yellow-500/10'
+                ready: Boolean(activeImplementSettings.name && Number(activeImplementSettings.width) > 0),
+                status: Number(activeImplementSettings.width) > 0 ? 'Ready' : 'Check'
               },
               {
                 id: 'steering',
-                title: 'Steering',
+                title: 'Steering control',
                 value: steeringMode,
-                detail: featureSettings.canbusSteerReady ? 'CAN steer-ready path available.' : 'Manual steering path active.',
+                detail: featureSettings.canbusSteerReady ? 'CAN steering path available' : 'Manual steering path active',
                 icon: SteeringWheelIcon,
-                status: featureSettings.canbusSteerReady ? 'CAN' : 'MANUAL',
-                tone: featureSettings.canbusSteerReady ? 'text-green-500 border-green-500/40 bg-green-500/10' : 'text-slate-500 border-slate-500/30 bg-slate-500/10'
+                ready: Boolean(featureSettings.canbusSteerReady),
+                status: featureSettings.canbusSteerReady ? 'CAN ready' : 'Manual'
               }
             ];
+            const overviewReadyCount = overviewChecks.filter(item => item.ready).length;
+            const firstPendingCheck = overviewChecks.find(item => !item.ready);
+            const healthItems = [
+                ['GNSS', systemHealth?.gnss || 'Unknown', Globe],
+                ['IMU', systemHealth?.imu || 'Unknown', Compass],
+                ['Steering', systemHealth?.steering || 'Unknown', SteeringWheelIcon],
+                ['CAN Bus', systemHealth?.canbus || 'Unknown', Cpu],
+                ['OBD', systemHealth?.obd || 'Unknown', Gauge],
+                ['Camera', systemHealth?.camera || 'Unknown', Video]
+            ];
+            const healthReadyCount = healthItems.filter(([, value]) => value === 'OK').length;
+            const navigateFromOverview = (target) => {
+                if (!target) return;
+                setSettingsTab(target);
+                requestAnimationFrame(() => settingsContentScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' }));
+            };
+            const renderOverviewCheck = (item) => {
+                return (
+                    <button
+                        type="button"
+                        key={item.id}
+                        data-overview-tile={item.id}
+                        onClick={() => navigateFromOverview(item.id)}
+                        title={`${item.title}: ${item.value}. ${item.status}. ${item.detail}`}
+                        aria-label={`${item.title}: ${item.value}. ${item.status}. ${item.detail}`}
+                        className={`h-[76px] min-w-0 rounded-xl border px-3 py-2 text-left transition-colors ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/65 hover:bg-slate-800' : 'bg-gray-50/80 hover:bg-blue-50/60'} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60`}
+                    >
+                        <span className="flex min-w-0 items-center justify-between gap-2">
+                            <span className={`truncate text-[10px] font-black uppercase tracking-[0.04em] ${t.textSub}`}>{item.title}</span>
+                            <item.icon className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+                        </span>
+                        <span className={`block truncate text-sm font-black leading-5 ${t.textMain}`}>{item.value}</span>
+                        <span className="flex min-w-0 items-center gap-1.5 text-[10px] leading-3">
+                            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${item.ready ? 'bg-green-500' : 'bg-amber-500'}`} />
+                            <span className={`shrink-0 font-black ${item.ready ? (theme === 'dark' ? 'text-green-400' : 'text-green-700') : (theme === 'dark' ? 'text-amber-300' : 'text-amber-700')}`}>{item.status}</span>
+                            <span className={`truncate ${t.textSub}`}>/ {item.detail}</span>
+                        </span>
+                    </button>
+                );
+            };
 
             return (
-              <div className="space-y-5">
-                <SettingsSection
-                    title="Run Readiness"
-                    detail="Setup order for an auto steering run. Fix the warning cards before engaging auto steer."
-                    icon={LayoutGrid}
-                    actions={<SettingsActionButton variant="primary" onClick={() => setSettingsTab('rtk')}>Setup RTK</SettingsActionButton>}
-                >
-                    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-                        <SettingsMetric label="Correction" value={correctionSource === 'Base Station' ? 'Local Base' : correctionSource} tone={rtkStatus === 'FIX' ? 'text-green-500' : 'text-yellow-500'} />
-                        <SettingsMetric label="Field" value={activeFieldRecord?.name || 'No Field'} />
-                        <SettingsMetric label="Line" value={activeLineRecord?.name || getGuidanceModeLabel()} />
-                        <SettingsMetric label="Ready" value={`${overviewChecks.filter(item => ['OK', 'READY', 'SET', 'PROFILE', 'CAN', 'FIX'].includes(item.status)).length}/${overviewChecks.length}`} />
-                    </div>
-                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                        {overviewChecks.map((item) => (
-                            <button
-                                key={item.id}
-                                onClick={() => setSettingsTab(item.id)}
-                                className={`${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'} border ${t.borderCard} rounded-xl p-4 text-left min-h-[116px] hover:brightness-95 transition`}
-                            >
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="flex items-start gap-3 min-w-0">
-                                        <div className={`shrink-0 w-10 h-10 rounded-lg ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
-                                            <item.icon className="w-5 h-5 text-blue-500" />
-                                        </div>
-                                        <div className="min-w-0">
-                                            <div className={`text-[10px] uppercase font-black ${t.textSub}`}>{item.title}</div>
-                                            <div className={`font-black truncate ${t.textMain}`}>{item.value}</div>
-                                            <div className={`text-xs ${t.textSub}`}>{item.detail}</div>
-                                        </div>
-                                    </div>
-                                    <span className={`shrink-0 text-[10px] font-black px-2.5 py-1 rounded-full border ${item.tone}`}>{item.status}</span>
-                                </div>
-                            </button>
-                        ))}
-                    </div>
-                </SettingsSection>
+              <section
+                  data-settings-overview
+                  className={`overflow-hidden rounded-2xl border ${t.borderCard} ${t.bgPanel}`}
+              >
+                  <div className={`flex min-h-[62px] flex-wrap items-center justify-between gap-3 border-b px-4 py-2.5 ${t.borderCard}`}>
+                      <div className="flex min-w-0 items-center gap-3">
+                          <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${theme === 'dark' ? 'bg-blue-500/15' : 'bg-blue-50'} text-blue-500`}>
+                              <LayoutGrid className="h-5 w-5" />
+                          </span>
+                          <span className="min-w-0">
+                              <span className={`block text-base font-black leading-5 ${t.textMain}`}>Run overview</span>
+                              <span className={`block truncate text-[11px] leading-4 ${t.textSub}`}>
+                                  {activeFieldRecord?.name || 'No field'} / {activeLineRecord?.name || getGuidanceModeLabel()} / {Number(activeImplementSettings.width || 0).toFixed(1)} m working width
+                              </span>
+                          </span>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                          <span className={`flex h-9 items-center gap-1.5 rounded-lg border px-3 text-[10px] font-black ${firstPendingCheck ? attentionTone : readyTone}`}>
+                              {firstPendingCheck ? <AlertTriangle className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                              {overviewReadyCount}/{overviewChecks.length} ready
+                          </span>
+                          {firstPendingCheck ? (
+                              <button
+                                  type="button"
+                                  data-overview-primary-action
+                                  onClick={() => navigateFromOverview(firstPendingCheck.id)}
+                                  className="flex h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 text-xs font-black text-white shadow-md shadow-blue-900/15 transition-colors hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60"
+                              >
+                                  Review {firstPendingCheck.title}
+                                  <ChevronRight className="h-4 w-4" />
+                              </button>
+                          ) : (
+                              <span className={`flex h-11 items-center gap-2 rounded-lg border px-4 text-xs font-black ${readyTone}`}>
+                                  <CheckCircle2 className="h-4 w-4" />
+                                  Ready to run
+                              </span>
+                          )}
+                      </div>
+                  </div>
 
-                <SettingsSection title="Active Machine" detail="Current vehicle and implement pair used by coverage and guidance spacing." icon={Tractor}>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <ConfigTile icon={Tractor} label="Vehicle Profile" value={activeVehicleProfile.label} />
-                        <ConfigTile icon={Ruler} label="Implement Profile" value={activeImplementProfile.label} />
-                        <ConfigTile icon={Activity} label="Coverage Width" value={`${Number(activeImplementSettings.width || 0).toFixed(1)} m`} />
-                    </div>
-                </SettingsSection>
+                  <div className="grid grid-cols-2 gap-2.5 p-3 lg:grid-cols-4">
+                      <button
+                          type="button"
+                          data-overview-tile="readiness"
+                          onClick={() => navigateFromOverview(firstPendingCheck?.id)}
+                          disabled={!firstPendingCheck}
+                          title={firstPendingCheck ? `Review ${firstPendingCheck.title}` : 'All run checks are ready'}
+                          className={`h-[76px] min-w-0 rounded-xl border px-3 py-2 text-left transition-colors ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/65 hover:bg-slate-800' : 'bg-gray-50/80 hover:bg-blue-50/60'} disabled:cursor-default disabled:hover:brightness-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60`}
+                      >
+                          <span className="flex items-center justify-between gap-2">
+                              <span className={`text-[10px] font-black uppercase tracking-[0.04em] ${t.textSub}`}>Run readiness</span>
+                              <Activity className="h-3.5 w-3.5 text-blue-500" />
+                          </span>
+                          <span className={`block text-lg font-black leading-5 ${t.textMain}`}>{overviewReadyCount} / {overviewChecks.length}</span>
+                          <span className="mt-1 flex items-center gap-2">
+                              <span className={`h-1.5 min-w-0 flex-1 overflow-hidden rounded-full ${theme === 'dark' ? 'bg-slate-700' : 'bg-gray-200'}`}>
+                                  <span className="block h-full rounded-full bg-green-500" style={{ width: `${Math.round((overviewReadyCount / overviewChecks.length) * 100)}%` }} />
+                              </span>
+                              <span className={`shrink-0 text-[10px] font-bold ${firstPendingCheck ? (theme === 'dark' ? 'text-amber-300' : 'text-amber-700') : (theme === 'dark' ? 'text-green-400' : 'text-green-700')}`}>
+                                  {firstPendingCheck ? `${overviewChecks.length - overviewReadyCount} to review` : 'Ready'}
+                              </span>
+                          </span>
+                      </button>
 
-                <SettingsSection title="System Health" detail="Sensor and communication modules used by the run screen." icon={Activity}>
-                    <div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
-                        {[
-                            ['GNSS', systemHealth?.gnss || 'OK', Globe],
-                            ['IMU', systemHealth?.imu || 'OK', Compass],
-                            ['Steering', systemHealth?.steering || 'OK', SteeringWheelIcon],
-                            ['CAN Bus', systemHealth?.canbus || 'OK', Cpu],
-                            ['OBD', systemHealth?.obd || 'OK', Gauge],
-                            ['Camera', systemHealth?.camera || 'OK', Video]
-                        ].map(([label, value, Icon]) => (
-                            <div key={label} className={`${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'} border ${t.borderCard} rounded-xl p-3 flex items-center gap-3 min-w-0`}>
-                                <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${value === 'OK' ? 'bg-green-500/12 text-green-500' : 'bg-yellow-500/12 text-yellow-500'}`}>
-                                    <Icon className="w-5 h-5" />
-                                </div>
-                                <div className="min-w-0">
-                                    <div className={`text-[10px] uppercase font-black ${t.textSub}`}>{label}</div>
-                                    <div className={`text-sm font-black truncate ${value === 'OK' ? 'text-green-500' : 'text-yellow-500'}`}>{value}</div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </SettingsSection>
-              </div>
+                      {renderOverviewCheck(overviewChecks.find(item => item.id === 'rtk'))}
+
+                      <div
+                          data-overview-tile="field"
+                          title={`Active field: ${activeFieldRecord?.name || 'No field loaded'}`}
+                          aria-label={`Active field: ${activeFieldRecord?.name || 'No field loaded'}`}
+                          className={`h-[76px] min-w-0 rounded-xl border px-3 py-2 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/65' : 'bg-gray-50/80'}`}
+                      >
+                          <span className="flex min-w-0 items-center justify-between gap-2">
+                              <span className={`truncate text-[10px] font-black uppercase tracking-[0.04em] ${t.textSub}`}>Active field</span>
+                              <MapIcon className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+                          </span>
+                          <span className={`block truncate text-sm font-black leading-5 ${t.textMain}`}>{activeFieldRecord?.name || 'No field loaded'}</span>
+                          <span className="flex min-w-0 items-center gap-1.5 text-[10px] leading-3">
+                              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${activeFieldRecord ? 'bg-green-500' : 'bg-amber-500'}`} />
+                              <span className={`font-black ${activeFieldRecord ? (theme === 'dark' ? 'text-green-400' : 'text-green-700') : (theme === 'dark' ? 'text-amber-300' : 'text-amber-700')}`}>
+                                  {activeFieldRecord ? 'Loaded' : 'Select'}
+                              </span>
+                              <span className={`truncate ${t.textSub}`}>/ {activeFieldRecord ? `${activeFieldAreaHa.toFixed(2)} ha` : 'Choose from Field'}</span>
+                          </span>
+                      </div>
+
+                      {renderOverviewCheck(overviewChecks.find(item => item.id === 'guidance'))}
+                      {renderOverviewCheck(overviewChecks.find(item => item.id === 'vehicle'))}
+                      {renderOverviewCheck(overviewChecks.find(item => item.id === 'implement'))}
+                      {renderOverviewCheck(overviewChecks.find(item => item.id === 'calibration'))}
+                      {renderOverviewCheck(overviewChecks.find(item => item.id === 'steering'))}
+                  </div>
+
+                  <div data-overview-health className={`mx-3 mb-3 overflow-hidden rounded-xl border ${t.borderCard}`}>
+                      <div className={`flex h-11 items-center justify-between px-3 ${theme === 'dark' ? 'bg-slate-900/75' : 'bg-gray-50'}`}>
+                          <span className="flex items-center gap-2">
+                              <Activity className="h-4 w-4 text-blue-500" />
+                              <span className={`text-xs font-black ${t.textMain}`}>System health</span>
+                          </span>
+                          <span className={`text-[10px] font-black ${healthReadyCount === healthItems.length ? (theme === 'dark' ? 'text-green-400' : 'text-green-700') : (theme === 'dark' ? 'text-amber-300' : 'text-amber-700')}`}>
+                              {healthReadyCount}/{healthItems.length} online
+                          </span>
+                      </div>
+                      <div className={`grid grid-cols-3 gap-px border-t lg:grid-cols-6 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-200'}`}>
+                          {healthItems.map(([label, value, Icon]) => {
+                              const isHealthy = value === 'OK';
+                              const isCritical = ['ERROR', 'FAULT', 'OFFLINE'].includes(String(value).toUpperCase());
+                              const statusTone = isHealthy
+                                  ? (theme === 'dark' ? 'text-green-400' : 'text-green-700')
+                                  : isCritical
+                                      ? 'text-red-500'
+                                      : (theme === 'dark' ? 'text-amber-300' : 'text-amber-700');
+                              return (
+                                  <div
+                                      key={label}
+                                      data-overview-health-cell={label}
+                                      className={`flex h-14 min-w-0 items-center gap-2 px-2.5 ${theme === 'dark' ? 'bg-slate-900/75' : 'bg-white'}`}
+                                  >
+                                      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${isHealthy ? 'bg-green-500/10 text-green-500' : isCritical ? 'bg-red-500/10 text-red-500' : 'bg-amber-500/10 text-amber-500'}`}>
+                                          <Icon className="h-3.5 w-3.5" />
+                                      </span>
+                                      <span className="min-w-0">
+                                          <span className={`block truncate text-[9px] font-bold uppercase tracking-[0.04em] ${t.textSub}`}>{label}</span>
+                                          <span className={`block truncate text-xs font-black ${statusTone}`}>{value}</span>
+                                      </span>
+                                  </div>
+                              );
+                          })}
+                      </div>
+                  </div>
+              </section>
             );
         }
         case 'calibration': {
-            const calibCards = [
-              {
-                title: 'Vehicle Geometry',
-                key: 'vehicle',
-                icon: Tractor,
-                status: calibrationStatus.vehicle,
-                detail: 'Confirms wheelbase, antenna, hitch and steering limit.',
-                actions: [
-                  { label: 'Run Geometry', tone: 'primary', onClick: () => { setCalibrationStatus(prev => ({ ...prev, vehicle: 'OK' })); showNotification('Vehicle geometry calibration completed', 'success'); } },
-                  { label: 'Reset', tone: 'ghost', onClick: () => { setCalibrationStatus(prev => ({ ...prev, vehicle: 'Needs Check' })); showNotification('Vehicle calibration reset', 'info'); } }
-                ],
-                meta: [
-                    { label: 'Wheelbase', value: `${vehicleSettings.wheelbase} m` },
-                    { label: 'Steering', value: vehicleSettings.steeringType || 'Front axle' },
-                    { label: 'Antenna', value: `${vehicleSettings.antennaHeight} m` },
-                    { label: 'Hitch', value: vehicleSettings.hitchType || 'Rear 3-point' }
-                ]
-              },
-              {
-                title: 'Implement Setup',
-                key: 'implement',
-                icon: Ruler,
-                status: calibrationStatus.implement,
-                detail: 'Confirms width, section count, offset, delay and lift state.',
-                actions: [
-                  { label: 'Run Implement', tone: 'primary', onClick: () => { setCalibrationStatus(prev => ({ ...prev, implement: 'OK' })); showNotification('Implement calibration completed', 'success'); } },
-                  { label: 'Reset', tone: 'ghost', onClick: () => { setCalibrationStatus(prev => ({ ...prev, implement: 'Needs Check' })); showNotification('Implement calibration reset', 'info'); } }
-                ],
-                meta: [
-                    { label: 'Type', value: implementSettings.type || 'Custom' },
-                    { label: 'Width', value: `${implementSettings.width} m` },
-                    { label: 'Sections', value: implementSettings.sections || 1 },
-                    { label: 'Delay', value: `${implementSettings.delayOn}/${implementSettings.delayOff}s` }
-                ]
-              },
-              {
-                title: 'Angle Sensor',
-                key: 'angle',
-                icon: Gauge,
-                status: featureSettings.angleSensorEnabled ? calibrationStatus.angle : 'Disabled',
-                detail: featureSettings.angleSensorEnabled ? 'Zero steering angle and verify live range.' : 'System will estimate steering from commanded wheel angle.',
-                actions: featureSettings.angleSensorEnabled ? [
-                  { label: 'Calibrate', tone: 'primary', onClick: () => { setCalibrationStatus(prev => ({ ...prev, angle: 'OK' })); showNotification('Angle sensor calibration completed', 'success'); } },
-                  { label: 'Disable', tone: 'ghost', onClick: () => { updateFeatureSetting('angleSensorEnabled', false); showNotification('Angle sensor disabled', 'info'); } }
-                ] : [
-                  { label: 'Enable Sensor', tone: 'primary', onClick: () => { updateFeatureSetting('angleSensorEnabled', true); setCalibrationStatus(prev => ({ ...prev, angle: 'Needs Check' })); showNotification('Angle sensor enabled; calibration required', 'warning'); } }
-                ],
-                meta: [
-                    { label: 'Mode', value: featureSettings.angleSensorEnabled ? 'Sensor' : 'Disabled' },
-                    { label: 'Live Angle', value: featureSettings.angleSensorEnabled ? `${steeringAngle.toFixed(1)}\u00b0` : '--' },
-                    { label: 'Range', value: featureSettings.angleSensorEnabled ? '\u00b145\u00b0' : '--' },
-                    { label: 'Fallback', value: featureSettings.angleSensorEnabled ? 'Off' : 'Commanded' }
-                ]
-              }
+            const implementSupportsSections = Boolean(
+                activeImplementSettings.sectionControl
+                || ['Section Control', 'Boom Sections'].includes(activeImplementSettings.controlMode)
+            );
+            const activeVehicleCalibrationId = activeVehicleSettings.profileId || activeVehicleProfile?.id || activeVehicleSettings.type;
+            const activeImplementCalibrationId = activeImplementSettings.profileId || activeImplementProfile?.id || activeImplementSettings.name;
+            const vehicleCalibrationMatchesProfile = calibrationStatus.vehicleProfileId === activeVehicleCalibrationId;
+            const implementCalibrationMatchesPair = calibrationStatus.implementProfileId === activeImplementCalibrationId
+                && calibrationStatus.implementVehicleProfileId === activeVehicleCalibrationId;
+            const vehicleCalibrationReady = calibrationStatus.vehicle === 'OK'
+                && (!featureSettings.angleSensorEnabled || calibrationStatus.angle === 'OK')
+                && vehicleCalibrationMatchesProfile;
+            const implementCalibrationReady = calibrationStatus.implement === 'OK'
+                && implementCalibrationMatchesPair;
+            const readyCalibrationCount = Number(vehicleCalibrationReady) + Number(implementCalibrationReady);
+            const calibrationStartReady = Math.abs(speed) < 0.1 && rtkStatus === 'FIX';
+            const vehicleSteps = [
+                {
+                    id: 'steering-sensor',
+                    title: featureSettings.angleSensorEnabled ? 'Steering angle sensor' : 'Steering direction',
+                    summary: featureSettings.angleSensorEnabled ? 'Capture center and both end stops' : 'Verify commanded steering direction',
+                    icon: Gauge,
+                    instruction: featureSettings.angleSensorEnabled
+                        ? 'Point the wheels straight, then capture full-left and full-right positions.'
+                        : 'Send a small left and right command and confirm the wheels move in the same direction.',
+                    note: 'This determines zero, sensor polarity and usable steering range.',
+                    checks: ['Machine stopped on firm, level ground', 'Front wheels can move through the full range', 'Sensor signal is stable before each capture'],
+                    metrics: [
+                        ['Live angle', featureSettings.angleSensorEnabled ? `${steeringAngle.toFixed(1)}°` : 'Commanded'],
+                        ['Center target', '0.0°'],
+                        ['Left limit', '-45.0°'],
+                        ['Right limit', '+45.0°']
+                    ],
+                    action: featureSettings.angleSensorEnabled ? 'Capture range & continue' : 'Confirm direction & continue'
+                },
+                {
+                    id: 'steering-response',
+                    title: 'Steering response',
+                    summary: 'Direction, deadband and minimum output',
+                    icon: SteeringWheelIcon,
+                    instruction: 'Use a clear area and hold the hardware resume switch while the controller tests left and right response.',
+                    note: 'The system finds the smallest command that actually moves the steering and checks for reversed output.',
+                    checks: ['Operator remains seated and ready to take over', 'Hydraulics are warm; area is clear', 'Travel slowly only when prompted'],
+                    metrics: [
+                        ['Control', featureSettings.canbusSteerReady ? 'CAN steering' : 'PWM steering'],
+                        ['Left deadband', '18%'],
+                        ['Right deadband', '19%'],
+                        ['Direction', 'Normal']
+                    ],
+                    action: 'Confirm response test'
+                },
+                {
+                    id: 'receiver-attitude',
+                    title: 'Receiver attitude',
+                    summary: 'Level zero and dual-antenna heading',
+                    icon: LocateFixed,
+                    instruction: 'Capture on level ground, turn the tractor 180°, return the wheels to the same marks, then capture again.',
+                    note: 'For the horizontal pair, ANT A/B orientation and baseline are verified before roll and heading offsets are saved.',
+                    checks: ['ANT A and ANT B are mounted level', 'Hard, flat surface with RTK FIX', 'Cab has stopped rocking before capture'],
+                    metrics: [
+                        ['Layout', '2 antennas'],
+                        ['Baseline', `${Number(activeVehicleSettings.gnssBaseline || 1.2).toFixed(2)} m`],
+                        ['Roll zero', `${Number(activeVehicleSettings.gnssRollOffset || 0).toFixed(1)}°`],
+                        ['Heading', `${Number(activeVehicleSettings.gnssHeadingOffset || 0).toFixed(1)}°`]
+                    ],
+                    action: 'Capture attitude & continue'
+                },
+                {
+                    id: 'tracking-validation',
+                    title: 'Tracking validation',
+                    summary: 'Outbound and return pass on one AB line',
+                    icon: Route,
+                    instruction: 'Drive one straight pass, turn 180°, then drive back on the same line at a steady working speed.',
+                    note: 'Pass only when mean error, peak error and oscillation stay inside the steering target.',
+                    checks: ['Straight AB line selected', 'RTK remains FIX through both passes', 'Use the same speed in both directions'],
+                    metrics: [
+                        ['Mean error', `${Math.abs(crossTrackError).toFixed(1)} cm`],
+                        ['Peak target', '< 5 cm'],
+                        ['Oscillation', 'Low'],
+                        ['Pass result', 'Ready']
+                    ],
+                    action: 'Complete vehicle calibration'
+                }
             ];
-
-            const statusClass = (status) => {
-              if (status === 'OK') return 'bg-green-500/10 text-green-500 border-green-500/40';
-              if (status === 'Needs Check') return 'bg-yellow-500/10 text-yellow-500 border-yellow-500/40';
-              if (status === 'Disabled') return 'bg-slate-500/10 text-slate-500 border-slate-500/40';
-              return 'bg-slate-500/10 text-slate-500 border-slate-500/40';
+            const implementSteps = [
+                {
+                    id: 'work-state',
+                    title: 'Work / lift state',
+                    summary: featureSettings.liftSensor ? 'Teach raised and working positions' : 'Verify manual work-state control',
+                    icon: ArrowUpFromDot,
+                    instruction: featureSettings.liftSensor
+                        ? 'Raise the implement fully, capture RAISED, then lower it to the normal working position and capture WORK.'
+                        : 'Toggle the work-state control twice and confirm coverage starts and stops with the implement.',
+                    note: 'Geometry is only reviewed here; dimensions are edited in the Implement profile.',
+                    checks: ['Correct implement profile is active', 'Implement can raise and lower safely', 'Live work-state changes without flicker'],
+                    metrics: [
+                        ['Detection', featureSettings.liftSensor ? 'Lift sensor' : 'Manual'],
+                        ['Raised', featureSettings.liftSensor ? 'Capture' : 'Switch off'],
+                        ['Working', featureSettings.liftSensor ? 'Capture' : 'Switch on'],
+                        ['Hysteresis', featureSettings.liftSensor ? 'Auto' : '—']
+                    ],
+                    action: 'Confirm work state'
+                },
+                {
+                    id: 'lateral-offset',
+                    title: 'Lateral tracking offset',
+                    summary: 'Correct measured gap or overlap',
+                    icon: ArrowLeftRight,
+                    instruction: 'Make an outbound and return pass, choose Gap or Overlap, then enter the measured distance and side.',
+                    note: 'The system converts the observation into the correct signed offset; the operator does not guess + or −.',
+                    checks: ['Implement is lowered for both passes', 'Measure at the working point, not the frame edge', 'Repeat once after applying the correction'],
+                    metrics: [
+                        ['Current offset', `${Number(activeImplementSettings.offset || 0) >= 0 ? '+' : ''}${Number(activeImplementSettings.offset || 0).toFixed(2)} m`],
+                        ['Working width', `${Number(activeImplementSettings.width || 0).toFixed(2)} m`],
+                        ['Observation', 'Gap / overlap'],
+                        ['Correction', 'Calculated']
+                    ],
+                    action: 'Apply offset & continue'
+                },
+                {
+                    id: 'section-timing',
+                    title: implementSupportsSections ? 'Section timing' : 'Working response',
+                    summary: implementSupportsSections ? 'Tune switch-on and switch-off delay' : 'Verify coverage starts at the work point',
+                    icon: Clock,
+                    instruction: implementSupportsSections
+                        ? 'Cross a test boundary at constant speed and observe where product starts and stops on the ground.'
+                        : 'Cross a reference line at steady speed and verify coverage begins and ends at the configured work point.',
+                    note: implementSupportsSections
+                        ? 'ON and OFF delay are tuned separately; overlap settings must not be used to hide timing errors.'
+                        : 'Section timing is hidden because this implement does not expose section control.',
+                    checks: ['Use normal working speed and product rate', 'Keep speed constant through the transition', 'Test ON and OFF in separate passes'],
+                    metrics: [
+                        ['Control', implementSupportsSections ? `${activeImplementSettings.sections || 1} sections` : 'Work state'],
+                        ['ON delay', implementSupportsSections ? `${Number(activeImplementSettings.delayOn || 0).toFixed(1)} s` : 'Not required'],
+                        ['OFF delay', implementSupportsSections ? `${Number(activeImplementSettings.delayOff || 0).toFixed(1)} s` : 'Not required'],
+                        ['Test speed', '5.0 km/h']
+                    ],
+                    action: implementSupportsSections ? 'Save timing & continue' : 'Confirm response & continue'
+                },
+                {
+                    id: 'coverage-validation',
+                    title: 'Coverage validation',
+                    summary: 'Verify alignment and transition placement',
+                    icon: Target,
+                    instruction: 'Run two parallel passes and cross one covered boundary to verify offset, work state and timing together.',
+                    note: 'A valid result is stored for this exact vehicle and implement pair.',
+                    checks: ['Vehicle calibration is still valid', 'Correct implement is active and lowered', 'No unexpected gaps or double coverage'],
+                    metrics: [
+                        ['Pass spacing', `${Number(activeImplementSettings.width || 0).toFixed(2)} m`],
+                        ['Sections tested', implementSupportsSections ? `${activeImplementSettings.sections || 1}` : 'N/A'],
+                        ['Transition', 'Ready'],
+                        ['Pair result', 'Ready']
+                    ],
+                    action: 'Complete implement calibration'
+                }
+            ];
+            const calibrationModules = [
+                {
+                    scope: 'vehicle',
+                    title: 'Vehicle & steering',
+                    profile: activeVehicleSettings.type || activeVehicleProfile.label,
+                    detail: 'Steering sensor, response, receiver attitude and line tracking.',
+                    icon: Tractor,
+                    ready: vehicleCalibrationReady,
+                    updatedAt: calibrationStatus.vehicleUpdatedAt,
+                    settingsTarget: 'vehicle',
+                    steps: vehicleSteps
+                },
+                {
+                    scope: 'implement',
+                    title: 'Implement operation',
+                    profile: activeImplementSettings.name || activeImplementProfile.label,
+                    detail: 'Work state, lateral offset, section timing and coverage.',
+                    icon: Ruler,
+                    ready: implementCalibrationReady,
+                    blocked: !vehicleCalibrationReady,
+                    updatedAt: calibrationStatus.implementUpdatedAt,
+                    settingsTarget: 'implement',
+                    steps: implementSteps
+                }
+            ];
+            const activeCalibrationModule = calibrationModules.find(module => module.scope === calibrationWizard.scope);
+            const activeCalibrationSteps = activeCalibrationModule?.steps || [];
+            const activeCalibrationStep = activeCalibrationSteps[calibrationWizard.step];
+            const recommendedCalibrationScope = !vehicleCalibrationReady ? 'vehicle' : !implementCalibrationReady ? 'implement' : 'vehicle';
+            const openCalibration = (scope, step = 0) => {
+                if (Math.abs(speed) >= 0.1) {
+                    showNotification('Stop the vehicle before starting calibration', 'warning');
+                    return;
+                }
+                if (rtkStatus !== 'FIX') {
+                    showNotification('Wait for RTK FIX before starting calibration', 'warning');
+                    return;
+                }
+                if (scope === 'implement' && !vehicleCalibrationReady) {
+                    showNotification('Complete vehicle and steering calibration first', 'warning');
+                    return;
+                }
+                setCalibrationWizard({ scope, step });
+                requestAnimationFrame(() => settingsContentScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' }));
             };
-            const doneCount = calibCards.filter(card => card.status === 'OK' || card.status === 'Disabled').length;
+            const navigateFromCalibration = (target) => {
+                setCalibrationWizard({ scope: null, step: 0 });
+                setSettingsTab(target);
+                requestAnimationFrame(() => settingsContentScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' }));
+            };
+            const advanceCalibration = () => {
+                if (!activeCalibrationModule || !activeCalibrationStep) return;
+                if (calibrationWizard.step < activeCalibrationSteps.length - 1) {
+                    showNotification(`${activeCalibrationStep.title} recorded`, 'success');
+                    setCalibrationWizard(prev => ({ ...prev, step: prev.step + 1 }));
+                    requestAnimationFrame(() => settingsContentScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' }));
+                    return;
+                }
+                const completedAt = new Date().toISOString();
+                if (activeCalibrationModule.scope === 'vehicle') {
+                    setCalibrationStatus(prev => ({
+                        ...prev,
+                        vehicle: 'OK',
+                        implement: 'Needs Check',
+                        angle: featureSettings.angleSensorEnabled ? 'OK' : prev.angle,
+                        vehicleUpdatedAt: completedAt,
+                        implementUpdatedAt: null,
+                        vehicleProfileId: activeVehicleCalibrationId,
+                        implementProfileId: null,
+                        implementVehicleProfileId: null
+                    }));
+                } else {
+                    if (!vehicleCalibrationReady) {
+                        showNotification('Vehicle calibration is no longer valid. Complete it before the implement.', 'warning');
+                        setCalibrationWizard({ scope: null, step: 0 });
+                        return;
+                    }
+                    setCalibrationStatus(prev => ({
+                        ...prev,
+                        implement: 'OK',
+                        implementUpdatedAt: completedAt,
+                        implementProfileId: activeImplementCalibrationId,
+                        implementVehicleProfileId: activeVehicleCalibrationId
+                    }));
+                }
+                showNotification(`${activeCalibrationModule.title} calibration saved for the active profile`, 'success');
+                setCalibrationWizard({ scope: null, step: 0 });
+            };
+            const calibrationStatusTone = (ready) => ready
+                ? theme === 'dark'
+                    ? 'border-green-500/35 bg-green-500/10 text-green-400'
+                    : 'border-green-500/35 bg-green-50 text-green-700'
+                : theme === 'dark'
+                    ? 'border-amber-500/35 bg-amber-500/10 text-amber-300'
+                    : 'border-amber-500/40 bg-amber-50 text-amber-700';
+            const formatCalibrationDate = (value, ready) => {
+                if (!ready) return 'Not calibrated for this pair';
+                if (!value) return 'Saved for active profile';
+                const date = new Date(value);
+                if (Number.isNaN(date.getTime())) return 'Saved for active profile';
+                return `Last saved ${date.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })}`;
+            };
 
-            return (
-              <div className="space-y-5">
-                <SettingsSection
-                    title="Calibration Center"
-                    detail="Run the required calibration before engaging auto steer."
-                    icon={Gauge}
-                    actions={<SettingsActionButton variant="primary" onClick={() => { setCalibrationStatus({ vehicle: 'OK', implement: 'OK', angle: 'OK' }); showNotification('All calibration checks completed', 'success'); }}>Run Check</SettingsActionButton>}
-                >
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <SettingsMetric label="Ready Modules" value={`${doneCount}/${calibCards.length}`} tone={doneCount === calibCards.length ? 'text-green-500' : 'text-yellow-500'} />
-                        <SettingsMetric label="Steering Angle" value={`${steeringAngle.toFixed(1)} deg`} />
-                        <SettingsMetric label="Implement Width" value={`${implementSettings.width} m`} />
-                    </div>
-                    <div className={`h-2 rounded-full overflow-hidden ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-200'}`}>
-                        <div className="h-full bg-green-500" style={{ width: `${(doneCount / calibCards.length) * 100}%` }}></div>
-                    </div>
-                </SettingsSection>
-
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-                  {calibCards.map((card) => (
-                    <article key={card.title} className={`${t.bgPanel} border ${t.borderCard} rounded-xl p-3 flex flex-col gap-2.5 min-h-[236px]`}>
-                      <div className="flex items-start justify-between gap-2.5">
-                        <div className="flex items-start gap-2.5 min-w-0">
-                            <div className={`shrink-0 w-9 h-9 rounded-lg ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
-                                <card.icon className="w-5 h-5 text-blue-500" />
+            if (activeCalibrationModule && activeCalibrationStep) {
+                const ScopeIcon = activeCalibrationModule.icon;
+                const StepIcon = activeCalibrationStep.icon;
+                return (
+                    <section data-calibration-wizard className={`overflow-hidden rounded-2xl border ${t.borderCard} ${t.bgPanel}`}>
+                        <div className={`flex min-h-[62px] items-center justify-between gap-3 border-b px-4 py-2.5 ${t.borderCard}`}>
+                            <div className="flex min-w-0 items-center gap-3">
+                                <button
+                                    type="button"
+                                    aria-label="Back to calibration center"
+                                    onClick={() => setCalibrationWizard({ scope: null, step: 0 })}
+                                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900 hover:bg-slate-800' : 'bg-gray-50 hover:bg-gray-100'} ${t.textMain} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60`}
+                                >
+                                    <ChevronRight className="h-4 w-4 rotate-180" />
+                                </button>
+                                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${theme === 'dark' ? 'bg-blue-500/15' : 'bg-blue-50'} text-blue-500`}>
+                                    <ScopeIcon className="h-5 w-5" />
+                                </span>
+                                <span className="min-w-0">
+                                    <span className={`block text-base font-black leading-5 ${t.textMain}`}>{activeCalibrationModule.title}</span>
+                                    <span className={`block truncate text-[11px] ${t.textSub}`}>{activeCalibrationModule.profile} / Guided calibration</span>
+                                </span>
                             </div>
-                            <div className="min-w-0">
-                                <div className={`text-base font-black leading-tight ${t.textMain}`}>{card.title}</div>
-                                <div className={`text-[11px] leading-snug ${t.textSub}`}>{card.detail}</div>
+                            <span className={`shrink-0 rounded-lg border px-3 py-2 text-[10px] font-black ${theme === 'dark' ? 'border-blue-500/35 bg-blue-500/10 text-blue-300' : 'border-blue-200 bg-blue-50 text-blue-700'}`}>
+                                Step {calibrationWizard.step + 1} of {activeCalibrationSteps.length}
+                            </span>
+                        </div>
+
+                        <div className={`grid grid-cols-4 gap-px border-b ${t.borderCard} ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-200'}`}>
+                            {activeCalibrationSteps.map((step, index) => {
+                                const StepperIcon = step.icon;
+                                const isCurrent = index === calibrationWizard.step;
+                                const isComplete = index < calibrationWizard.step;
+                                return (
+                                    <button
+                                        type="button"
+                                        key={step.id}
+                                        data-calibration-step={step.id}
+                                        onClick={() => index <= calibrationWizard.step && setCalibrationWizard(prev => ({ ...prev, step: index }))}
+                                        className={`flex h-[58px] min-w-0 items-center gap-2 px-3 text-left ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'} ${isCurrent ? 'shadow-[inset_0_-3px_0_#2563eb]' : ''} ${index > calibrationWizard.step ? 'cursor-default opacity-55' : 'hover:bg-blue-500/5'}`}
+                                    >
+                                        <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${isCurrent ? 'bg-blue-600 text-white' : isComplete ? 'bg-green-500/10 text-green-500' : theme === 'dark' ? 'bg-slate-800 text-slate-500' : 'bg-gray-100 text-gray-400'}`}>
+                                            {isComplete ? <Check className="h-3.5 w-3.5" /> : <StepperIcon className="h-3.5 w-3.5" />}
+                                        </span>
+                                        <span className="min-w-0">
+                                            <span className={`block text-[9px] font-black uppercase tracking-[0.04em] ${isCurrent ? 'text-blue-500' : t.textSub}`}>{index + 1}</span>
+                                            <span className={`block truncate text-[11px] font-black ${t.textMain}`}>{step.title}</span>
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        <div className="grid gap-3 p-3 lg:grid-cols-[minmax(0,1.25fr)_minmax(250px,0.75fr)]">
+                            <div className={`min-w-0 rounded-xl border p-4 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/65' : 'bg-gray-50/80'}`}>
+                                <div className="flex items-start gap-3">
+                                    <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${theme === 'dark' ? 'bg-blue-500/15' : 'bg-blue-50'} text-blue-500`}>
+                                        <StepIcon className="h-5 w-5" />
+                                    </span>
+                                    <div className="min-w-0">
+                                        <div className={`text-[10px] font-black uppercase tracking-[0.05em] text-blue-500`}>Do this now</div>
+                                        <h4 className={`text-lg font-black leading-6 ${t.textMain}`}>{activeCalibrationStep.title}</h4>
+                                        <p className={`mt-1 text-xs leading-5 ${t.textSub}`}>{activeCalibrationStep.instruction}</p>
+                                    </div>
+                                </div>
+                                <div className={`mt-3 rounded-lg border px-3 py-2 text-[11px] leading-4 ${theme === 'dark' ? 'border-blue-500/25 bg-blue-500/8 text-blue-200' : 'border-blue-200 bg-blue-50 text-blue-800'}`}>
+                                    {activeCalibrationStep.note}
+                                </div>
+                                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                                    {activeCalibrationStep.checks.map((check, index) => (
+                                        <div key={check} className="flex min-w-0 items-start gap-2">
+                                            <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[8px] font-black ${theme === 'dark' ? 'bg-slate-800 text-blue-300' : 'bg-blue-50 text-blue-600'}`}>
+                                                {index + 1}
+                                            </span>
+                                            <span className={`text-[10px] leading-4 ${t.textSub}`}>{check}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className={`rounded-xl border p-3 ${t.borderCard}`}>
+                                <div className="flex items-center justify-between gap-2">
+                                    <div>
+                                        <div className={`text-[9px] font-black uppercase tracking-[0.05em] ${t.textSub}`}>Current / target</div>
+                                        <div className={`text-sm font-black ${t.textMain}`}>{activeCalibrationStep.summary}</div>
+                                    </div>
+                                    <span className="flex items-center gap-1 text-[9px] font-black text-blue-500">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-blue-500" /> GUIDED
+                                    </span>
+                                </div>
+                                <div className="mt-3 grid grid-cols-2 gap-2">
+                                    {activeCalibrationStep.metrics.map(([label, value]) => (
+                                        <div key={label} className={`min-w-0 rounded-lg border p-2 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/65' : 'bg-gray-50'}`}>
+                                            <div className={`truncate text-[9px] font-black uppercase tracking-[0.03em] ${t.textSub}`}>{label}</div>
+                                            <div className={`truncate text-sm font-black ${t.textMain}`}>{value}</div>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
                         </div>
-                        <span className={`shrink-0 text-[10px] font-black px-2 py-1 rounded-full border ${statusClass(card.status)}`}>{card.status}</span>
-                      </div>
 
-                      <div className="grid grid-cols-2 gap-2">
-                        {card.meta.map((item) => (
-                            <div key={item.label} className={`${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50'} border ${t.borderCard} rounded-lg p-2`}>
-                                <div className={`text-[9px] uppercase font-black ${t.textSub}`}>{item.label}</div>
-                                <div className={`text-[13px] font-black leading-tight ${t.textMain}`}>{item.value}</div>
+                        <div className={`flex min-h-[60px] items-center justify-between gap-3 border-t px-4 py-2.5 ${t.borderCard}`}>
+                            <button
+                                type="button"
+                                onClick={() => calibrationWizard.step > 0
+                                    ? setCalibrationWizard(prev => ({ ...prev, step: prev.step - 1 }))
+                                    : setCalibrationWizard({ scope: null, step: 0 })}
+                                className={`flex h-11 items-center gap-2 rounded-lg border px-4 text-xs font-black ${t.borderCard} ${t.textMain} hover:brightness-95`}
+                            >
+                                <ChevronRight className="h-4 w-4 rotate-180" />
+                                {calibrationWizard.step > 0 ? 'Back' : 'Cancel'}
+                            </button>
+                            <button
+                                type="button"
+                                data-calibration-next
+                                onClick={advanceCalibration}
+                                className="flex h-11 items-center gap-2 rounded-lg bg-blue-600 px-5 text-xs font-black text-white shadow-md shadow-blue-900/15 hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60"
+                            >
+                                {activeCalibrationStep.action}
+                                {calibrationWizard.step === activeCalibrationSteps.length - 1 ? <Check className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                            </button>
+                        </div>
+                    </section>
+                );
+            }
+
+            return (
+                <section data-calibration-center className={`overflow-hidden rounded-2xl border ${t.borderCard} ${t.bgPanel}`}>
+                    <div className={`grid min-h-[62px] grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b px-4 py-2.5 ${t.borderCard}`}>
+                        <div className="flex min-w-0 items-center gap-3">
+                            <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${theme === 'dark' ? 'bg-blue-500/15' : 'bg-blue-50'} text-blue-500`}>
+                                <Gauge className="h-5 w-5" />
+                            </span>
+                            <span className="min-w-0">
+                                <span className={`block text-base font-black leading-5 ${t.textMain}`}>Calibration center</span>
+                                <span className={`block truncate text-[11px] ${t.textSub}`}>Sensor zero, response, delay and field validation — not dimensions.</span>
+                            </span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                            <span className={`flex h-9 items-center gap-1.5 rounded-lg border px-3 text-[10px] font-black ${calibrationStatusTone(readyCalibrationCount === calibrationModules.length)}`}>
+                                {readyCalibrationCount === calibrationModules.length ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+                                {readyCalibrationCount}/{calibrationModules.length} systems ready
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => openCalibration(recommendedCalibrationScope)}
+                                disabled={!calibrationStartReady}
+                                className="flex h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 text-xs font-black text-white shadow-md shadow-blue-900/15 hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {Math.abs(speed) >= 0.1
+                                    ? 'Stop vehicle'
+                                    : rtkStatus !== 'FIX'
+                                        ? 'Wait for RTK FIX'
+                                        : readyCalibrationCount === calibrationModules.length
+                                            ? 'Recalibrate vehicle'
+                                            : 'Continue calibration'}
+                                <ChevronRight className="h-4 w-4" />
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className={`grid grid-cols-3 gap-px border-b ${t.borderCard} ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-200'}`}>
+                        {[
+                            ['Equipment pair', `${activeVehicleSettings.type} + ${activeImplementSettings.name}`, Tractor, true],
+                            ['Machine state', Math.abs(speed) < 0.1 ? 'Stopped / safe to start' : `${Math.abs(speed).toFixed(1)} km/h / stop first`, AlertCircle, Math.abs(speed) < 0.1],
+                            ['Position quality', `${rtkStatus} / ${currentGnssTelemetry.roverUsedSats || satelliteCount} sats`, LocateFixed, rtkStatus === 'FIX']
+                        ].map(([label, value, Icon, ready]) => (
+                            <div key={label} className={`flex h-[52px] min-w-0 items-center gap-2.5 px-3 ${theme === 'dark' ? 'bg-slate-900/75' : 'bg-gray-50'}`}>
+                                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${ready ? 'bg-green-500/10 text-green-500' : 'bg-amber-500/10 text-amber-500'}`}>
+                                    <Icon className="h-3.5 w-3.5" />
+                                </span>
+                                <span className="min-w-0">
+                                    <span className={`block text-[9px] font-black uppercase tracking-[0.04em] ${t.textSub}`}>{label}</span>
+                                    <span className={`block truncate text-[11px] font-black ${t.textMain}`}>{value}</span>
+                                </span>
                             </div>
                         ))}
-                      </div>
+                    </div>
 
-                      <div className="mt-auto flex gap-2">
-                        {card.actions.map((action) => (
-                          <button
-                            key={action.label}
-                            onClick={action.onClick}
-                            className={
-                              action.tone === 'primary'
-                                ? 'px-3 py-2 rounded-lg bg-blue-600 text-white font-black hover:bg-blue-500 text-xs whitespace-nowrap flex-1'
-                                : `px-3 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-black hover:brightness-95 text-xs whitespace-nowrap`
-                            }
-                          >
-                            {action.label}
-                          </button>
-                        ))}
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </div>
+                    <div className="grid gap-3 p-3 lg:grid-cols-2">
+                        {calibrationModules.map(module => {
+                            const ModuleIcon = module.icon;
+                            return (
+                                <article key={module.scope} data-calibration-module={module.scope} className={`overflow-hidden rounded-xl border ${t.borderCard}`}>
+                                    <div className={`flex min-h-[58px] items-center justify-between gap-3 border-b px-3 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/75' : 'bg-gray-50'}`}>
+                                        <div className="flex min-w-0 items-center gap-2.5">
+                                            <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${theme === 'dark' ? 'bg-blue-500/15' : 'bg-blue-50'} text-blue-500`}>
+                                                <ModuleIcon className="h-4.5 w-4.5" />
+                                            </span>
+                                            <span className="min-w-0">
+                                                <span className={`block truncate text-sm font-black ${t.textMain}`}>{module.title}</span>
+                                                <span className={`block truncate text-[10px] ${t.textSub}`}>{module.profile}</span>
+                                            </span>
+                                        </div>
+                                        <span className={`shrink-0 rounded-lg border px-2.5 py-1 text-[9px] font-black ${calibrationStatusTone(module.ready)}`}>
+                                            {module.ready ? 'CALIBRATED' : module.blocked ? 'VEHICLE FIRST' : 'NEEDS CALIBRATION'}
+                                        </span>
+                                    </div>
+
+                                    <div className={`grid grid-cols-2 gap-px ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-200'}`}>
+                                        {module.steps.map((step, index) => {
+                                            const StepIcon = step.icon;
+                                            return (
+                                                <button
+                                                    type="button"
+                                                    key={step.id}
+                                                    onClick={() => openCalibration(module.scope, module.ready ? index : 0)}
+                                                    disabled={module.blocked || !calibrationStartReady}
+                                                    className={`flex h-[58px] min-w-0 items-center gap-2.5 px-3 text-left ${theme === 'dark' ? 'bg-slate-950 hover:bg-slate-900' : 'bg-white hover:bg-blue-50/60'} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/60 disabled:cursor-not-allowed disabled:opacity-50`}
+                                                >
+                                                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${module.ready ? 'bg-green-500/10 text-green-500' : theme === 'dark' ? 'bg-slate-800 text-blue-400' : 'bg-blue-50 text-blue-500'}`}>
+                                                        {module.ready ? <Check className="h-3.5 w-3.5" /> : <StepIcon className="h-3.5 w-3.5" />}
+                                                    </span>
+                                                    <span className="min-w-0">
+                                                        <span className={`block text-[11px] font-black leading-4 ${t.textMain}`}>{index + 1}. {step.title}</span>
+                                                        <span className={`block text-[9px] font-bold ${module.ready ? 'text-green-500' : t.textDim}`}>{module.ready ? 'Passed' : 'Guided step'}</span>
+                                                    </span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+
+                                    <div className={`flex min-h-[58px] items-center justify-between gap-3 border-t px-3 ${t.borderCard}`}>
+                                        <div className="min-w-0">
+                                            <div className={`truncate text-[10px] ${t.textSub}`}>{formatCalibrationDate(module.updatedAt, module.ready)}</div>
+                                            <button type="button" onClick={() => navigateFromCalibration(module.settingsTarget)} className="-ml-2 h-10 rounded-lg px-2 text-[10px] font-black text-blue-500 hover:bg-blue-500/5 hover:text-blue-400">
+                                                Review profile dimensions
+                                            </button>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => openCalibration(module.scope)}
+                                            disabled={module.blocked || !calibrationStartReady}
+                                            className={`h-10 shrink-0 rounded-lg px-4 text-xs font-black disabled:cursor-not-allowed disabled:opacity-50 ${module.ready ? `border ${t.borderCard} ${t.textMain} hover:brightness-95` : 'bg-blue-600 text-white hover:bg-blue-500'}`}
+                                        >
+                                            {module.blocked ? 'Vehicle first' : module.ready ? 'Recalibrate' : 'Start calibration'}
+                                        </button>
+                                    </div>
+                                </article>
+                            );
+                        })}
+                    </div>
+                </section>
             );
         }
         case 'rtk': {
@@ -9013,6 +9399,61 @@ const App = () => {
                 );
             };
 
+            const baseSurveyVisual = baseSurveyState === 'saved'
+                ? {
+                    label: 'Complete',
+                    detail: 'Base position saved',
+                    icon: CheckCircle2,
+                    tone: theme === 'dark' ? 'text-green-400' : 'text-green-700',
+                    soft: theme === 'dark' ? 'bg-green-500/10' : 'bg-green-50'
+                }
+                : baseSurveyState === 'running'
+                    ? {
+                        label: 'Surveying',
+                        detail: 'Collecting a fixed position',
+                        icon: Radio,
+                        tone: theme === 'dark' ? 'text-amber-300' : 'text-amber-700',
+                        soft: theme === 'dark' ? 'bg-amber-500/10' : 'bg-amber-50'
+                    }
+                    : {
+                        label: 'Ready',
+                        detail: 'Ready to survey',
+                        icon: LocateFixed,
+                        tone: theme === 'dark' ? 'text-blue-300' : 'text-blue-700',
+                        soft: theme === 'dark' ? 'bg-blue-500/10' : 'bg-blue-50'
+                    };
+            const BaseSurveyStatusIcon = baseSurveyVisual.icon;
+            const baseControlClass = `h-11 w-full rounded-lg border px-3 text-sm font-semibold tabular-nums outline-none transition-colors ${t.bgInput} ${t.borderCard} ${t.textMain} focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 disabled:cursor-not-allowed disabled:opacity-45`;
+            const renderBaseInput = ({ field, label, value, type = 'text', disabled = false, min, max, step }) => (
+                <label htmlFor={`rtk-base-${field}`} className="flex min-w-0 flex-col gap-1.5">
+                    <span className={`text-[10px] font-bold leading-3 ${t.textSub}`}>{label}</span>
+                    <input
+                        id={`rtk-base-${field}`}
+                        type={type}
+                        value={value}
+                        disabled={disabled}
+                        min={min}
+                        max={max}
+                        step={step}
+                        onChange={(event) => handleRtkSettingChange(field, event.target.value)}
+                        className={baseControlClass}
+                    />
+                </label>
+            );
+            const renderBaseSelect = ({ field, label, value, options }) => (
+                <label htmlFor={`rtk-base-${field}`} className="flex min-w-0 flex-col gap-1.5">
+                    <span className={`text-[10px] font-bold leading-3 ${t.textSub}`}>{label}</span>
+                    <select
+                        id={`rtk-base-${field}`}
+                        value={value}
+                        onChange={(event) => handleRtkSettingChange(field, event.target.value)}
+                        className={baseControlClass}
+                    >
+                        {options.map(option => <option key={option} value={option}>{option}</option>)}
+                    </select>
+                </label>
+            );
+
             return (
               <div data-rtk-workspace className="space-y-4">
                 <section data-rtk-overview className={`${t.bgPanel} overflow-hidden rounded-2xl border ${t.borderCard}`}>
@@ -9162,39 +9603,107 @@ const App = () => {
                 )}
 
                 {rtkMode === 'BASE' && (
-                    <SettingsSection
-                        title="Local Base / Radio"
-                        detail="Setup a field base station and send correction through radio."
-                        icon={LocateFixed}
-                        actions={<><SettingsActionButton onClick={() => { setBaseSurveyState('running'); setRtkStatus('FLOAT'); showNotification('Base survey-in started', 'info'); }}>{baseSurveyState === 'saved' ? 'Survey OK' : baseSurveyState === 'running' ? 'Surveying' : 'Start Survey'}</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => { setBaseSurveyState('saved'); setRtkStatus('FIX'); showNotification('Base station profile saved', 'success'); }}>{baseSurveyState === 'saved' ? 'Base Saved' : 'Save Base'}</SettingsActionButton></>}
-                    >
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                            <SettingSelect label="Base Mode" value={rtkConfig.baseMode} onChange={(value) => handleRtkSettingChange('baseMode', value)} options={['Survey In', 'Known Position', 'Moving Base']} />
-                            <SettingInput theme={t} label="Base ID" value={rtkConfig.baseId} onChange={(e) => handleRtkSettingChange('baseId', e.target.value)} />
-                            <SettingInput theme={t} label="Survey Duration (s)" value={rtkConfig.surveyDuration} type="number" onChange={(e) => handleRtkSettingChange('surveyDuration', e.target.value)} />
-                            <SettingInput theme={t} label="Target Accuracy (cm)" value={rtkConfig.surveyAccuracy} type="number" onChange={(e) => handleRtkSettingChange('surveyAccuracy', e.target.value)} />
+                    <section data-local-base-workspace className={`${t.bgPanel} overflow-hidden rounded-2xl border ${t.borderCard}`}>
+                        <div className={`flex min-h-[62px] flex-wrap items-center justify-between gap-3 border-b px-4 py-2.5 ${t.borderCard}`}>
+                            <div className="flex min-w-0 items-center gap-3">
+                                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-blue-50'} text-blue-500`}>
+                                    <LocateFixed className="h-[18px] w-[18px]" />
+                                </span>
+                                <div className="min-w-0">
+                                    <h4 className={`text-sm font-black ${t.textMain}`}>Local base station</h4>
+                                    <div className={`text-[11px] leading-4 ${t.textSub}`}>Survey a fixed position and broadcast RTCM corrections.</div>
+                                </div>
+                            </div>
+
+                            <div className="flex shrink-0 items-center gap-2">
+                                <span role="status" aria-live="polite" className={`flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-black ${baseSurveyVisual.soft} ${baseSurveyVisual.tone}`}>
+                                    <BaseSurveyStatusIcon className="h-3.5 w-3.5" />
+                                    {baseSurveyVisual.label}
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (baseSurveyState === 'running') {
+                                            setBaseSurveyState('saved');
+                                            setRtkStatus('FIX');
+                                            showNotification('Base survey completed', 'success');
+                                            return;
+                                        }
+                                        setBaseSurveyState('running');
+                                        setRtkStatus('FLOAT');
+                                        showNotification('Base survey-in started', 'info');
+                                    }}
+                                    className={`flex h-11 items-center gap-2 rounded-xl border px-4 text-xs font-black transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 ${
+                                        baseSurveyState === 'saved'
+                                            ? `${t.borderCard} ${t.textMain} hover:border-blue-500/60`
+                                            : 'border-blue-600 bg-blue-600 text-white shadow-md shadow-blue-900/15 hover:bg-blue-500'
+                                    }`}
+                                >
+                                    {baseSurveyState === 'running' ? <Save className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                                    {baseSurveyState === 'running' ? 'Complete survey' : baseSurveyState === 'saved' ? 'Survey again' : 'Start survey'}
+                                </button>
+                            </div>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <SettingInput theme={t} label="Base Latitude" value={rtkConfig.baseLatitude} onChange={(e) => handleRtkSettingChange('baseLatitude', e.target.value)} />
-                            <SettingInput theme={t} label="Base Longitude" value={rtkConfig.baseLongitude} onChange={(e) => handleRtkSettingChange('baseLongitude', e.target.value)} />
-                            <SettingInput theme={t} label="Base Height (m)" value={rtkConfig.baseHeight} type="number" onChange={(e) => handleRtkSettingChange('baseHeight', e.target.value)} />
+
+                        <div className="grid grid-cols-1 items-stretch gap-3 p-3 lg:grid-cols-12">
+                            <fieldset data-local-base-group="position" className={`h-full rounded-xl border p-3 lg:col-span-7 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50/80'}`}>
+                                <legend className="sr-only">Base position and survey criteria</legend>
+                                <div className={`mb-3 flex min-h-[38px] items-center justify-between gap-3 border-b pb-2.5 ${t.borderCard}`}>
+                                    <div className="flex min-w-0 items-center gap-2.5">
+                                        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-blue-500`}>
+                                            <Navigation className="h-4 w-4" />
+                                        </span>
+                                        <div className="min-w-0">
+                                            <h5 className={`text-xs font-black ${t.textMain}`}>Base position</h5>
+                                            <p className={`text-[10px] leading-3 ${t.textSub}`}>Coordinates and survey criteria</p>
+                                        </div>
+                                    </div>
+                                    <span className={`rounded-md border px-2 py-1 text-[9px] font-black ${t.borderCard} ${t.textSub}`}>{rtkConfig.baseMode}</span>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                                    {renderBaseSelect({ field: 'baseMode', label: 'Base mode', value: rtkConfig.baseMode, options: ['Survey In', 'Known Position', 'Moving Base'] })}
+                                    {renderBaseInput({ field: 'baseId', label: 'Base ID', value: rtkConfig.baseId })}
+                                </div>
+                                <div className="mt-2.5 grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                                    {renderBaseInput({ field: 'baseLatitude', label: 'Latitude', value: rtkConfig.baseLatitude, type: 'number', min: -90, max: 90, step: 'any' })}
+                                    {renderBaseInput({ field: 'baseLongitude', label: 'Longitude', value: rtkConfig.baseLongitude, type: 'number', min: -180, max: 180, step: 'any' })}
+                                    {renderBaseInput({ field: 'baseHeight', label: 'Height (m)', value: rtkConfig.baseHeight, type: 'number', min: -500, max: 10000, step: 0.1 })}
+                                </div>
+                                <div className="mt-2.5 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                                    {renderBaseInput({ field: 'surveyDuration', label: 'Survey duration (s)', value: rtkConfig.surveyDuration, type: 'number', disabled: rtkConfig.baseMode !== 'Survey In', min: 30, step: 30 })}
+                                    {renderBaseInput({ field: 'surveyAccuracy', label: 'Target accuracy (cm)', value: rtkConfig.surveyAccuracy, type: 'number', disabled: rtkConfig.baseMode !== 'Survey In', min: 0.1, max: 10, step: 0.1 })}
+                                </div>
+                            </fieldset>
+
+                            <fieldset data-local-base-group="radio" className={`h-full rounded-xl border p-3 lg:col-span-5 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-gray-50/80'}`}>
+                                <legend className="sr-only">Radio output and correction stream</legend>
+                                <div className={`mb-3 flex min-h-[38px] items-center justify-between gap-3 border-b pb-2.5 ${t.borderCard}`}>
+                                    <div className="flex min-w-0 items-center gap-2.5">
+                                        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} text-blue-500`}>
+                                            <Radio className="h-4 w-4" />
+                                        </span>
+                                        <div className="min-w-0">
+                                            <h5 className={`text-xs font-black ${t.textMain}`}>Radio output</h5>
+                                            <p className={`text-[10px] leading-3 ${t.textSub}`}>Receiver and correction stream</p>
+                                        </div>
+                                    </div>
+                                    <span className={`whitespace-nowrap rounded-md border px-2 py-1 text-[9px] font-black tabular-nums ${t.borderCard} ${t.textSub}`}>
+                                        {rtkConfig.radioFrequency} MHz · {rtkConfig.radioPower}
+                                    </span>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                                    {renderBaseSelect({ field: 'receiverPort', label: 'Receiver port', value: rtkConfig.receiverPort, options: ['COM1', 'COM2', 'COM3', 'USB', 'TCP'] })}
+                                    {renderBaseSelect({ field: 'baudRate', label: 'Baud rate', value: rtkConfig.baudRate, options: ['9600', '38400', '57600', '115200', '230400'] })}
+                                    {renderBaseSelect({ field: 'protocol', label: 'Correction format', value: rtkConfig.protocol, options: ['RTCM3', 'RTCM2', 'CMR+', 'NMEA'] })}
+                                    {renderBaseSelect({ field: 'radioPower', label: 'Radio power', value: rtkConfig.radioPower, options: ['0.5W', '1W', '2W', '5W'] })}
+                                    {renderBaseInput({ field: 'radioChannel', label: 'Radio channel', value: rtkConfig.radioChannel })}
+                                    {renderBaseInput({ field: 'radioFrequency', label: 'Frequency (MHz)', value: rtkConfig.radioFrequency, type: 'number', min: 0, step: 0.001 })}
+                                </div>
+                            </fieldset>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <SettingSelect label="Receiver Port" value={rtkConfig.receiverPort} onChange={(value) => handleRtkSettingChange('receiverPort', value)} options={['COM1', 'COM2', 'COM3', 'USB', 'TCP']} />
-                            <SettingSelect label="Baud Rate" value={rtkConfig.baudRate} onChange={(value) => handleRtkSettingChange('baudRate', value)} options={['9600', '38400', '57600', '115200', '230400']} />
-                            <SettingSelect label="Correction Format" value={rtkConfig.protocol} onChange={(value) => handleRtkSettingChange('protocol', value)} options={['RTCM3', 'RTCM2', 'CMR+', 'NMEA']} />
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <SettingInput theme={t} label="Radio Channel" value={rtkConfig.radioChannel} onChange={(e) => handleRtkSettingChange('radioChannel', e.target.value)} />
-                            <SettingInput theme={t} label="Radio Frequency (MHz)" value={rtkConfig.radioFrequency} onChange={(e) => handleRtkSettingChange('radioFrequency', e.target.value)} />
-                            <SettingSelect label="Radio Power" value={rtkConfig.radioPower} onChange={(value) => handleRtkSettingChange('radioPower', value)} options={['0.5W', '1W', '2W', '5W']} />
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                            <ConfigTile icon={LocateFixed} label="Survey State" value={baseSurveyState === 'saved' ? 'Saved' : baseSurveyState === 'running' ? 'Running' : 'Ready'} tone={baseSurveyState === 'saved' ? 'text-green-500' : 'text-blue-500'} />
-                            <ConfigTile icon={Radio} label="Radio Link" value={`${rtkConfig.radioFrequency} MHz / ${rtkConfig.radioPower}`} />
-                            <ConfigTile icon={CheckCircle2} label="Correction" value={rtkStatus} tone={rtkStatus === 'FIX' ? 'text-green-500' : 'text-yellow-500'} />
-                        </div>
-                    </SettingsSection>
+                    </section>
                 )}
 
               </div>
@@ -9292,16 +9801,27 @@ const App = () => {
                           <div className={
                               settingsTab === 'wifi'
                                   ? 'h-full min-h-0 w-full'
-                                  : `${['vehicle', 'implement'].includes(settingsTab) ? 'w-full' : 'max-w-5xl'} pb-24`
+                                  : ['vehicle', 'implement'].includes(settingsTab)
+                                      ? 'w-full pb-24'
+                                      : ['overview', 'calibration'].includes(settingsTab)
+                                          ? 'max-w-5xl'
+                                          : 'max-w-5xl pb-24'
                           }>
                               {renderSettingsContent()}
                           </div>
                       </div>
                       <div className={`${settingsTab === 'wifi' ? 'px-4 py-2.5' : 'p-4 lg:p-5'} border-t ${t.borderCard} flex items-center gap-3 ${['vehicle', 'implement'].includes(settingsTab) ? 'justify-between' : 'justify-end'} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
-                          {settingsTab !== 'wifi' && (
+                          {!['wifi', 'overview', 'calibration'].includes(settingsTab) && (
                               <button className={`px-5 lg:px-7 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-sm lg:text-base`} onClick={closeSettingsPanel}>Cancel</button>
                           )}
-                          {settingsTab === 'wifi' ? (
+                          {['overview', 'calibration'].includes(settingsTab) ? (
+                              <button
+                                  className="h-11 rounded-lg bg-blue-600 px-7 text-sm font-black text-white shadow-md shadow-blue-900/15 hover:bg-blue-500"
+                                  onClick={closeSettingsPanel}
+                              >
+                                  Done
+                              </button>
+                          ) : settingsTab === 'wifi' ? (
                               <button
                                   className="h-10 rounded-lg bg-blue-600 px-6 text-sm font-bold text-white shadow-md shadow-blue-900/15 hover:bg-blue-500"
                                   onClick={closeSettingsPanel}
