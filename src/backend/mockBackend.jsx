@@ -243,6 +243,7 @@ const MockBackend = (() => {
     ],
     lineType: 'STRAIGHT_AB',
     isMultiLineMode: true,
+    lineShiftOffset: 0,
     manualOffset: 0,
     showGuidanceLines: true,
     guidanceLine: null,
@@ -331,6 +332,9 @@ const MockBackend = (() => {
     if (!persisted) return base;
 
     const next = { ...base, ...persisted.data };
+    // A run-only line shift must never leak into the next session. Saved line
+    // copies restore their own translation from the line asset instead.
+    next.lineShiftOffset = 0;
     const persistedVehicleSettings = persisted.data.vehicleSettings || {};
     next.vehicleSettings = { ...base.vehicleSettings, ...persistedVehicleSettings };
     if (!persistedVehicleSettings.gnssLayout) {
@@ -463,6 +467,7 @@ const MockBackend = (() => {
     setEventLog: (next) => setKey('eventLog', next),
     setLineType: (next) => setKey('lineType', next),
     setIsMultiLineMode: (next) => setKey('isMultiLineMode', next),
+    setLineShiftOffset: (next) => setKey('lineShiftOffset', next),
     setManualOffset: (next) => setKey('manualOffset', next),
     setShowGuidanceLines: (next) => setKey('showGuidanceLines', next),
     setGuidanceLine: (next) => setKey('guidanceLine', next),

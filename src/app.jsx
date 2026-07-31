@@ -81,6 +81,7 @@ const App = () => {
     eventLog,
     lineType,
     isMultiLineMode,
+    lineShiftOffset,
     manualOffset,
     showGuidanceLines,
     guidanceLine,
@@ -105,6 +106,8 @@ const App = () => {
     tempBoundary,
     currentFieldBoundaries
   } = state;
+
+  const effectiveGuidanceOffset = (Number(lineShiftOffset) || 0) + (Number(manualOffset) || 0);
 
   const [steeringMode, setSteeringMode] = useState('MANUAL');
   const [isRecording, setIsRecording] = useState(false);
@@ -163,6 +166,8 @@ const App = () => {
   const [fieldAssetTab, setFieldAssetTab] = useState('lines');
   const [fieldQuickView, setFieldQuickView] = useState(null);
   const [dockQuickPicker, setDockQuickPicker] = useState(null);
+  const [dockShiftDirection, setDockShiftDirection] = useState('right');
+  const [dockShiftDistanceM, setDockShiftDistanceM] = useState('0.10');
   const [showArchivedLines, setShowArchivedLines] = useState(false);
   const [lineCatalogFilter, setLineCatalogFilter] = useState('ALL');
   const [selectedCatalogLineId, setSelectedCatalogLineId] = useState(null);
@@ -204,6 +209,8 @@ const App = () => {
   // NEW: Locked Lane Index for Auto Steer
   const activeLaneRef = useRef(null);
   const manualLaneRef = useRef(null);
+  const multiLineShiftRestoreRef = useRef(null);
+  const activeLineShiftSyncRef = useRef(null);
   const bootstrappedLineRef = useRef(false);
   const runTelemetrySyncRef = useRef({ runStatus: '', rtkTelemetry: '', runKpi: '' });
 
@@ -349,7 +356,7 @@ const App = () => {
         type: guidanceLine,
         isMulti: isMultiLineMode,
         width: implementSettings.width * PIXELS_PER_METER,
-        manualOffset: manualOffset,
+        manualOffset: effectiveGuidanceOffset,
         points: {
             a: pointA,
             b: pointB,
@@ -358,7 +365,7 @@ const App = () => {
             pivot: { center: pivotCenter, radius: pivotRadius }
         }
     };
-  }, [guidanceLine, pointA, pointB, aPlusPoint, aPlusHeading, curvePoints, pivotCenter, pivotRadius, activeLineId, fields, selectedFieldId, isMultiLineMode, implementSettings.width, manualOffset]);
+  }, [guidanceLine, pointA, pointB, aPlusPoint, aPlusHeading, curvePoints, pivotCenter, pivotRadius, activeLineId, fields, selectedFieldId, isMultiLineMode, implementSettings.width, effectiveGuidanceOffset]);
 
   useEffect(() => {
       manualLaneRef.current = null;
@@ -536,17 +543,24 @@ const App = () => {
       return { validLine: false, xte: 0, lineHeading: 0 };
   };
 
+  const getGuidanceDirectionFactor = (guide, p) => {
+      const metrics = getGuidanceMetrics(guide, p);
+      if (!metrics.validLine) return 1;
+      const headingDeltaRadians = (metrics.lineHeading - (Number(p?.heading) || 0)) * Math.PI / 180;
+      return Math.cos(headingDeltaRadians) >= 0 ? 1 : -1;
+  };
+
   const getTargetRelativeXte = (rawXte, guide) => {
-      const offset = Number(guide.manualOffset) || 0;
-      if (guide.isMulti && guide.width > 0) {
-          let targetLaneIndex = activeLaneRef.current;
-          if (targetLaneIndex === null) {
-              const nearestLane = Math.round(rawXte / guide.width);
-              if (steeringMode !== 'MANUAL') {
-                  targetLaneIndex = nearestLane;
-              } else {
-                  if (manualLaneRef.current === null) manualLaneRef.current = nearestLane;
-                  const laneRelativeXte = rawXte - manualLaneRef.current * guide.width;
+       const offset = Number(guide.manualOffset) || 0;
+       if (guide.isMulti && guide.width > 0) {
+           let targetLaneIndex = activeLaneRef.current;
+           if (targetLaneIndex === null) {
+               const nearestLane = Math.round((rawXte - offset) / guide.width);
+               if (steeringMode !== 'MANUAL') {
+                   targetLaneIndex = nearestLane;
+               } else {
+                   if (manualLaneRef.current === null) manualLaneRef.current = nearestLane;
+                   const laneRelativeXte = rawXte - manualLaneRef.current * guide.width - offset;
                   const switchThreshold = guide.width * 0.62;
                   if (laneRelativeXte > switchThreshold) manualLaneRef.current += 1;
                   else if (laneRelativeXte < -switchThreshold) manualLaneRef.current -= 1;
@@ -695,10 +709,12 @@ const App = () => {
       actions.setAPlusPoint(defaultLine.points?.aplus?.point || null);
       actions.setAPlusHeading(defaultLine.points?.aplus?.heading ?? null);
       actions.setCurvePoints(defaultLine.points?.curve || []);
-      actions.setPivotCenter(defaultLine.points?.pivot?.center || null);
-      actions.setPivotRadius(defaultLine.points?.pivot?.radius || null);
-      actions.setGuidanceLine(defaultLine.type);
-      if (defaultLine.isMulti !== undefined) actions.setIsMultiLineMode(defaultLine.isMulti);
+       actions.setPivotCenter(defaultLine.points?.pivot?.center || null);
+       actions.setPivotRadius(defaultLine.points?.pivot?.radius || null);
+       actions.setGuidanceLine(defaultLine.type);
+       actions.setLineShiftOffset((Number(defaultLine.translationOffsetM) || 0) * PIXELS_PER_METER);
+       actions.setManualOffset(0);
+       if (defaultLine.isMulti !== undefined) actions.setIsMultiLineMode(defaultLine.isMulti);
   }, [fields, selectedFieldId, loadedField, activeLineId, guidanceLine]);
 
   useEffect(() => {
@@ -1043,6 +1059,7 @@ const App = () => {
       actions.setIsMultiLineMode(nextMode);
 
       if (!nextMode) {
+          multiLineShiftRestoreRef.current = Number(lineShiftOffset) || 0;
           // Switching TO Single Mode -> Snap to current vehicle position (calculate offset)
           // Using current state from physics refs or state is tricky, but worldPos is updated
           // We recalculate XTE here.
@@ -1054,10 +1071,15 @@ const App = () => {
           const snapMetrics = getGuidanceMetrics(guide, { ...p, heading });
           if (snapMetrics.validLine) calculatedOffset = snapMetrics.xte;
 
-          actions.setManualOffset(calculatedOffset);
+          actions.setLineShiftOffset(calculatedOffset);
+          actions.setManualOffset(0);
           showNotification("Single Line: Snapped to Vehicle", "info");
       } else {
+          const storedLineShift = (Number(activeLineRecord?.translationOffsetM) || 0) * PIXELS_PER_METER;
+          const restoredLineShift = multiLineShiftRestoreRef.current ?? storedLineShift;
+          actions.setLineShiftOffset(restoredLineShift);
           actions.setManualOffset(0);
+          multiLineShiftRestoreRef.current = null;
           showNotification("Multi Line: Grid Mode", "info");
       }
   };
@@ -1084,7 +1106,7 @@ const App = () => {
         if (guide && guide.type && guide.isMulti && guide.width > 0) {
              const metrics = getGuidanceMetrics(guide, { ...worldPos, heading });
              if (metrics.validLine) {
-                 activeLaneRef.current = Math.round(metrics.xte / guide.width);
+                 activeLaneRef.current = Math.round((metrics.xte - (Number(guide.manualOffset) || 0)) / guide.width);
              }
         }
         manualLaneRef.current = null;
@@ -1171,6 +1193,9 @@ const App = () => {
       };
       setWorkedArea(0);
       setIsCreating(false);
+      setDockQuickPicker(null);
+      setDockShiftDirection('right');
+      setDockShiftDistanceM('0.10');
       setFieldManagerOpen(false);
       setLinesPanelOpen(false);
       setLineModeModalOpen(false);
@@ -1200,6 +1225,8 @@ const App = () => {
       setCalibrationWizard({ scope: null, step: 0 });
       activeLaneRef.current = null;
       manualLaneRef.current = null;
+      multiLineShiftRestoreRef.current = null;
+      activeLineShiftSyncRef.current = null;
       bootstrappedLineRef.current = false;
       turnAssistRef.current = null;
       setTurnAssistActive(false);
@@ -1213,7 +1240,9 @@ const App = () => {
 
   const handleTrim = (direction) => {
       const trimPixels = PIXELS_PER_METER * 0.01;
-      actions.setManualOffset(prev => prev + (direction === 'left' ? -trimPixels : trimPixels));
+      const directionFactor = getGuidanceDirectionFactor(guidanceRef.current, { ...worldPos, heading });
+      const userDirection = direction === 'left' ? -1 : 1;
+      actions.setManualOffset(prev => prev + (userDirection * directionFactor * trimPixels));
       showNotification(`Trim ${direction === 'left' ? 'Left' : 'Right'} 1cm`, "info");
   };
   const handleZoom = (type) => {
@@ -1293,7 +1322,7 @@ const App = () => {
       setIsDraggingMap(false);
   };
 
-  const resetLines = () => { actions.setPointA(null); actions.setPointB(null); actions.setAPlusPoint(null); actions.setAPlusHeading(null); actions.setCurvePoints([]); actions.setIsRecordingCurve(false); actions.setPivotCenter(null); actions.setPivotRadius(null); actions.setGuidanceLine(null); actions.setActiveLineId(null); actions.setManualOffset(0); setIsCombinationPaused(false); };
+  const resetLines = () => { actions.setPointA(null); actions.setPointB(null); actions.setAPlusPoint(null); actions.setAPlusHeading(null); actions.setCurvePoints([]); actions.setIsRecordingCurve(false); actions.setPivotCenter(null); actions.setPivotRadius(null); actions.setGuidanceLine(null); actions.setActiveLineId(null); actions.setLineShiftOffset(0); actions.setManualOffset(0); multiLineShiftRestoreRef.current = null; activeLineShiftSyncRef.current = null; setIsCombinationPaused(false); };
 
   const cancelLineCreation = () => {
       resetLines();
@@ -1417,6 +1446,7 @@ const App = () => {
       actions.setPivotCenter(line.points.pivot?.center);
       actions.setPivotRadius(line.points.pivot?.radius);
       actions.setGuidanceLine(line.type);
+      actions.setLineShiftOffset((Number(line.translationOffsetM) || 0) * PIXELS_PER_METER);
       actions.setManualOffset(0);
       actions.setShowGuidanceLines(true);
       if (line.isMulti !== undefined) actions.setIsMultiLineMode(line.isMulti);
@@ -1514,12 +1544,14 @@ const App = () => {
         createdAt: createdAt.toISOString(),
         createdLocation: lineField?.name || loadedField?.name || 'Location unavailable',
         createdPosition: { x: worldPos.x, y: worldPos.y },
-        quality: 'Good',
-        archived: false,
-        points: { a: pointA, b: pointB, curve: curvePoints, pivot: { center: pivotCenter, radius: pivotRadius }, aplus: { point: aPlusPoint, heading: aPlusHeading } }
-    };
+         quality: 'Good',
+         archived: false,
+         translationOffsetM: 0,
+         points: { a: pointA, b: pointB, curve: curvePoints, pivot: { center: pivotCenter, radius: pivotRadius }, aplus: { point: aPlusPoint, heading: aPlusHeading } }
+     };
     actions.setFields(prev => prev.map(f => { if (f.id === selectedFieldId) { return { ...f, lines: [...(f.lines || []), newLine] }; } return f; }));
-    setLineNameModalOpen(false); setTempLineName(''); actions.setActiveLineId(newLine.id); setSelectedCatalogLineId(newLine.id);
+     setLineNameModalOpen(false); setTempLineName(''); actions.setActiveLineId(newLine.id); setSelectedCatalogLineId(newLine.id);
+     actions.setLineShiftOffset(0); actions.setManualOffset(0);
     setIsCreating(false); // Stop creating
     showNotification("Line Saved Successfully", "success");
     if (loadedField && loadedField.id === selectedFieldId) { actions.setLoadedField(prev => ({ ...prev, lines: [...(prev.lines || []), newLine] })); }
@@ -1954,12 +1986,27 @@ const App = () => {
   const activeFieldRecord = loadedField || fields.find(f => f.id === selectedFieldId);
   const activeTaskRecord = activeTaskId ? fields.find(f => f.id === selectedFieldId)?.tasks?.find(task => task.id === activeTaskId) : null;
   const activeLineRecord = activeLineId ? (activeFieldRecord?.lines || fields.find(f => f.id === selectedFieldId)?.lines || []).filter(line => !line.archived).find(line => line.id === activeLineId) : null;
+
+  useEffect(() => {
+      if (!activeLineId || !activeLineRecord) {
+          activeLineShiftSyncRef.current = null;
+          return;
+      }
+      const storedShiftMeters = Number(activeLineRecord.translationOffsetM) || 0;
+      const syncKey = `${activeLineId}:${storedShiftMeters.toFixed(3)}`;
+      if (activeLineShiftSyncRef.current === syncKey) return;
+      activeLineShiftSyncRef.current = syncKey;
+      multiLineShiftRestoreRef.current = null;
+      actions.setLineShiftOffset(storedShiftMeters * PIXELS_PER_METER);
+      actions.setManualOffset(0);
+  }, [activeLineId, activeLineRecord?.translationOffsetM]);
+
   const activeFieldAreaHa = parseFloat(String(activeFieldRecord?.area || '0').replace(/[^\d.]/g, '')) || 0;
   const liveGuide = {
       type: guidanceLine,
       isMulti: isMultiLineMode,
       width: implementSettings.width * PIXELS_PER_METER,
-      manualOffset,
+      manualOffset: effectiveGuidanceOffset,
       points: {
           a: pointA,
           b: pointB,
@@ -1969,6 +2016,7 @@ const App = () => {
       }
   };
   const liveGuidanceMetrics = getGuidanceMetrics(liveGuide, { ...worldPos, heading });
+  const liveGuidanceDirectionFactor = getGuidanceDirectionFactor(liveGuide, { ...worldPos, heading });
   const hasGuidanceToEngage = Boolean((guidanceLine || activeLineRecord || liveGuide.type) && liveGuidanceMetrics.validLine);
   const getAxisHeadingError = (lineHeading, vehicleHeading) => {
       let diff = normalizeAngle(lineHeading - vehicleHeading);
@@ -1976,7 +2024,7 @@ const App = () => {
       return diff;
   };
   const liveHeadingError = liveGuidanceMetrics.validLine ? getAxisHeadingError(liveGuidanceMetrics.lineHeading, heading) : 0;
-  const livePassIndex = liveGuidanceMetrics.validLine && liveGuide?.width ? Math.round(liveGuidanceMetrics.xte / liveGuide.width) : 0;
+  const livePassIndex = liveGuidanceMetrics.validLine && liveGuide?.width ? Math.round((liveGuidanceMetrics.xte - effectiveGuidanceOffset) / liveGuide.width) : 0;
   const liveAreaRemaining = Math.max(0, activeFieldAreaHa - workedArea);
   const liveWorkRate = Math.abs(speed) > 0.2 ? Math.abs(speed) * Number(implementSettings.width || 0) / 10 : 0;
   const liveEtaMin = liveWorkRate > 0.05 ? Math.round((liveAreaRemaining / liveWorkRate) * 60) : null;
@@ -2288,7 +2336,7 @@ const App = () => {
       const abs = Math.abs(crossTrackError);
       const direction = getXteDirection();
       const barTone = abs >= 10 ? 'bg-red-500' : abs >= 4 ? 'bg-yellow-500' : 'bg-blue-500';
-      const offsetCm = manualOffset / PIXELS_PER_METER * 100;
+      const offsetCm = effectiveGuidanceOffset / PIXELS_PER_METER * 100 * liveGuidanceDirectionFactor;
       const offsetValue = `${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(0)}cm`;
       const passValue = `${currentRunKpi.passIndex >= 0 ? '+' : ''}${currentRunKpi.passIndex}`;
       const errorTextTone = abs >= 10 ? 'text-red-500' : abs >= 4 ? 'text-yellow-600 dark:text-yellow-400' : t.textMain;
@@ -3786,7 +3834,7 @@ const App = () => {
       const guide = guidanceRef.current;
       const activeGuidanceType = guidanceLine || guide?.type || activeLineRecord?.type || lineType;
       const metrics = getGuidanceMetrics(guide, { ...worldPos, heading });
-      const currentLaneIndex = metrics.validLine && guide?.width > 0 ? Math.round(metrics.xte / guide.width) : 0;
+      const currentLaneIndex = metrics.validLine && guide?.width > 0 ? Math.round((metrics.xte - (Number(guide.manualOffset) || 0)) / guide.width) : 0;
       const highlightedLane = activeLaneRef.current ?? manualLaneRef.current ?? currentLaneIndex;
       const activeStroke = getGuidanceLaneVisual(true).stroke;
       const corridorEdge = theme === 'dark' ? '#67e8f9' : '#0ea5e9';
@@ -3921,7 +3969,7 @@ const App = () => {
                       `straight-3d-${i}`,
                       pointA,
                       unit,
-                      (i * laneSpacingPx) + manualOffset,
+                      (i * laneSpacingPx) + effectiveGuidanceOffset,
                       visual.stroke,
                       visual.width,
                       { opacity: visual.opacity }
@@ -3932,7 +3980,7 @@ const App = () => {
                   'straight-3d-target',
                   pointA,
                   unit,
-                  manualOffset,
+                  effectiveGuidanceOffset,
                   activeStroke,
                   3.4,
                   {}
@@ -3957,14 +4005,14 @@ const App = () => {
                       `aplus-3d-${i}`,
                       aPlusPoint,
                       unit,
-                      (i * laneSpacingPx) + manualOffset,
+                      (i * laneSpacingPx) + effectiveGuidanceOffset,
                       visual.stroke,
                       visual.width,
                       { opacity: visual.opacity }
                   ));
               }
           } else {
-              elements.push(render3DProjectedLaneLine('aplus-3d-target', aPlusPoint, unit, manualOffset, activeStroke, 3.4, {}));
+              elements.push(render3DProjectedLaneLine('aplus-3d-target', aPlusPoint, unit, effectiveGuidanceOffset, activeStroke, 3.4, {}));
           }
       }
 
@@ -3972,7 +4020,7 @@ const App = () => {
           if (isMultiLineMode) {
               const width = implementSettings.width * PIXELS_PER_METER;
               for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
-                  const radius = pivotRadius + (i * width) + manualOffset;
+                  const radius = pivotRadius + (i * width) + effectiveGuidanceOffset;
                   if (radius <= 0) continue;
                   const active = i === highlightedLane;
                   const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane));
@@ -3985,7 +4033,7 @@ const App = () => {
                   ));
               }
           } else {
-              const radius = pivotRadius + manualOffset;
+              const radius = pivotRadius + effectiveGuidanceOffset;
               if (radius > 0) {
                   elements.push(renderProjected3DPath('pivot-3d-target', sampleCirclePoints(pivotCenter, radius), activeStroke, 3.4, { maxStep: 34, projection: guidanceProjection }));
               }
@@ -3998,7 +4046,7 @@ const App = () => {
               for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
                   const active = i === highlightedLane;
                   const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane));
-                  const points = parsePolylinePoints(getOffsetPolyline(curvePoints, (i * width) + manualOffset));
+                  const points = parsePolylinePoints(getOffsetPolyline(curvePoints, (i * width) + effectiveGuidanceOffset));
                   elements.push(renderProjected3DPath(
                       `curve-3d-${i}`,
                       points,
@@ -4010,7 +4058,7 @@ const App = () => {
           } else {
               elements.push(renderProjected3DPath(
                   'curve-3d-target',
-                  parsePolylinePoints(getOffsetPolyline(curvePoints, manualOffset)),
+                  parsePolylinePoints(getOffsetPolyline(curvePoints, effectiveGuidanceOffset)),
                   activeStroke,
                   3.4,
                   { maxStep: 34, projection: guidanceProjection }
@@ -4101,7 +4149,7 @@ const App = () => {
              const dist = Math.hypot(p.x - cx, p.y - cy);
              xte = dist - r;
          }
-         else if (guide.type === 'CURVE' && guide.points.curve) {
+         else if ((guide.type === 'CURVE' || guide.type === 'COMBINATION') && guide.points.curve) {
              let minDist = Infinity;
              let bestCross = 0;
              for(let i=0; i<guide.points.curve.length-1; i++) {
@@ -4117,7 +4165,7 @@ const App = () => {
              xte = bestCross;
          }
 
-         currentLaneIndex = Math.round(xte / guide.width);
+         currentLaneIndex = Math.round((xte - (Number(guide.manualOffset) || 0)) / guide.width);
     }
 
 
@@ -4131,7 +4179,7 @@ const App = () => {
           const highlightedLane = activeLaneRef.current ?? manualLaneRef.current ?? currentLaneIndex;
 
           for (let i = highlightedLane - 4; i <= highlightedLane + 4; i++) {
-              const offset = (w * i) + manualOffset;
+              const offset = (w * i) + effectiveGuidanceOffset;
               const isActive = i === highlightedLane;
               const laneDistance = Math.abs(i - highlightedLane);
               const visual = getGuidanceLaneVisual(isActive, laneDistance);
@@ -4153,7 +4201,7 @@ const App = () => {
           }
       } else {
            // Single Line Mode
-           const offset = manualOffset;
+           const offset = effectiveGuidanceOffset;
            const segment = getGuidanceLineSegmentAroundVehicle(pointA, { x: ux, y: uy }, offset);
 
            elements.push(
@@ -4189,7 +4237,7 @@ const App = () => {
                 const highlightedLane = activeLaneRef.current ?? manualLaneRef.current ?? currentLaneIndex;
 
                 for (let i = highlightedLane - 4; i <= highlightedLane + 4; i++) {
-                    const offset = (w * i) + manualOffset;
+                    const offset = (w * i) + effectiveGuidanceOffset;
                     const isActive = i === highlightedLane;
                     const laneDistance = Math.abs(i - highlightedLane);
                     const visual = getGuidanceLaneVisual(isActive, laneDistance);
@@ -4210,7 +4258,7 @@ const App = () => {
                     );
                 }
              } else {
-                const offset = manualOffset;
+                const offset = effectiveGuidanceOffset;
                 const segment = getGuidanceLineSegmentAroundVehicle(aPlusPoint, { x: ux, y: uy }, offset);
                 elements.push(
                    <line
@@ -4237,7 +4285,7 @@ const App = () => {
 
             // Draw 5 lines (center + 2 each side)
             for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
-                const r = pivotRadius + (i * w) + manualOffset;
+                const r = pivotRadius + (i * w) + effectiveGuidanceOffset;
                 if (r > 0) {
                     const isActive = i === highlightedLane;
                     const laneDistance = Math.abs(i - highlightedLane);
@@ -4258,7 +4306,7 @@ const App = () => {
             }
         } else {
             // Single Mode
-            const r = pivotRadius + manualOffset;
+            const r = pivotRadius + effectiveGuidanceOffset;
             if (r > 0) {
                 elements.push(
                     <circle
@@ -4286,7 +4334,7 @@ const App = () => {
 
             // Draw 5 lines (center + 2 each side)
             for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
-                const offset = (i * w) + manualOffset;
+                const offset = (i * w) + effectiveGuidanceOffset;
                 const isActive = i === highlightedLane;
                 const laneDistance = Math.abs(i - highlightedLane);
                 const visual = getGuidanceLaneVisual(isActive, laneDistance);
@@ -4313,7 +4361,7 @@ const App = () => {
                 <polyline
                     key="target-curve"
                     data-guidance-2d-lane="target"
-                    points={getOffsetPolyline(curvePoints, manualOffset)}
+                    points={getOffsetPolyline(curvePoints, effectiveGuidanceOffset)}
                     fill="none"
                     stroke={getGuidanceLaneVisual(true).stroke}
                     strokeWidth={getGuidanceLaneVisual(true).width}
@@ -4432,7 +4480,7 @@ const App = () => {
           </div>
       );
       const compactStatus = (value) => String(value || '').replace(/_/g, ' ');
-      const offsetCm = manualOffset / PIXELS_PER_METER * 100;
+      const offsetCm = manualOffset / PIXELS_PER_METER * 100 * liveGuidanceDirectionFactor;
       const railDivider = isDarkDock ? 'border-slate-800' : 'border-slate-200';
       const zoomPercent = Math.round(zoomLevel / DEFAULT_MAP_ZOOM * 100);
       const runtimeSection = isDarkDock
@@ -4461,6 +4509,13 @@ const App = () => {
        const activeDockBoundaryLabel = activeDockBoundary?.name || (activeDockBoundary ? `Boundary ${activeDockBoundaryIndex + 1}` : 'No boundary selected');
        const dockLines = (activeFieldRecord?.lines || []).filter(line => line && !line.archived && line.points);
        const dockBoundaries = (activeFieldRecord?.boundaries || []).filter(Boolean);
+       const lineShiftMeters = (Number(lineShiftOffset) || 0) / PIXELS_PER_METER * liveGuidanceDirectionFactor;
+       const totalOffsetMeters = effectiveGuidanceOffset / PIXELS_PER_METER * liveGuidanceDirectionFactor;
+       const clampShiftMeters = (value) => Math.min(99.99, Math.max(0, Number(value) || 0));
+       const draftShiftDistanceMeters = clampShiftMeters(dockShiftDistanceM);
+       const draftShiftDisplayMeters = (dockShiftDirection === 'left' ? -1 : 1) * draftShiftDistanceMeters;
+       const draftShiftMeters = draftShiftDisplayMeters * liveGuidanceDirectionFactor;
+       const formatSignedMeters = (value) => `${value > 0 ? '+' : ''}${value.toFixed(2)} m`;
        const ensureDockFieldContext = () => {
            if (!activeFieldRecord?.id) {
                showNotification('Load a field first', 'warning');
@@ -4472,6 +4527,102 @@ const App = () => {
        const openDockPicker = (assetType) => {
            if (!ensureDockFieldContext()) return;
            setDockQuickPicker(assetType);
+       };
+       const setDockShiftDraftFromSignedMeters = (value) => {
+           const clamped = Math.max(-99.99, Math.min(99.99, Number(value) || 0));
+           setDockShiftDirection(clamped < 0 ? 'left' : 'right');
+           setDockShiftDistanceM(Math.abs(clamped).toFixed(2));
+       };
+       const openDockLineShift = () => {
+           if (!ensureDockFieldContext()) return;
+           if (!activeLineRecord || !hasGuidanceToEngage) {
+               showNotification('Load a guidance line before shifting', 'warning');
+               return;
+           }
+           setDockShiftDraftFromSignedMeters(Math.abs(totalOffsetMeters) < 0.005 ? 0.10 : totalOffsetMeters);
+           setDockQuickPicker('line-shift');
+       };
+       const setDockShiftToVehicle = () => {
+           const guide = guidanceRef.current;
+           const metrics = getGuidanceMetrics(guide, { ...worldPos, heading });
+           if (!metrics.validLine) {
+               showNotification('Vehicle position is not aligned with a valid line', 'warning');
+               return;
+           }
+           const laneIndex = guide.isMulti && guide.width > 0
+               ? Math.round((metrics.xte - effectiveGuidanceOffset) / guide.width)
+               : 0;
+           const centeredOffsetPixels = metrics.xte - (laneIndex * (guide.width || 0));
+           setDockShiftDraftFromSignedMeters(centeredOffsetPixels / PIXELS_PER_METER * liveGuidanceDirectionFactor);
+       };
+       const resetGuidanceResponseAfterShift = () => {
+           manualLaneRef.current = null;
+           activeLaneRef.current = null;
+           guidanceErrorFilterRef.current = {
+               value: 0,
+               lastSampleAt: 0,
+               lastCommitAt: 0,
+               lastDisplay: 0
+           };
+           crossTrackErrorRef.current = 0;
+           setCrossTrackError(0);
+       };
+       const applyDockLineShift = ({ saveCopy = false } = {}) => {
+           if (!activeLineRecord || !hasGuidanceToEngage) {
+               showNotification('No active guidance line to shift', 'warning');
+               return;
+           }
+
+           const nextShiftMeters = Math.round(draftShiftMeters * 1000) / 1000;
+           const nextShiftPixels = nextShiftMeters * PIXELS_PER_METER;
+           const activeShiftType = guidanceLine || activeLineRecord.type;
+           if (activeShiftType === 'PIVOT' && Number(pivotRadius) + nextShiftPixels <= 1) {
+               showNotification('Shift would collapse the pivot radius', 'warning');
+               return;
+           }
+
+           if (saveCopy) {
+               if (Math.abs(nextShiftMeters) < 0.005) {
+                   showNotification('Set a non-zero shift before saving a copy', 'warning');
+                   return;
+               }
+               const createdAt = new Date();
+               const sourceName = activeLineRecord.shiftedFromLineName || activeLineRecord.name || 'Guidance line';
+               const directionLabel = draftShiftDisplayMeters < 0 ? 'L' : 'R';
+               const shiftedLine = {
+                   ...activeLineRecord,
+                   id: Date.now(),
+                   name: `${sourceName} - Shift ${directionLabel} ${Math.abs(nextShiftMeters).toFixed(2)}m`,
+                   date: createdAt.toISOString().split('T')[0],
+                   createdAt: createdAt.toISOString(),
+                   updatedAt: createdAt.toISOString(),
+                   createdLocation: activeFieldRecord?.name || activeLineRecord.createdLocation || 'Location unavailable',
+                   createdPosition: { x: worldPos.x, y: worldPos.y },
+                   archived: false,
+                   translationOffsetM: nextShiftMeters,
+                   translationDisplaySide: directionLabel,
+                   shiftedFromLineId: activeLineRecord.shiftedFromLineId || activeLineRecord.id,
+                   shiftedFromLineName: sourceName
+               };
+               updateSelectedFieldLines(lines => [shiftedLine, ...lines]);
+               actions.setActiveLineId(shiftedLine.id);
+               setSelectedCatalogLineId(shiftedLine.id);
+           }
+
+            actions.setLineShiftOffset(nextShiftPixels);
+            actions.setManualOffset(0);
+            if (!isMultiLineMode) {
+                // An explicit shift made while in Single mode becomes the value
+                // restored when the operator returns to the multi-pass grid.
+                multiLineShiftRestoreRef.current = nextShiftPixels;
+            }
+            resetGuidanceResponseAfterShift();
+           setDockQuickPicker(null);
+
+           const shiftLabel = Math.abs(nextShiftMeters) < 0.005
+               ? 'Line shift reset to original'
+               : `Line shifted ${draftShiftDisplayMeters < 0 ? 'left' : 'right'} ${Math.abs(draftShiftDisplayMeters).toFixed(2)} m`;
+           showNotification(saveCopy ? `${shiftLabel} / copy saved` : shiftLabel, 'success');
        };
        const openDockLineCreator = () => {
            if (!ensureDockFieldContext()) return;
@@ -4536,7 +4687,7 @@ const App = () => {
                </div>
            );
        };
-       const renderManualQuickPicker = () => {
+        const renderManualQuickPicker = () => {
            const selectingLines = dockQuickPicker === 'lines';
            const items = selectingLines ? dockLines : dockBoundaries;
            const pickerTone = selectingLines ? 'blue' : 'orange';
@@ -4615,6 +4766,159 @@ const App = () => {
                        <div className={`mt-1.5 text-center text-[8px] font-bold leading-tight ${t.textDim}`}>Switches the active asset without leaving Run.</div>
                    </div>
                </section>
+            );
+        };
+       const renderManualLineShift = () => {
+           const previewScale = Math.max(0.5, Math.abs(lineShiftMeters), Math.abs(draftShiftDisplayMeters));
+           const previewPosition = 50 + Math.max(-35, Math.min(35, (draftShiftDisplayMeters / previewScale) * 35));
+           const targetChanged = Math.abs(draftShiftDisplayMeters - lineShiftMeters) >= 0.005 || Math.abs(manualOffset) >= PIXELS_PER_METER * 0.005;
+
+           return (
+               <section
+                   data-dock-mode="manual-shift"
+                   aria-label="Shift active guidance line"
+                   className={`pointer-events-auto w-[176px] xl:w-[180px] max-h-full overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none flex flex-col`}
+                   onPointerDown={stopDockPointer}
+                   onPointerMove={stopDockPointer}
+                   onPointerUp={stopDockPointer}
+                   onClick={stopDockPointer}
+               >
+                   <div className={`h-11 shrink-0 border-b ${railDivider} px-2 flex items-center gap-2`}>
+                       <button
+                           type="button"
+                           aria-label="Back to run setup"
+                           onClick={runDockAction(() => setDockQuickPicker(null))}
+                           className={`w-8 h-8 shrink-0 rounded-lg border ${runtimeButton} flex items-center justify-center`}
+                       >
+                           <CornerUpLeft className="w-4 h-4" />
+                       </button>
+                       <span className="min-w-0 flex-1">
+                           <span className={`block text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Manual</span>
+                           <span className={`block text-[11px] font-black truncate ${t.textMain}`}>Shift line</span>
+                       </span>
+                       <span className="h-7 w-7 shrink-0 rounded-lg bg-blue-500/12 text-blue-500 flex items-center justify-center">
+                           <Ruler className="w-4 h-4" />
+                       </span>
+                   </div>
+
+                   <div className="min-h-0 flex-1 overflow-y-auto p-2 space-y-2">
+                       <div className={`rounded-xl border ${runtimeSection} p-2.5`}>
+                           <div className="flex items-start justify-between gap-2">
+                               <span className="min-w-0">
+                                   <span className={`block text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Current shift</span>
+                                   <span className={`block mt-1 text-sm font-black tabular-nums ${Math.abs(lineShiftMeters) >= 0.005 ? 'text-blue-500' : t.textMain}`}>{formatSignedMeters(lineShiftMeters)}</span>
+                               </span>
+                               {Math.abs(offsetCm) >= 0.05 && (
+                                   <span className="shrink-0 rounded-md bg-orange-500/12 px-1.5 py-1 text-[8px] font-black text-orange-500">Trim {offsetCm > 0 ? '+' : ''}{offsetCm.toFixed(1)}cm</span>
+                               )}
+                           </div>
+                           <div className={`relative mt-2 h-8 overflow-hidden rounded-lg ${isDarkDock ? 'bg-slate-950' : 'bg-white'} border ${t.borderCard}`}>
+                               <span className={`absolute left-1/2 top-1 bottom-1 border-l border-dashed ${isDarkDock ? 'border-slate-600' : 'border-slate-300'}`} />
+                               <span className="absolute top-1 bottom-1 w-0.5 rounded bg-blue-500 transition-all" style={{ left: `${previewPosition}%` }} />
+                               <span className={`absolute left-1 bottom-0.5 text-[7px] font-black ${t.textDim}`}>L</span>
+                               <span className={`absolute right-1 bottom-0.5 text-[7px] font-black ${t.textDim}`}>R</span>
+                           </div>
+                           <div className="mt-1.5 flex items-center justify-between gap-2">
+                               <span className={`text-[8px] font-bold ${t.textSub}`}>New offset</span>
+                               <span aria-live="polite" className="text-[10px] font-black tabular-nums text-blue-500">{formatSignedMeters(draftShiftDisplayMeters)}</span>
+                           </div>
+                       </div>
+
+                       <div className={`rounded-xl border ${runtimeSection} p-2`}>
+                           <div className="grid grid-cols-2 gap-1.5">
+                               {[
+                                   { id: 'left', label: 'Left', icon: Minus },
+                                   { id: 'right', label: 'Right', icon: Plus }
+                               ].map(({ id, label, icon: Icon }) => {
+                                   const active = dockShiftDirection === id;
+                                   return (
+                                       <button
+                                           key={id}
+                                           type="button"
+                                           aria-pressed={active}
+                                           onClick={runDockAction(() => setDockShiftDirection(id))}
+                                           className={`h-9 rounded-lg border flex items-center justify-center gap-1 text-[9px] font-black ${active ? 'border-blue-500 bg-blue-500/12 text-blue-500' : runtimeButton}`}
+                                       >
+                                           <Icon className="w-3.5 h-3.5" />
+                                           {label}
+                                       </button>
+                                   );
+                               })}
+                           </div>
+
+                           <label className={`mt-2 block text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`} htmlFor="dock-shift-distance">Distance from original</label>
+                           <div className={`mt-1 flex h-10 items-center overflow-hidden rounded-lg border ${t.borderCard} ${isDarkDock ? 'bg-slate-950' : 'bg-white'}`}>
+                               <input
+                                   id="dock-shift-distance"
+                                   type="number"
+                                   inputMode="decimal"
+                                   min="0"
+                                   max="99.99"
+                                   step="0.01"
+                                   value={dockShiftDistanceM}
+                                   onChange={(event) => setDockShiftDistanceM(event.target.value)}
+                                   onBlur={() => setDockShiftDistanceM(draftShiftDistanceMeters.toFixed(2))}
+                                   className={`min-w-0 flex-1 bg-transparent px-2 text-right text-sm font-black tabular-nums outline-none ${t.textMain}`}
+                               />
+                               <span className={`pr-2 text-[9px] font-black ${t.textSub}`}>m</span>
+                           </div>
+
+                           <div className="mt-1.5 grid grid-cols-3 gap-1">
+                               {[0.10, 0.50, 1.00].map((value) => (
+                                   <button
+                                       key={value}
+                                       type="button"
+                                       onClick={runDockAction(() => setDockShiftDistanceM(value.toFixed(2)))}
+                                       className={`h-7 rounded-md border text-[8px] font-black ${Math.abs(draftShiftDistanceMeters - value) < 0.005 ? 'border-blue-500 bg-blue-500/12 text-blue-500' : runtimeButton}`}
+                                   >
+                                       {value.toFixed(2)}
+                                   </button>
+                               ))}
+                           </div>
+                       </div>
+
+                       <div className="grid grid-cols-2 gap-1.5">
+                           <button
+                               type="button"
+                               onClick={runDockAction(setDockShiftToVehicle)}
+                               className={`h-10 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 text-[9px] font-black`}
+                           >
+                               <LocateFixed className="w-3.5 h-3.5 text-blue-500" />
+                               Center here
+                           </button>
+                           <button
+                               type="button"
+                               onClick={runDockAction(() => setDockShiftDraftFromSignedMeters(0))}
+                               className={`h-10 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 text-[9px] font-black`}
+                           >
+                               <RotateCcw className="w-3.5 h-3.5" />
+                               Original
+                           </button>
+                       </div>
+                   </div>
+
+                   <div className={`shrink-0 border-t ${railDivider} p-2 space-y-1.5`}>
+                       <button
+                           type="button"
+                           disabled={!targetChanged}
+                           onClick={runDockAction(() => applyDockLineShift())}
+                           className="w-full h-10 rounded-lg bg-blue-600 text-white flex items-center justify-center gap-1.5 text-[10px] font-black hover:bg-blue-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35"
+                       >
+                           <Check className="w-4 h-4" />
+                           Apply this run
+                       </button>
+                       <button
+                           type="button"
+                           disabled={Math.abs(draftShiftDisplayMeters) < 0.005}
+                           onClick={runDockAction(() => applyDockLineShift({ saveCopy: true }))}
+                           className={`w-full h-9 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1.5 text-[9px] font-black disabled:cursor-not-allowed disabled:opacity-35`}
+                       >
+                           <Copy className="w-3.5 h-3.5" />
+                           Save shifted copy
+                       </button>
+                       <div className={`text-center text-[7px] font-bold leading-tight ${t.textDim}`}>The original saved line stays unchanged.</div>
+                   </div>
+               </section>
            );
        };
        const renderDockViewControls = () => (
@@ -4679,18 +4983,18 @@ const App = () => {
                         label: 'Guidance line',
                         value: activeDockLineLabel,
                         detail: unsavedGuidance
-                            ? 'Geometry ready / not saved'
-                            : activeLineRecord
-                                 ? compactStatus(activeLineRecord.type || guidanceLine)
-                                 : `${(activeFieldRecord?.lines || []).filter(line => !line.archived).length} saved`,
+                             ? 'Geometry ready / not saved'
+                             : activeLineRecord
+                                  ? `${compactStatus(activeLineRecord.type || guidanceLine)}${Math.abs(lineShiftMeters) >= 0.005 ? ` / Shift ${lineShiftMeters < 0 ? 'L' : 'R'} ${Math.abs(lineShiftMeters).toFixed(2)}m` : ''}`
+                                  : `${(activeFieldRecord?.lines || []).filter(line => !line.archived).length} saved`,
                         tone: 'blue',
                         actions: unsavedGuidance
                             ? [{ icon: Save, label: 'Save line', onClick: openSaveLineModal }]
-                            : dockLines.length > 0
-                                ? [
-                                    { icon: ArrowLeftRight, label: 'Switch', onClick: () => openDockPicker('lines') },
-                                    { icon: Plus, label: 'New', onClick: openDockLineCreator }
-                                ]
+                             : dockLines.length > 0
+                                 ? [
+                                     { icon: Ruler, label: 'Shift', onClick: openDockLineShift, disabled: !activeLineRecord },
+                                     { icon: ArrowLeftRight, label: 'Switch', onClick: () => openDockPicker('lines') }
+                                 ]
                                 : [
                                     { icon: Target, label: 'Start AB', onClick: startDockStraightLine },
                                     { icon: Plus, label: 'Other', onClick: openDockLineCreator }
@@ -4740,7 +5044,10 @@ const App = () => {
                           <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Run assets</span>
                           <span className="rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black uppercase text-blue-500">Locked</span>
                       </div>
-                      <div className={`mt-1.5 text-[11px] font-black truncate ${t.textMain}`}>{activeDockLineLabel}</div>
+                      <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
+                          <span className={`min-w-0 flex-1 text-[11px] font-black truncate ${t.textMain}`}>{activeDockLineLabel}</span>
+                          {Math.abs(lineShiftMeters) >= 0.005 && <span className="shrink-0 rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black text-blue-500">{lineShiftMeters < 0 ? 'L' : 'R'} {Math.abs(lineShiftMeters).toFixed(2)}m</span>}
+                      </div>
                       <div className={`mt-0.5 text-[9px] font-bold truncate ${t.textSub}`}>{activeDockBoundaryLabel}</div>
                   </div>
                   <div className={`rounded-xl border ${runtimeSection} p-2`}>
@@ -5028,6 +5335,10 @@ const App = () => {
               )
           }));
       }
+
+       if (steeringMode === 'MANUAL' && dockQuickPicker === 'line-shift') {
+           return renderDockLayout(renderManualLineShift(), true);
+       }
 
        if (steeringMode === 'MANUAL' && dockQuickPicker) {
            return renderDockLayout(renderManualQuickPicker(), true);
@@ -8419,10 +8730,11 @@ const App = () => {
                     icon={Route}
                     actions={<><SettingsActionButton onClick={() => setLinesPanelOpen(true)}>Open Lines</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => setLineModeModalOpen(true)}>Create Line</SettingsActionButton></>}
                 >
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                         <ConfigTile icon={Route} label="Active Line" value={activeLineRecord?.name || getGuidanceModeLabel()} />
                         <ConfigTile icon={Ruler} label="Implement Width" value={`${implementSettings.width.toFixed(1)} m`} />
-                        <ConfigTile icon={ArrowLeftRight} label="Trim Offset" value={`${(manualOffset / PIXELS_PER_METER * 100).toFixed(1)} cm`} />
+                        <ConfigTile icon={ArrowLeftRight} label="Line Shift" value={`${((lineShiftOffset / PIXELS_PER_METER) * liveGuidanceDirectionFactor) > 0 ? '+' : ''}${((lineShiftOffset / PIXELS_PER_METER) * liveGuidanceDirectionFactor).toFixed(2)} m`} />
+                        <ConfigTile icon={ArrowLeftRight} label="Trim Offset" value={`${((manualOffset / PIXELS_PER_METER * 100) * liveGuidanceDirectionFactor) > 0 ? '+' : ''}${((manualOffset / PIXELS_PER_METER * 100) * liveGuidanceDirectionFactor).toFixed(1)} cm`} />
                     </div>
                     <button onClick={handleToggleMultiLine} className={`w-full flex items-center justify-between p-4 ${t.bgInput} border ${t.borderCard} rounded-xl text-left`}>
                         <div>
@@ -10495,7 +10807,10 @@ const renderLinesPanel = () => {
                                                         {selected && !active && <span className="ui-badge shrink-0 px-1.5 py-0.5 rounded-md bg-blue-500/15 text-blue-500">Selected</span>}
                                                         {archived && <span className="ui-badge shrink-0 px-1.5 py-0.5 rounded-md bg-yellow-500/15 text-yellow-500">Archived</span>}
                                                     </div>
-                                                    <div className={`ui-caption mt-0.5 ${t.textSub}`}>{(line.type || 'LINE').replace(/_/g, ' ')} / {lengthMeters !== null ? `${lengthMeters.toFixed(1)} m` : '--'}</div>
+                                                    <div className={`ui-caption mt-0.5 ${t.textSub}`}>
+                                                        {(line.type || 'LINE').replace(/_/g, ' ')} / {lengthMeters !== null ? `${lengthMeters.toFixed(1)} m` : '--'}
+                                                        {Math.abs(Number(line.translationOffsetM) || 0) >= 0.005 ? ` / Shift ${line.translationDisplaySide || ((Number(line.translationOffsetM) || 0) < 0 ? 'L' : 'R')} ${Math.abs(Number(line.translationOffsetM) || 0).toFixed(2)} m` : ''}
+                                                    </div>
                                                 </div>
                                             </div>
                                             <div className="mt-2 flex items-center justify-between gap-2">
@@ -10532,7 +10847,10 @@ const renderLinesPanel = () => {
                                     <div className="min-w-0">
                                         <div className={`ui-eyebrow ${t.textSub}`}>Selected line</div>
                                         <h3 className={`ui-detail-title ${t.textMain} truncate`}>{selectedLine.name}</h3>
-                                        <div className={`ui-caption mt-0.5 ${t.textSub}`}>{(selectedLine.type || 'LINE').replace(/_/g, ' ')} / {selectedLine.isMulti ? 'Parallel lines enabled' : 'Single path'}</div>
+                                        <div className={`ui-caption mt-0.5 ${t.textSub}`}>
+                                            {(selectedLine.type || 'LINE').replace(/_/g, ' ')} / {selectedLine.isMulti ? 'Parallel lines enabled' : 'Single path'}
+                                            {Math.abs(Number(selectedLine.translationOffsetM) || 0) >= 0.005 ? ` / Shift ${selectedLine.translationDisplaySide || ((Number(selectedLine.translationOffsetM) || 0) < 0 ? 'L' : 'R')} ${Math.abs(Number(selectedLine.translationOffsetM) || 0).toFixed(2)} m` : ''}
+                                        </div>
                                     </div>
                                     <div className="shrink-0 flex items-center gap-2">
                                         {selectedLine.archived && <span className="ui-badge px-2 py-1 rounded-lg bg-yellow-500/15 text-yellow-500">Archived</span>}
