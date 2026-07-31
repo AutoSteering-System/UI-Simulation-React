@@ -4382,6 +4382,7 @@ const App = () => {
       const dockSurface = isDarkDock
           ? 'bg-slate-950/90 border-slate-700/90 shadow-black/40'
           : 'bg-white/90 border-slate-200 shadow-slate-900/15';
+      const dockWidth = 'w-[192px] xl:w-[200px]';
       const solidTone = {
           blue: 'bg-blue-600 text-white shadow-md shadow-blue-900/20 hover:bg-blue-500',
           green: 'bg-green-600 text-white shadow-md shadow-green-900/20 hover:bg-green-500',
@@ -4419,7 +4420,7 @@ const App = () => {
       const renderShell = ({ status, tone = 'gray', children }) => (
           <section
               aria-label={`${status} contextual controls`}
-              className={`pointer-events-auto w-[176px] xl:w-[180px] max-h-full overflow-y-auto rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl p-2 flex flex-col items-center gap-2 select-none shadow-xl`}
+              className={`pointer-events-auto ${dockWidth} max-h-full overflow-y-auto rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl p-2 flex flex-col items-center gap-2 select-none shadow-xl`}
               onPointerDown={stopDockPointer}
               onPointerMove={stopDockPointer}
               onPointerUp={stopDockPointer}
@@ -4644,20 +4645,20 @@ const App = () => {
            setDockQuickPicker(null);
            showNotification(`Active boundary: ${boundary?.name || `Boundary ${index + 1}`}`, 'success');
        };
-       const renderDockMiniAction = ({ icon: Icon, label, onClick, tone = 'gray', primary = false, disabled = false }) => {
+       const renderDockMiniAction = ({ icon: Icon, label, ariaLabel = label, onClick, tone = 'gray', primary = false, disabled = false, compact = false }) => {
            const primaryClass = tone === 'orange'
                ? 'bg-orange-500 text-white hover:bg-orange-400'
                : 'bg-blue-600 text-white hover:bg-blue-500';
            return (
                <button
                    type="button"
-                   aria-label={label}
+                   aria-label={ariaLabel}
                    disabled={disabled}
                    onClick={disabled ? undefined : runDockAction(onClick)}
-                   className={`w-full h-9 min-w-0 rounded-lg border flex items-center justify-center gap-1 px-1.5 text-[10px] font-black transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35 ${primary ? `${primaryClass} border-transparent` : `${runtimeButton}`}`}
+                   className={`w-full min-w-0 rounded-lg border flex items-center justify-center font-black transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35 ${compact ? 'h-12 flex-col gap-0.5 px-0.5 text-[9px]' : 'min-h-11 gap-1 px-1.5 text-[10px]'} ${primary ? `${primaryClass} border-transparent` : `${runtimeButton}`}`}
                >
-                   <Icon className="w-3.5 h-3.5 shrink-0" />
-                   <span className="truncate">{label}</span>
+                    <Icon className="w-3.5 h-3.5 shrink-0" />
+                    <span className="max-w-full truncate leading-none">{label}</span>
                </button>
            );
        };
@@ -4677,10 +4678,10 @@ const App = () => {
                        </span>
                    </span>
                    <span className={`mt-1.5 block min-w-0 text-[9px] font-bold truncate ${t.textSub}`}>{detail}</span>
-                   <span className={`mt-2 grid gap-1.5 ${cardActions.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                       {cardActions.map((action, index) => (
-                           <React.Fragment key={`${label}-${action.label}`}>
-                               {renderDockMiniAction({ ...action, tone, primary: index === 0 })}
+                   <span className={`mt-2 grid gap-1.5 ${cardActions.length >= 3 ? 'grid-cols-3' : cardActions.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                        {cardActions.map((action, index) => (
+                            <React.Fragment key={`${label}-${action.label}`}>
+                                {renderDockMiniAction({ ...action, tone, primary: index === 0, compact: cardActions.length >= 3 })}
                            </React.Fragment>
                        ))}
                    </span>
@@ -4697,18 +4698,18 @@ const App = () => {
                <section
                    data-dock-mode="manual-picker"
                    aria-label={pickerTitle}
-                   className={`pointer-events-auto w-[176px] xl:w-[180px] max-h-full overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none flex flex-col`}
+                   className={`pointer-events-auto ${dockWidth} max-h-full overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none flex flex-col`}
                    onPointerDown={stopDockPointer}
                    onPointerMove={stopDockPointer}
                    onPointerUp={stopDockPointer}
                    onClick={stopDockPointer}
                >
-                   <div className={`h-11 shrink-0 border-b ${railDivider} px-2 flex items-center gap-2`}>
+                   <div className={`min-h-12 shrink-0 border-b ${railDivider} px-2 flex items-center gap-2`}>
                        <button
                            type="button"
                            aria-label="Back to run setup"
                            onClick={runDockAction(() => setDockQuickPicker(null))}
-                           className={`w-8 h-8 shrink-0 rounded-lg border ${runtimeButton} flex items-center justify-center`}
+                           className={`w-11 h-11 shrink-0 rounded-lg border ${runtimeButton} flex items-center justify-center`}
                        >
                            <CornerUpLeft className="w-4 h-4" />
                        </button>
@@ -4777,18 +4778,18 @@ const App = () => {
                <section
                    data-dock-mode="manual-shift"
                    aria-label="Shift active guidance line"
-                   className={`pointer-events-auto w-[176px] xl:w-[180px] max-h-full overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none flex flex-col`}
+                   className={`pointer-events-auto ${dockWidth} max-h-full overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none flex flex-col`}
                    onPointerDown={stopDockPointer}
                    onPointerMove={stopDockPointer}
                    onPointerUp={stopDockPointer}
                    onClick={stopDockPointer}
                >
-                   <div className={`h-11 shrink-0 border-b ${railDivider} px-2 flex items-center gap-2`}>
+                   <div className={`min-h-12 shrink-0 border-b ${railDivider} px-2 flex items-center gap-2`}>
                        <button
                            type="button"
                            aria-label="Back to run setup"
                            onClick={runDockAction(() => setDockQuickPicker(null))}
-                           className={`w-8 h-8 shrink-0 rounded-lg border ${runtimeButton} flex items-center justify-center`}
+                           className={`w-11 h-11 shrink-0 rounded-lg border ${runtimeButton} flex items-center justify-center`}
                        >
                            <CornerUpLeft className="w-4 h-4" />
                        </button>
@@ -4801,7 +4802,7 @@ const App = () => {
                        </span>
                    </div>
 
-                   <div className="min-h-0 flex-1 overflow-y-auto p-2 space-y-2">
+                    <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2 space-y-2">
                        <div className={`rounded-xl border ${runtimeSection} p-2.5`}>
                            <div className="flex items-start justify-between gap-2">
                                <span className="min-w-0">
@@ -4835,9 +4836,10 @@ const App = () => {
                                        <button
                                            key={id}
                                            type="button"
+                                           aria-label={`Set shift direction ${label.toLowerCase()}`}
                                            aria-pressed={active}
                                            onClick={runDockAction(() => setDockShiftDirection(id))}
-                                           className={`h-9 rounded-lg border flex items-center justify-center gap-1 text-[9px] font-black ${active ? 'border-blue-500 bg-blue-500/12 text-blue-500' : runtimeButton}`}
+                                           className={`h-11 rounded-lg border flex items-center justify-center gap-1 text-[9px] font-black ${active ? 'border-blue-500 bg-blue-500/12 text-blue-500' : runtimeButton}`}
                                        >
                                            <Icon className="w-3.5 h-3.5" />
                                            {label}
@@ -4847,7 +4849,7 @@ const App = () => {
                            </div>
 
                            <label className={`mt-2 block text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`} htmlFor="dock-shift-distance">Distance from original</label>
-                           <div className={`mt-1 flex h-10 items-center overflow-hidden rounded-lg border ${t.borderCard} ${isDarkDock ? 'bg-slate-950' : 'bg-white'}`}>
+                           <div className={`mt-1 flex h-11 items-center overflow-hidden rounded-lg border ${t.borderCard} ${isDarkDock ? 'bg-slate-950' : 'bg-white'}`}>
                                <input
                                    id="dock-shift-distance"
                                    type="number"
@@ -4868,8 +4870,10 @@ const App = () => {
                                    <button
                                        key={value}
                                        type="button"
+                                       aria-label={`Set shift distance to ${value.toFixed(2)} meters`}
+                                       aria-pressed={Math.abs(draftShiftDistanceMeters - value) < 0.005}
                                        onClick={runDockAction(() => setDockShiftDistanceM(value.toFixed(2)))}
-                                       className={`h-7 rounded-md border text-[8px] font-black ${Math.abs(draftShiftDistanceMeters - value) < 0.005 ? 'border-blue-500 bg-blue-500/12 text-blue-500' : runtimeButton}`}
+                                       className={`h-11 rounded-md border text-[9px] font-black ${Math.abs(draftShiftDistanceMeters - value) < 0.005 ? 'border-blue-500 bg-blue-500/12 text-blue-500' : runtimeButton}`}
                                    >
                                        {value.toFixed(2)}
                                    </button>
@@ -4880,19 +4884,21 @@ const App = () => {
                        <div className="grid grid-cols-2 gap-1.5">
                            <button
                                type="button"
+                               aria-label="Center shift preview on vehicle"
                                onClick={runDockAction(setDockShiftToVehicle)}
-                               className={`h-10 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 text-[9px] font-black`}
+                               className={`h-11 min-w-0 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 px-1 text-[8px] font-black`}
                            >
-                               <LocateFixed className="w-3.5 h-3.5 text-blue-500" />
-                               Center here
+                               <LocateFixed className="w-3.5 h-3.5 shrink-0 text-blue-500" />
+                               <span className="w-full truncate text-center text-[9px] leading-none">Center here</span>
                            </button>
                            <button
                                type="button"
+                               aria-label="Reset shift preview to original position"
                                onClick={runDockAction(() => setDockShiftDraftFromSignedMeters(0))}
-                               className={`h-10 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 text-[9px] font-black`}
+                               className={`h-11 min-w-0 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 px-1 text-[8px] font-black`}
                            >
-                               <RotateCcw className="w-3.5 h-3.5" />
-                               Original
+                               <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                               <span className="w-full truncate text-center text-[9px] leading-none">Original</span>
                            </button>
                        </div>
                    </div>
@@ -4902,7 +4908,7 @@ const App = () => {
                            type="button"
                            disabled={!targetChanged}
                            onClick={runDockAction(() => applyDockLineShift())}
-                           className="w-full h-10 rounded-lg bg-blue-600 text-white flex items-center justify-center gap-1.5 text-[10px] font-black hover:bg-blue-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35"
+                           className="w-full min-h-11 rounded-lg bg-blue-600 text-white flex items-center justify-center gap-1.5 text-[10px] font-black hover:bg-blue-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35"
                        >
                            <Check className="w-4 h-4" />
                            Apply this run
@@ -4911,12 +4917,12 @@ const App = () => {
                            type="button"
                            disabled={Math.abs(draftShiftDisplayMeters) < 0.005}
                            onClick={runDockAction(() => applyDockLineShift({ saveCopy: true }))}
-                           className={`w-full h-9 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1.5 text-[9px] font-black disabled:cursor-not-allowed disabled:opacity-35`}
+                           className={`w-full min-h-11 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1.5 text-[9px] font-black disabled:cursor-not-allowed disabled:opacity-35`}
                        >
                            <Copy className="w-3.5 h-3.5" />
-                           Save shifted copy
+                           Save as new line
                        </button>
-                       <div className={`text-center text-[7px] font-bold leading-tight ${t.textDim}`}>The original saved line stays unchanged.</div>
+                       <div className={`text-center text-[7px] font-bold leading-tight ${t.textDim}`}>The source line is never overwritten.</div>
                    </div>
                </section>
            );
@@ -4963,7 +4969,7 @@ const App = () => {
            <section
                data-dock-mode="manual"
                aria-label="Manual line and boundary controls"
-               className={`pointer-events-auto w-[176px] xl:w-[180px] overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none`}
+               className={`pointer-events-auto ${dockWidth} overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none`}
                onPointerDown={stopDockPointer}
                onPointerMove={stopDockPointer}
                onPointerUp={stopDockPointer}
@@ -4992,8 +4998,9 @@ const App = () => {
                             ? [{ icon: Save, label: 'Save line', onClick: openSaveLineModal }]
                              : dockLines.length > 0
                                  ? [
-                                     { icon: Ruler, label: 'Shift', onClick: openDockLineShift, disabled: !activeLineRecord },
-                                     { icon: ArrowLeftRight, label: 'Switch', onClick: () => openDockPicker('lines') }
+                                     { icon: Ruler, label: 'Shift', ariaLabel: 'Shift active guidance line', onClick: openDockLineShift, disabled: !activeLineRecord },
+                                     { icon: ArrowLeftRight, label: 'Switch', ariaLabel: 'Switch active guidance line', onClick: () => openDockPicker('lines') },
+                                     { icon: Plus, label: 'New', ariaLabel: 'Create new guidance line', onClick: openDockLineCreator }
                                  ]
                                 : [
                                     { icon: Target, label: 'Start AB', onClick: startDockStraightLine },
@@ -5024,7 +5031,7 @@ const App = () => {
            <section
                data-dock-mode="auto"
                aria-label="Auto quick adjustments"
-               className={`pointer-events-auto w-[176px] xl:w-[180px] overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none`}
+               className={`pointer-events-auto ${dockWidth} overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none`}
               onPointerDown={stopDockPointer}
               onPointerMove={stopDockPointer}
               onPointerUp={stopDockPointer}
@@ -5111,7 +5118,7 @@ const App = () => {
           return (
               <section
                   aria-label={`${recording ? 'Boundary recording' : 'Boundary ready'} contextual controls`}
-                  className={`pointer-events-auto w-[176px] xl:w-[180px] overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl shadow-xl select-none`}
+                  className={`pointer-events-auto ${dockWidth} overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} backdrop-blur-xl shadow-xl select-none`}
                   onPointerDown={stopDockPointer}
                   onPointerMove={stopDockPointer}
                   onPointerUp={stopDockPointer}
