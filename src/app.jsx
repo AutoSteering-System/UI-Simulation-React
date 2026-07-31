@@ -162,6 +162,7 @@ const App = () => {
   const [settingsTab, setSettingsTab] = useState('overview');
   const [fieldAssetTab, setFieldAssetTab] = useState('lines');
   const [fieldQuickView, setFieldQuickView] = useState(null);
+  const [dockQuickPicker, setDockQuickPicker] = useState(null);
   const [showArchivedLines, setShowArchivedLines] = useState(false);
   const [lineCatalogFilter, setLineCatalogFilter] = useState('ALL');
   const [selectedCatalogLineId, setSelectedCatalogLineId] = useState(null);
@@ -1102,6 +1103,7 @@ const App = () => {
 
         showNotification("Manual Control Returned", "warning");
     }
+    setDockQuickPicker(null);
     setSteeringMode(newMode);
   };
 
@@ -1241,6 +1243,7 @@ const App = () => {
   };
   const openRunScreen = () => {
       setMenuOpen(false);
+      setDockQuickPicker(null);
       setSettingsOpen(false);
       setFieldManagerOpen(false);
       setLinesPanelOpen(false);
@@ -1249,6 +1252,7 @@ const App = () => {
   };
   const openFieldAssetPanel = (tab = 'lines') => {
       setMenuOpen(false);
+      setDockQuickPicker(null);
       setFieldAssetTab(tab);
       setFieldQuickView(null);
       actions.setViewMode('LIST');
@@ -1259,6 +1263,7 @@ const App = () => {
   };
   const openLinesCatalog = () => {
       setMenuOpen(false);
+      setDockQuickPicker(null);
       setLinesPanelOpen(true);
       setFieldManagerOpen(false);
       setSettingsOpen(false);
@@ -1267,6 +1272,7 @@ const App = () => {
   };
   const openSystemPanel = () => {
       setMenuOpen(false);
+      setDockQuickPicker(null);
       setSettingsOpen(true);
       setFieldManagerOpen(false);
       setLinesPanelOpen(false);
@@ -1415,6 +1421,7 @@ const App = () => {
       actions.setShowGuidanceLines(true);
       if (line.isMulti !== undefined) actions.setIsMultiLineMode(line.isMulti);
       setLinesPanelOpen(false);
+      setDockQuickPicker(null);
       setIsCreating(false);
       setLineModeModalOpen(false);
       showNotification(`Loaded Line: ${line.name}`, "success");
@@ -1473,6 +1480,7 @@ const App = () => {
       setIsCreating(false);
       setLineModeModalOpen(false);
       showNotification(message, "success");
+      openSaveLineModal();
   };
 
   const startStraightABCreation = () => {
@@ -1493,9 +1501,13 @@ const App = () => {
     if (!tempLineName.trim()) { showNotification("Please enter line name", "warning"); return; }
     const createdAt = new Date();
     const lineField = fields.find(field => field.id === selectedFieldId);
+    if (!lineField) {
+        showNotification("Select a field before saving this line", "warning");
+        return;
+    }
     const newLine = {
         id: Date.now(),
-        name: tempLineName,
+        name: tempLineName.trim(),
         type: lineType,
         isMulti: isMultiLineMode,
         date: createdAt.toISOString().split('T')[0],
@@ -1614,6 +1626,7 @@ const App = () => {
   };
 
   const startBoundaryCreation = () => {
+     setDockQuickPicker(null);
      boundaryCaptureContextRef.current = { reopenFieldManager: fieldManagerOpen };
      setFieldManagerOpen(false);
      setRtkQualityOpen(false);
@@ -2755,15 +2768,15 @@ const App = () => {
   const FeatureToggle = ({ label, detail, featureKey, icon: Icon = CheckCircle2 }) => (
       <button
           onClick={() => toggleFeatureSetting(featureKey)}
-          className={`w-full p-4 rounded-xl border ${featureSettings[featureKey] ? 'border-green-500/50 bg-green-500/10' : `${t.borderCard} ${t.bgInput}`} flex items-center justify-between text-left`}
+          className={`w-full p-3 rounded-xl border ${featureSettings[featureKey] ? 'border-green-500/50 bg-green-500/10' : `${t.borderCard} ${t.bgInput}`} flex items-center justify-between text-left`}
       >
           <div className="flex items-center gap-3">
               <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${featureSettings[featureKey] ? 'bg-green-500 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} ${t.textDim}`}`}>
                   <Icon className="w-5 h-5" />
               </div>
-              <div>
-                  <div className={`font-bold ${t.textMain}`}>{label}</div>
-                  <div className={`text-xs ${t.textSub}`}>{detail}</div>
+              <div className="min-w-0">
+                  <div className={`ui-list-title ${t.textMain}`}>{label}</div>
+                  <div className={`ui-caption ${t.textSub}`}>{detail}</div>
               </div>
           </div>
           <div className={`w-12 h-7 rounded-full p-1 transition-colors ${featureSettings[featureKey] ? 'bg-green-500' : 'bg-slate-400'}`}>
@@ -4425,36 +4438,323 @@ const App = () => {
       const runtimeSection = isDarkDock
           ? 'border-slate-800 bg-slate-900/75'
           : 'border-slate-200 bg-slate-50/90';
-      const runtimeButton = isDarkDock
-          ? 'border-slate-700 bg-slate-950 text-slate-100 hover:bg-slate-800'
-          : 'border-slate-200 bg-white text-slate-700 hover:bg-blue-50';
-      const renderRuntimeDock = () => (
-          <section
-              aria-label="Quick runtime adjustments"
-              className={`pointer-events-auto w-[176px] xl:w-[180px] overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none`}
+       const runtimeButton = isDarkDock
+           ? 'border-slate-700 bg-slate-950 text-slate-100 hover:bg-slate-800'
+           : 'border-slate-200 bg-white text-slate-700 hover:bg-blue-50';
+       const activeDockBoundaryIndex = Math.min(
+           Math.max(Number(activeBoundaryIdx) || 0, 0),
+           Math.max((activeFieldRecord?.boundaries || []).length - 1, 0)
+       );
+       const activeDockBoundary = (activeFieldRecord?.boundaries || [])[activeDockBoundaryIndex] || null;
+       const activeDockBoundaryPointCount = Array.isArray(activeDockBoundary?.points)
+           ? activeDockBoundary.points.length
+           : Array.isArray(activeDockBoundary)
+               ? activeDockBoundary.length
+               : 0;
+       const autoTrimEnabled = steeringMode === 'AUTO'
+           && currentRunStatus.steeringState === 'ENGAGED'
+           && hasGuidanceToEngage;
+       const unsavedGuidance = hasGuidanceToEngage && !activeLineId;
+       const activeDockLineLabel = unsavedGuidance
+           ? `${compactStatus(lineType)} draft`
+           : activeLineRecord?.name || 'No line selected';
+       const activeDockBoundaryLabel = activeDockBoundary?.name || (activeDockBoundary ? `Boundary ${activeDockBoundaryIndex + 1}` : 'No boundary selected');
+       const dockLines = (activeFieldRecord?.lines || []).filter(line => line && !line.archived && line.points);
+       const dockBoundaries = (activeFieldRecord?.boundaries || []).filter(Boolean);
+       const ensureDockFieldContext = () => {
+           if (!activeFieldRecord?.id) {
+               showNotification('Load a field first', 'warning');
+               return false;
+           }
+           if (selectedFieldId !== activeFieldRecord.id) actions.setSelectedFieldId(activeFieldRecord.id);
+           return true;
+       };
+       const openDockPicker = (assetType) => {
+           if (!ensureDockFieldContext()) return;
+           setDockQuickPicker(assetType);
+       };
+       const openDockLineCreator = () => {
+           if (!ensureDockFieldContext()) return;
+           setDockQuickPicker(null);
+           setLineModeModalOpen(true);
+       };
+       const startDockStraightLine = () => {
+           if (!ensureDockFieldContext()) return;
+           setDockQuickPicker(null);
+           selectLineMode('STRAIGHT_AB');
+       };
+       const startDockBoundaryCapture = () => {
+           if (!ensureDockFieldContext()) return;
+           setDockQuickPicker(null);
+           startBoundaryCreation();
+       };
+       const selectDockBoundary = (boundary, index) => {
+           actions.setActiveBoundaryIdx(index);
+           setDockQuickPicker(null);
+           showNotification(`Active boundary: ${boundary?.name || `Boundary ${index + 1}`}`, 'success');
+       };
+       const renderDockMiniAction = ({ icon: Icon, label, onClick, tone = 'gray', primary = false, disabled = false }) => {
+           const primaryClass = tone === 'orange'
+               ? 'bg-orange-500 text-white hover:bg-orange-400'
+               : 'bg-blue-600 text-white hover:bg-blue-500';
+           return (
+               <button
+                   type="button"
+                   aria-label={label}
+                   disabled={disabled}
+                   onClick={disabled ? undefined : runDockAction(onClick)}
+                   className={`w-full h-9 min-w-0 rounded-lg border flex items-center justify-center gap-1 px-1.5 text-[10px] font-black transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35 ${primary ? `${primaryClass} border-transparent` : `${runtimeButton}`}`}
+               >
+                   <Icon className="w-3.5 h-3.5 shrink-0" />
+                   <span className="truncate">{label}</span>
+               </button>
+           );
+       };
+       const renderManualAssetCard = ({ icon: Icon, label, value, detail, tone, actions: cardActions = [] }) => {
+           const toneClasses = tone === 'orange'
+               ? (isDarkDock ? 'border-orange-500/30 bg-orange-500/10 text-orange-300' : 'border-orange-300 bg-orange-50 text-orange-700')
+               : (isDarkDock ? 'border-blue-500/30 bg-blue-500/10 text-blue-300' : 'border-blue-300 bg-blue-50 text-blue-700');
+           return (
+               <div className={`w-full rounded-xl border p-2.5 text-left ${toneClasses}`}>
+                   <span className="flex items-center gap-2">
+                       <span className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${tone === 'orange' ? 'bg-orange-500 text-white' : 'bg-blue-600 text-white'}`}>
+                           <Icon className="w-4 h-4" />
+                       </span>
+                       <span className="min-w-0 flex-1">
+                           <span className="block text-[9px] font-black uppercase tracking-[0.08em] opacity-75">{label}</span>
+                           <span className={`block mt-0.5 text-[11px] font-black truncate ${t.textMain}`}>{value}</span>
+                       </span>
+                   </span>
+                   <span className={`mt-1.5 block min-w-0 text-[9px] font-bold truncate ${t.textSub}`}>{detail}</span>
+                   <span className={`mt-2 grid gap-1.5 ${cardActions.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                       {cardActions.map((action, index) => (
+                           <React.Fragment key={`${label}-${action.label}`}>
+                               {renderDockMiniAction({ ...action, tone, primary: index === 0 })}
+                           </React.Fragment>
+                       ))}
+                   </span>
+               </div>
+           );
+       };
+       const renderManualQuickPicker = () => {
+           const selectingLines = dockQuickPicker === 'lines';
+           const items = selectingLines ? dockLines : dockBoundaries;
+           const pickerTone = selectingLines ? 'blue' : 'orange';
+           const PickerIcon = selectingLines ? Route : MapPin;
+           const pickerTitle = selectingLines ? 'Switch line' : 'Switch boundary';
+           return (
+               <section
+                   data-dock-mode="manual-picker"
+                   aria-label={pickerTitle}
+                   className={`pointer-events-auto w-[176px] xl:w-[180px] max-h-full overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none flex flex-col`}
+                   onPointerDown={stopDockPointer}
+                   onPointerMove={stopDockPointer}
+                   onPointerUp={stopDockPointer}
+                   onClick={stopDockPointer}
+               >
+                   <div className={`h-11 shrink-0 border-b ${railDivider} px-2 flex items-center gap-2`}>
+                       <button
+                           type="button"
+                           aria-label="Back to run setup"
+                           onClick={runDockAction(() => setDockQuickPicker(null))}
+                           className={`w-8 h-8 shrink-0 rounded-lg border ${runtimeButton} flex items-center justify-center`}
+                       >
+                           <CornerUpLeft className="w-4 h-4" />
+                       </button>
+                       <span className="min-w-0 flex-1">
+                           <span className={`block text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Quick select</span>
+                           <span className={`block text-[11px] font-black truncate ${t.textMain}`}>{selectingLines ? 'Guidance line' : 'Boundary'}</span>
+                       </span>
+                       <span className={`h-7 w-7 shrink-0 rounded-lg flex items-center justify-center ${selectingLines ? 'bg-blue-500/12 text-blue-500' : 'bg-orange-500/12 text-orange-500'}`}>
+                           <PickerIcon className="w-4 h-4" />
+                       </span>
+                   </div>
+
+                   <div className="min-h-0 flex-1 overflow-y-auto p-2 space-y-1.5">
+                       {items.length > 0 ? items.map((item, index) => {
+                           const active = selectingLines ? item.id === activeLineId : index === activeDockBoundaryIndex;
+                           const itemLabel = selectingLines ? item.name : (item.name || `Boundary ${index + 1}`);
+                           const itemDetail = selectingLines
+                               ? compactStatus(item.type || 'LINE')
+                               : `${Array.isArray(item.points) ? item.points.length : Array.isArray(item) ? item.length : 0} points`;
+                           return (
+                               <button
+                                   type="button"
+                                   key={selectingLines ? item.id : (item.id || item.name || index)}
+                                   aria-pressed={active}
+                                   aria-label={`${active ? 'Active' : 'Select'} ${itemLabel}`}
+                                   onClick={runDockAction(() => selectingLines ? handleLoadLine(item) : selectDockBoundary(item, index))}
+                                   className={`w-full min-h-[54px] rounded-xl border px-2 py-2 flex items-center gap-2 text-left transition-all active:scale-[0.98] ${active ? (selectingLines ? 'border-blue-500 bg-blue-500/12' : 'border-orange-500 bg-orange-500/12') : `${runtimeButton}`}`}
+                               >
+                                   <span className={`w-7 h-7 shrink-0 rounded-lg flex items-center justify-center ${active ? (selectingLines ? 'bg-blue-600 text-white' : 'bg-orange-500 text-white') : (selectingLines ? 'bg-blue-500/10 text-blue-500' : 'bg-orange-500/10 text-orange-500')}`}>
+                                       <PickerIcon className="w-4 h-4" />
+                                   </span>
+                                   <span className="min-w-0 flex-1">
+                                       <span className={`block text-[11px] font-black truncate ${t.textMain}`}>{itemLabel}</span>
+                                       <span className={`block mt-0.5 text-[9px] font-bold truncate ${t.textSub}`}>{itemDetail}</span>
+                                   </span>
+                                   {active && <Check className={`w-4 h-4 shrink-0 ${selectingLines ? 'text-blue-500' : 'text-orange-500'}`} />}
+                               </button>
+                           );
+                       }) : (
+                           <div className={`rounded-xl border border-dashed ${t.borderCard} px-3 py-6 text-center`}>
+                               <PickerIcon className={`w-7 h-7 mx-auto ${t.textDim}`} />
+                               <div className={`mt-2 text-[11px] font-black ${t.textMain}`}>{selectingLines ? 'No saved line' : 'No saved boundary'}</div>
+                           </div>
+                       )}
+                   </div>
+
+                   <div className={`shrink-0 border-t ${railDivider} p-2`}>
+                       {renderDockMiniAction({
+                           icon: selectingLines ? Plus : Radio,
+                           label: selectingLines ? 'New line' : 'Record new',
+                           onClick: selectingLines ? openDockLineCreator : startDockBoundaryCapture,
+                           tone: pickerTone,
+                           primary: true
+                       })}
+                       <div className={`mt-1.5 text-center text-[8px] font-bold leading-tight ${t.textDim}`}>Switches the active asset without leaving Run.</div>
+                   </div>
+               </section>
+           );
+       };
+       const renderDockViewControls = () => (
+           <div className={`rounded-xl border ${runtimeSection} p-2`}>
+               <div className="mb-2 flex h-8 items-center justify-between gap-2 px-1">
+                   <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>View</span>
+                   <span aria-live="polite" className={`text-xs font-black tabular-nums ${t.textMain}`}>{zoomPercent}%</span>
+               </div>
+               <div className="grid grid-cols-3 gap-1.5">
+                   <button
+                       type="button"
+                       aria-label="Zoom out"
+                       disabled={zoomLevel <= MIN_MAP_ZOOM}
+                       onClick={runDockAction(() => handleZoom('out'))}
+                       className={`h-12 rounded-lg border ${runtimeButton} flex items-center justify-center active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
+                   >
+                       <Minus className="h-5 w-5" />
+                   </button>
+                   <button
+                       type="button"
+                       aria-label="Reset map zoom"
+                       disabled={Math.abs(zoomLevel - DEFAULT_MAP_ZOOM) < 0.01}
+                       onClick={runDockAction(() => handleZoom('reset'))}
+                       className={`h-12 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-default disabled:opacity-45`}
+                   >
+                       <RotateCcw className="h-4 w-4" />
+                       <span className="text-[9px] font-black">100%</span>
+                   </button>
+                   <button
+                       type="button"
+                       aria-label="Zoom in"
+                       disabled={zoomLevel >= MAX_MAP_ZOOM}
+                       onClick={runDockAction(() => handleZoom('in'))}
+                       className={`h-12 rounded-lg border ${runtimeButton} flex items-center justify-center active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
+                   >
+                       <Plus className="h-5 w-5" />
+                   </button>
+               </div>
+           </div>
+       );
+       const renderManualDock = () => (
+           <section
+               data-dock-mode="manual"
+               aria-label="Manual line and boundary controls"
+               className={`pointer-events-auto w-[176px] xl:w-[180px] overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none`}
+               onPointerDown={stopDockPointer}
+               onPointerMove={stopDockPointer}
+               onPointerUp={stopDockPointer}
+               onClick={stopDockPointer}
+           >
+               <div className={`h-10 border-b ${railDivider} px-3 flex items-center justify-between gap-2`}>
+                   <span className="min-w-0 flex items-center gap-2">
+                       <span className="h-4 w-1 rounded-full bg-orange-500" />
+                       <span className={`truncate text-[10px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Run setup</span>
+                   </span>
+                   <span className="shrink-0 rounded-md bg-orange-500/12 px-1.5 py-1 text-[8px] font-black uppercase text-orange-500">Manual</span>
+               </div>
+
+               <div className="space-y-2 p-2">
+                   {renderManualAssetCard({
+                       icon: Route,
+                        label: 'Guidance line',
+                        value: activeDockLineLabel,
+                        detail: unsavedGuidance
+                            ? 'Geometry ready / not saved'
+                            : activeLineRecord
+                                 ? compactStatus(activeLineRecord.type || guidanceLine)
+                                 : `${(activeFieldRecord?.lines || []).filter(line => !line.archived).length} saved`,
+                        tone: 'blue',
+                        actions: unsavedGuidance
+                            ? [{ icon: Save, label: 'Save line', onClick: openSaveLineModal }]
+                            : dockLines.length > 0
+                                ? [
+                                    { icon: ArrowLeftRight, label: 'Switch', onClick: () => openDockPicker('lines') },
+                                    { icon: Plus, label: 'New', onClick: openDockLineCreator }
+                                ]
+                                : [
+                                    { icon: Target, label: 'Start AB', onClick: startDockStraightLine },
+                                    { icon: Plus, label: 'Other', onClick: openDockLineCreator }
+                                ]
+                    })}
+                   {renderManualAssetCard({
+                       icon: MapPin,
+                       label: 'Boundary',
+                       value: activeDockBoundaryLabel,
+                       detail: activeDockBoundary ? `${activeDockBoundaryPointCount} recorded points` : `${(activeFieldRecord?.boundaries || []).length} saved`,
+                       tone: 'orange',
+                       actions: dockBoundaries.length > 0
+                           ? [
+                               { icon: ArrowLeftRight, label: 'Switch', onClick: () => openDockPicker('boundaries') },
+                               { icon: Radio, label: 'Record', onClick: startDockBoundaryCapture }
+                           ]
+                           : [{ icon: Radio, label: 'Record', onClick: startDockBoundaryCapture }]
+                   })}
+                   {renderDockViewControls()}
+                   <div className={`rounded-lg px-2.5 py-2 text-[9px] font-bold leading-snug ${isDarkDock ? 'bg-slate-900/70 text-slate-400' : 'bg-slate-100 text-slate-500'}`}>
+                       Quick actions change the active Run setup. Use the left rail to manage saved data.
+                   </div>
+               </div>
+           </section>
+       );
+       const renderRuntimeDock = () => (
+           <section
+               data-dock-mode="auto"
+               aria-label="Auto quick adjustments"
+               className={`pointer-events-auto w-[176px] xl:w-[180px] overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none`}
               onPointerDown={stopDockPointer}
               onPointerMove={stopDockPointer}
               onPointerUp={stopDockPointer}
               onClick={stopDockPointer}
           >
-              <div className={`h-10 border-b ${railDivider} px-3 flex items-center gap-2`}>
-                  <span className="h-4 w-1 rounded-full bg-blue-500" />
-                  <span className={`text-[10px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Quick adjust</span>
-              </div>
+               <div className={`h-10 border-b ${railDivider} px-3 flex items-center justify-between gap-2`}>
+                   <span className="min-w-0 flex items-center gap-2">
+                       <span className="h-4 w-1 rounded-full bg-blue-500" />
+                       <span className={`truncate text-[10px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Quick adjust</span>
+                   </span>
+                   <span className="shrink-0 rounded-md bg-blue-500/12 px-1.5 py-1 text-[8px] font-black uppercase text-blue-500">Auto</span>
+               </div>
 
               <div className="space-y-2 p-2">
+                  <div className={`rounded-xl border ${runtimeSection} p-2.5`}>
+                      <div className="flex items-center justify-between gap-2">
+                          <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Run assets</span>
+                          <span className="rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black uppercase text-blue-500">Locked</span>
+                      </div>
+                      <div className={`mt-1.5 text-[11px] font-black truncate ${t.textMain}`}>{activeDockLineLabel}</div>
+                      <div className={`mt-0.5 text-[9px] font-bold truncate ${t.textSub}`}>{activeDockBoundaryLabel}</div>
+                  </div>
                   <div className={`rounded-xl border ${runtimeSection} p-2`}>
                       <div className="mb-2 flex h-10 items-center justify-between gap-2 px-1">
                           <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Nudge</span>
-                          <span aria-live="polite" className={`min-w-[66px] text-right text-sm font-black tabular-nums ${hasGuidanceToEngage && Math.abs(offsetCm) > 0.05 ? 'text-blue-500' : t.textMain}`}>
-                              {hasGuidanceToEngage ? `${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(1)} cm` : 'No line'}
-                          </span>
+                           <span aria-live="polite" className={`min-w-[66px] text-right text-sm font-black tabular-nums ${autoTrimEnabled && Math.abs(offsetCm) > 0.05 ? 'text-blue-500' : t.textMain}`}>
+                               {hasGuidanceToEngage ? `${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(1)} cm` : 'No line'}
+                           </span>
                       </div>
                       <div className="grid grid-cols-3 gap-1.5">
                           <button
                               type="button"
                               aria-label="Nudge guidance left 1 centimeter"
-                              disabled={!hasGuidanceToEngage}
+                              disabled={!autoTrimEnabled}
                               onClick={runDockAction(() => handleTrim('left'))}
                               className={`h-12 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
                           >
@@ -4464,7 +4764,7 @@ const App = () => {
                           <button
                               type="button"
                               aria-label="Reset guidance offset to zero"
-                              disabled={!hasGuidanceToEngage || Math.abs(offsetCm) <= 0.05}
+                              disabled={!autoTrimEnabled || Math.abs(offsetCm) <= 0.05}
                               onClick={runDockAction(() => actions.setManualOffset(0))}
                               className={`h-12 rounded-lg border flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35 ${Math.abs(offsetCm) > 0.05 ? 'border-blue-500/40 bg-blue-500/10 text-blue-500' : runtimeButton}`}
                           >
@@ -4474,7 +4774,7 @@ const App = () => {
                           <button
                               type="button"
                               aria-label="Nudge guidance right 1 centimeter"
-                              disabled={!hasGuidanceToEngage}
+                              disabled={!autoTrimEnabled}
                               onClick={runDockAction(() => handleTrim('right'))}
                               className={`h-12 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
                           >
@@ -4484,54 +4784,8 @@ const App = () => {
                       </div>
                   </div>
 
-                  <div className={`rounded-xl border ${runtimeSection} p-2`}>
-                      <div className="mb-2 flex h-8 items-center justify-between gap-2 px-1">
-                          <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>View</span>
-                          <div className="flex items-center gap-1.5">
-                              <span aria-live="polite" className={`text-xs font-black tabular-nums ${t.textMain}`}>{zoomPercent}%</span>
-                              <button
-                                  type="button"
-                                  aria-label="Guidance lines"
-                                  aria-pressed={showGuidanceLines}
-                                  onClick={runDockAction(() => actions.setShowGuidanceLines(!showGuidanceLines))}
-                                   className={`h-11 w-11 rounded-lg border flex items-center justify-center ${showGuidanceLines ? 'border-blue-600 bg-blue-600 text-white' : runtimeButton}`}
-                              >
-                                  {showGuidanceLines ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                              </button>
-                          </div>
-                      </div>
-                      <div className="grid grid-cols-3 gap-1.5">
-                          <button
-                              type="button"
-                              aria-label="Zoom out"
-                              disabled={zoomLevel <= MIN_MAP_ZOOM}
-                              onClick={runDockAction(() => handleZoom('out'))}
-                              className={`h-12 rounded-lg border ${runtimeButton} flex items-center justify-center active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
-                          >
-                              <Minus className="h-5 w-5" />
-                          </button>
-                          <button
-                              type="button"
-                              aria-label="Reset map zoom"
-                              disabled={Math.abs(zoomLevel - DEFAULT_MAP_ZOOM) < 0.01}
-                              onClick={runDockAction(() => handleZoom('reset'))}
-                              className={`h-12 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-default disabled:opacity-45`}
-                          >
-                              <RotateCcw className="h-4 w-4" />
-                              <span className="text-[9px] font-black">100%</span>
-                          </button>
-                          <button
-                              type="button"
-                              aria-label="Zoom in"
-                              disabled={zoomLevel >= MAX_MAP_ZOOM}
-                              onClick={runDockAction(() => handleZoom('in'))}
-                              className={`h-12 rounded-lg border ${runtimeButton} flex items-center justify-center active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
-                          >
-                              <Plus className="h-5 w-5" />
-                          </button>
-                      </div>
-                  </div>
-              </div>
+                   {renderDockViewControls()}
+               </div>
           </section>
       );
       const renderDockLayout = (dock, centered = false) => (
@@ -4775,8 +5029,12 @@ const App = () => {
           }));
       }
 
-      return renderDockLayout(renderRuntimeDock(), true);
-  };
+       if (steeringMode === 'MANUAL' && dockQuickPicker) {
+           return renderDockLayout(renderManualQuickPicker(), true);
+       }
+
+       return renderDockLayout(steeringMode === 'MANUAL' ? renderManualDock() : renderRuntimeDock(), true);
+   };
 
   const savedVehicleProfiles = vehicleProfiles || [];
   const savedImplementProfiles = implementProfiles || [];
@@ -5242,15 +5500,15 @@ const App = () => {
   };
 
   const SettingsSection = ({ title, detail, icon: Icon = Settings, children, actions: sectionActions }) => (
-      <section className={`${t.bgPanel} border ${t.borderCard} rounded-xl p-4 lg:p-5 space-y-4`}>
+      <section className={`${t.bgPanel} border ${t.borderCard} rounded-xl p-3 space-y-3`}>
           <div className="flex items-start justify-between gap-4">
               <div className="flex items-start gap-3 min-w-0">
                   <div className={`shrink-0 w-10 h-10 rounded-lg ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} flex items-center justify-center`}>
                       <Icon className="w-5 h-5 text-blue-500" />
                   </div>
                   <div className="min-w-0">
-                      <h4 className={`font-black ${t.textMain}`}>{title}</h4>
-                      {detail && <div className={`text-xs ${t.textSub}`}>{detail}</div>}
+                      <h4 className={`ui-section-title ${t.textMain}`}>{title}</h4>
+                      {detail && <div className={`ui-caption ${t.textSub}`}>{detail}</div>}
                   </div>
               </div>
               {sectionActions && <div className="shrink-0 flex flex-wrap gap-2 justify-end">{sectionActions}</div>}
@@ -5261,11 +5519,11 @@ const App = () => {
 
   const SettingSelect = ({ label, value, onChange, options }) => (
       <div className="flex flex-col gap-1.5">
-          <label className={`text-[11px] font-bold uppercase ${t.textSub}`}>{label}</label>
+          <label className={`ui-label ${t.textSub}`}>{label}</label>
           <select
               value={value}
               onChange={(e) => onChange(e.target.value)}
-              className={`${t.bgInput} border ${t.borderCard} rounded-lg px-4 py-2.5 ${t.textMain} outline-none`}
+              className={`ui-body ${t.bgInput} border ${t.borderCard} rounded-lg px-4 py-2.5 ${t.textMain} outline-none`}
           >
               {options.map((option) => (
                   <option key={option} value={option}>{option}</option>
@@ -5281,7 +5539,7 @@ const App = () => {
               ? 'bg-red-500/10 text-red-500 border-red-500/40 hover:bg-red-500/15'
               : `${t.textMain} border ${t.borderCard} hover:brightness-95`;
       return (
-          <button onClick={onClick} className={`px-4 py-2 rounded-lg border text-sm font-black transition ${variantClass}`}>
+          <button onClick={onClick} className={`ui-action px-4 py-2 rounded-lg border transition ${variantClass}`}>
               {children}
           </button>
       );
@@ -5289,8 +5547,8 @@ const App = () => {
 
   const SettingsMetric = ({ label, value, tone = t.textMain }) => (
       <div className={`${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} p-3 rounded-xl border ${t.borderCard}`}>
-          <div className={`text-[10px] uppercase font-black ${t.textSub}`}>{label}</div>
-          <div className={`text-lg font-black truncate ${tone}`}>{value}</div>
+          <div className={`ui-label ${t.textSub}`}>{label}</div>
+          <div className={`ui-section-title truncate ${tone}`}>{value}</div>
       </div>
   );
 
@@ -5300,8 +5558,8 @@ const App = () => {
               <Icon className={`w-5 h-5 ${tone}`} />
           </div>
           <div className="min-w-0">
-              <div className={`text-[10px] uppercase font-black ${t.textSub}`}>{label}</div>
-              <div className={`text-sm font-black truncate ${t.textMain}`}>{value}</div>
+              <div className={`ui-label ${t.textSub}`}>{label}</div>
+              <div className={`ui-list-title truncate ${t.textMain}`}>{value}</div>
           </div>
       </div>
   );
@@ -6652,9 +6910,9 @@ const App = () => {
   const renderSettingsContent = () => {
     switch (settingsTab) {
         case 'display': return (
-            <div className="space-y-5">
+            <div className="space-y-3">
                 <SettingsSection title="Display" detail="Screen theme, brightness and map presentation." icon={Monitor}>
-                    <div className="grid grid-cols-1 gap-4">
+                    <div className="grid grid-cols-1 gap-2">
                         <SettingSlider theme={t} label="Brightness" value={85} min={0} max={100} />
                         <div className={`flex flex-wrap items-center justify-between gap-3 p-4 ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} border ${t.borderCard} rounded-xl`}>
                             <div className="flex items-center gap-3">
@@ -8154,7 +8412,7 @@ const App = () => {
             );
         }
         case 'guidance': return (
-            <div className="space-y-5">
+            <div className="space-y-3">
                 <SettingsSection
                     title="Guidance Lines"
                     detail="Line selection, multi-line lanes and acquisition behavior."
@@ -8177,7 +8435,7 @@ const App = () => {
                     </button>
                 </SettingsSection>
                 <SettingsSection title="Auto Guidance" detail="Controller aggressiveness and compensation options." icon={Navigation}>
-                    <div className="grid grid-cols-1 gap-4">
+                    <div className="grid grid-cols-1 gap-2">
                         <SettingSlider theme={t} label="Steering Sensitivity" value={75} min={0} max={100} />
                         <SettingSlider theme={t} label="Line Acquisition Aggressiveness" value={60} min={0} max={100} />
                         <FeatureToggle label="Terrain Compensation" detail="IMU slope and bump correction for stable line tracking" featureKey="terrainCompensation" icon={Activity} />
@@ -8186,7 +8444,7 @@ const App = () => {
             </div>
         );
         case 'steering': return (
-            <div className="space-y-5">
+            <div className="space-y-3">
                 <SettingsSection title="Steering Controller" detail="Manual takeover, external switch and controller output." icon={SteeringWheelIcon}>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
                         <SettingsMetric label="Mode" value={steeringMode} tone={steeringMode === 'AUTO' ? 'text-green-500' : t.textMain} />
@@ -8249,7 +8507,7 @@ const App = () => {
             );
 
             return (
-              <div className="space-y-5">
+              <div className="space-y-3">
                 <SettingsSection
                     title="Headland Turn Assist"
                     detail="Configure how the controller leaves one pass, turns at the headland and enters the next pass."
@@ -8318,7 +8576,7 @@ const App = () => {
             );
         }
         case 'isobus': return (
-            <div className="space-y-5">
+            <div className="space-y-3">
                 <SettingsSection title="ISOBUS / Implement Control" detail="UT, task controller and automatic implement state." icon={Cpu}>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
                         <ConfigTile icon={Monitor} label="Terminal" value={featureSettings.isobusUT ? 'UT online' : 'Disabled'} tone={featureSettings.isobusUT ? 'text-green-500' : 'text-slate-500'} />
@@ -8336,7 +8594,7 @@ const App = () => {
             </div>
         );
         case 'camera': return (
-            <div className="space-y-5">
+            <div className="space-y-3">
                 <SettingsSection
                     title="Camera"
                     detail="Rear implement and blind spot feeds."
@@ -8355,7 +8613,7 @@ const App = () => {
             </div>
         );
         case 'diagnostics': return (
-            <div className="space-y-5">
+            <div className="space-y-3">
                 <SettingsSection
                     title="Diagnostics / OBD"
                     detail="Vehicle health, controller bus and service logs."
@@ -8383,7 +8641,7 @@ const App = () => {
             </div>
         );
         case 'data': return (
-            <div className="space-y-5">
+            <div className="space-y-3">
                 <SettingsSection
                     title="Local Database"
                     detail="Persistent local storage for fields, lines, profiles, RTK setup and machine configuration."
@@ -8442,7 +8700,7 @@ const App = () => {
             </div>
         );
         case 'landlevel': return (
-            <div className="space-y-5">
+            <div className="space-y-3">
                 <SettingsSection title="GNSS Land Leveling" detail="Slope guidance and correction workflow." icon={Globe}>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
                         <SettingsMetric label="Mode" value={featureSettings.landLeveling ? 'Active' : 'Off'} tone={featureSettings.landLeveling ? 'text-green-500' : 'text-slate-500'} />
@@ -9718,23 +9976,22 @@ const App = () => {
       const CurrentIcon = currentItem.icon || Settings;
 
       return (
-          <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/96' : 'bg-gray-100/96'} z-40 flex flex-col overflow-hidden`}>
-              <div className={`shrink-0 px-5 lg:px-7 py-4 border-b ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} flex items-center justify-between gap-4 shadow-sm`}>
-                  <div className="min-w-0 flex items-center gap-4">
-                      <div className="shrink-0 w-12 h-12 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-lg shadow-blue-900/20">
-                          <Settings className="w-7 h-7" />
+          <div data-settings-shell className={`absolute inset-0 ${theme === 'dark' ? 'bg-slate-950/96' : 'bg-gray-100/96'} z-40 flex flex-col overflow-hidden`}>
+              <div data-screen-header="system" className={`h-[88px] min-h-[88px] shrink-0 px-5 border-b ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} flex items-center justify-between gap-4 shadow-sm`}>
+                  <div className="min-w-0 flex items-center gap-3">
+                      <div className="shrink-0 w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-lg shadow-blue-900/20">
+                          <Settings className="w-5 h-5" />
                       </div>
                       <div className="min-w-0">
-                          <div className={`text-[10px] uppercase tracking-widest font-black ${t.textSub}`}>System Setup</div>
                           <div className="flex items-center gap-2 min-w-0">
-                              <h2 className={`text-xl lg:text-2xl font-black truncate ${t.textMain}`}>System</h2>
+                              <h2 className={`ui-screen-title truncate ${t.textMain}`}>System</h2>
                               <span className={t.textDim}>/</span>
                               <div className="flex items-center gap-2 min-w-0">
-                                  <CurrentIcon className="w-5 h-5 text-blue-500 shrink-0" />
-                                  <span className={`text-lg lg:text-xl font-black truncate ${t.textMain}`}>{currentItem.label}</span>
+                                  <CurrentIcon className="w-[18px] h-[18px] text-blue-500 shrink-0" />
+                                  <span className={`ui-screen-title truncate ${t.textMain}`}>{currentItem.label}</span>
                               </div>
                           </div>
-                          <div className={`text-xs ${t.textSub}`}>Run, machine, correction and service modules in one setup workspace.</div>
+                          <div className={`ui-screen-subtitle truncate ${t.textSub}`}>Run, machine, correction and service modules in one setup workspace.</div>
                       </div>
                   </div>
 
@@ -9746,8 +10003,8 @@ const App = () => {
                               { label: 'DB', value: localDatabase?.status || 'Ready', tone: (localDatabase?.status || '').toLowerCase().includes('fail') ? 'text-red-500' : 'text-green-500' }
                           ].map((item, idx) => (
                               <div key={item.label} className={`px-4 py-2 text-center ${idx > 0 ? `border-l ${t.borderCard}` : ''}`}>
-                                  <div className={`text-[9px] uppercase font-black ${t.textSub}`}>{item.label}</div>
-                                  <div className={`text-sm font-black ${item.tone}`}>{item.value}</div>
+                                  <div className={`ui-badge ${t.textSub}`}>{item.label}</div>
+                                  <div className={`ui-list-title ${item.tone}`}>{item.value}</div>
                               </div>
                           ))}
                       </div>
@@ -9762,12 +10019,12 @@ const App = () => {
               </div>
 
               <div className="flex-1 min-h-0 flex overflow-hidden">
-                  <div className={`w-[30%] min-w-[240px] max-w-[300px] border-r ${t.border} ${t.bgPanel} flex flex-col min-h-0`}>
-                      <nav className="flex-1 min-h-0 overflow-y-auto px-4 py-5 space-y-5">
+                  <div className={`w-[232px] min-w-[232px] max-w-[232px] border-r ${t.border} ${t.bgPanel} flex flex-col min-h-0`}>
+                      <nav className="flex-1 min-h-0 overflow-y-auto px-2 py-3 space-y-3">
                           {settingsNavSections.map((section) => (
                               <div key={section.title}>
-                                  <div className={`px-2 mb-2 text-[10px] uppercase tracking-wider font-black ${t.textSub}`}>{section.title}</div>
-                                  <div className="space-y-1.5">
+                                  <div className={`ui-eyebrow px-2 mb-2 ${t.textSub}`}>{section.title}</div>
+                                  <div className="space-y-1">
                                       {section.items.map((item) => (
                                           <SettingsTab
                                               key={item.id}
@@ -9795,22 +10052,22 @@ const App = () => {
                           className={`flex-1 min-h-0 ${
                               settingsTab === 'wifi'
                                   ? 'overflow-hidden p-2.5 lg:p-3'
-                                  : `overflow-y-auto scroll-pb-28 ${['vehicle', 'implement'].includes(settingsTab) ? 'p-0' : 'p-5 lg:p-7'}`
+                                  : `overflow-y-auto ${['vehicle', 'implement'].includes(settingsTab) ? 'p-0' : 'p-3'}`
                           }`}
                       >
                           <div className={
                               settingsTab === 'wifi'
                                   ? 'h-full min-h-0 w-full'
                                   : ['vehicle', 'implement'].includes(settingsTab)
-                                      ? 'w-full pb-24'
+                                      ? 'w-full pb-3'
                                       : ['overview', 'calibration'].includes(settingsTab)
                                           ? 'max-w-5xl'
-                                          : 'max-w-5xl pb-24'
+                                          : 'max-w-5xl pb-3'
                           }>
                               {renderSettingsContent()}
                           </div>
                       </div>
-                      <div className={`${settingsTab === 'wifi' ? 'px-4 py-2.5' : 'p-4 lg:p-5'} border-t ${t.borderCard} flex items-center gap-3 ${['vehicle', 'implement'].includes(settingsTab) ? 'justify-between' : 'justify-end'} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
+                      <div className={`ui-action-bar h-16 min-h-16 shrink-0 px-3 py-2 border-t ${t.borderCard} flex items-center gap-3 ${['vehicle', 'implement'].includes(settingsTab) ? 'justify-between' : 'justify-end'} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
                           {!['wifi', 'overview', 'calibration'].includes(settingsTab) && (
                               <button className={`px-5 lg:px-7 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-sm lg:text-base`} onClick={closeSettingsPanel}>Cancel</button>
                           )}
@@ -9951,10 +10208,10 @@ const ManagerNewButton = ({ entity, onClick, tone = 'blue', disabled = false }) 
             data-manager-new={entity.toLowerCase()}
             onClick={onClick}
             disabled={disabled}
-            className={`h-10 px-4 rounded-lg text-white font-black flex items-center justify-center gap-2 shadow-md transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${toneClass}`}
+            className={`ui-action h-10 px-4 rounded-lg text-white flex items-center justify-center gap-2 shadow-md transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${toneClass}`}
         >
             <Plus className="w-4 h-4" />
-            <span className="text-xs whitespace-nowrap">New {entity}</span>
+            <span className="whitespace-nowrap">New {entity}</span>
         </button>
     );
 };
@@ -10101,15 +10358,15 @@ const renderLinesPanel = () => {
     };
 
     return (
-        <div className={`w-full h-full flex flex-col ${panelBg}`}>
-            <div className={`flex items-center justify-between gap-4 px-5 py-4 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+        <div data-manager-screen="lines" className={`w-full h-full flex flex-col ${panelBg}`}>
+            <div data-screen-header="guidance-lines" className={`h-[88px] min-h-[88px] flex items-center justify-between gap-4 px-5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
                 <div className="min-w-0 flex items-center gap-3">
                     <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${surfaceBg} flex items-center justify-center`}>
                         <Route className="w-5 h-5 text-blue-500" />
                     </div>
                     <div className="min-w-0">
-                        <h2 className={`text-lg font-black ${t.textMain}`}>Guidance Lines</h2>
-                        <div className={`text-xs ${t.textSub} truncate`}>{activeField?.name || 'No field selected'} / {activeCatalogLines.length} active lines</div>
+                        <h2 className={`ui-screen-title ${t.textMain}`}>Guidance Lines</h2>
+                        <div className={`ui-screen-subtitle ${t.textSub} truncate`}>{activeField?.name || 'No field selected'} / {activeCatalogLines.length} active lines</div>
                     </div>
                 </div>
                 <div className="shrink-0 flex items-center gap-2">
@@ -10131,11 +10388,11 @@ const renderLinesPanel = () => {
                             <Route className="w-4 h-4" />
                         </div>
                         <div className="min-w-0">
-                            <div className={`text-[9px] uppercase font-black tracking-widest ${t.textSub}`}>Active line</div>
-                            <div className={`text-sm font-black truncate ${loadedLine ? t.textMain : t.textSub}`}>{loadedLine?.name || 'No line loaded'}</div>
+                            <div className={`ui-eyebrow ${t.textSub}`}>Active line</div>
+                            <div className={`ui-list-title truncate ${loadedLine ? t.textMain : t.textSub}`}>{loadedLine?.name || 'No line loaded'}</div>
                         </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-black">
+                    <div className="ui-badge flex flex-wrap items-center gap-1.5">
                         <span className={`px-2.5 py-1 rounded-lg border ${loadedLine ? 'border-green-500/35 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`}`}>{loadedLine ? 'LOADED' : 'NO ACTIVE'}</span>
                         <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${surfaceBg} ${t.textMain}`}>{loadedLine ? (loadedLine.type || 'LINE').replace(/_/g, ' ') : '--'}</span>
                         <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${surfaceBg} ${t.textMain}`}>{loadedLineLength !== null ? `${loadedLineLength.toFixed(1)} m` : '--'}</span>
@@ -10144,14 +10401,14 @@ const renderLinesPanel = () => {
             </div>
 
             <div className="flex-1 min-h-0 flex overflow-hidden">
-                    <aside className={`w-[30%] min-w-[240px] max-w-[300px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
+                    <aside className={`w-[232px] min-w-[232px] max-w-[232px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
                         <div className={`shrink-0 px-3 py-2 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/55' : 'bg-white/70'}`}>
                             <div className="flex items-center justify-between gap-2">
                                 <div className="min-w-0">
-                                    <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Catalog</div>
+                                    <div className={`ui-eyebrow ${t.textSub}`}>Catalog</div>
                                     <div className="min-w-0 flex items-center gap-2">
-                                        <div className={`text-sm font-black ${t.textMain} truncate`}>Saved Lines</div>
-                                        <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-blue-600/10 text-blue-500 text-[10px] font-black">{activeCatalogLines.length}</span>
+                                        <div className={`ui-pane-title ${t.textMain} truncate`}>Saved Lines</div>
+                                        <span className="ui-badge shrink-0 px-1.5 py-0.5 rounded-md bg-blue-600/10 text-blue-500">{activeCatalogLines.length}</span>
                                     </div>
                                 </div>
                             </div>
@@ -10168,14 +10425,14 @@ const renderLinesPanel = () => {
                                                 className={`shrink-0 h-7 rounded-full border px-2 flex items-center gap-1.5 transition-all ${active ? 'bg-blue-600 text-white border-blue-500 shadow-sm' : `${t.borderCard} ${surfaceBg} ${t.textSub} hover:border-blue-400 hover:text-blue-500`}`}
                                             >
                                                 <Icon className="w-3.5 h-3.5 shrink-0" />
-                                                <span className="text-[9px] font-black uppercase">{label}</span>
-                                                <span className={`text-[10px] font-black ${active ? 'text-white' : 'text-blue-500'}`}>{count}</span>
+                                                <span className="ui-badge">{label}</span>
+                                                <span className={`ui-badge ${active ? 'text-white' : 'text-blue-500'}`}>{count}</span>
                                             </button>
                                         );
                                     })}
                             </div>
 
-                            <div className={`mt-1 flex items-center justify-between gap-2 text-[10px] ${t.textSub}`}>
+                            <div className={`ui-caption mt-1 flex items-center justify-between gap-2 ${t.textSub}`}>
                                 <div className="truncate">
                                     {currentFilter === 'ALL'
                                         ? `${activeCatalogLines.length} active${archivedLines.length ? ` / ${archivedLines.length} archived` : ''}`
@@ -10228,21 +10485,21 @@ const renderLinesPanel = () => {
                                                 <div className="min-w-0 flex-1">
                                                     <div className="flex items-start justify-between gap-2">
                                                         <div
-                                                            className={`text-sm font-black leading-tight ${archived ? t.textSub : t.textMain}`}
+                                                            className={`ui-list-title break-words ${archived ? t.textSub : t.textMain}`}
                                                             title={line.name || `Line ${index + 1}`}
                                                             style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
                                                         >
                                                             {line.name || `Line ${index + 1}`}
                                                         </div>
-                                                        {active && <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-green-500/15 text-green-500 text-[8px] font-black uppercase">Loaded</span>}
-                                                        {selected && !active && <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-blue-500/15 text-blue-500 text-[8px] font-black uppercase">Selected</span>}
-                                                        {archived && <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-yellow-500/15 text-yellow-500 text-[8px] font-black uppercase">Archived</span>}
+                                                        {active && <span className="ui-badge shrink-0 px-1.5 py-0.5 rounded-md bg-green-500/15 text-green-500">Loaded</span>}
+                                                        {selected && !active && <span className="ui-badge shrink-0 px-1.5 py-0.5 rounded-md bg-blue-500/15 text-blue-500">Selected</span>}
+                                                        {archived && <span className="ui-badge shrink-0 px-1.5 py-0.5 rounded-md bg-yellow-500/15 text-yellow-500">Archived</span>}
                                                     </div>
-                                                    <div className={`mt-0.5 text-[10px] ${t.textSub}`}>{(line.type || 'LINE').replace(/_/g, ' ')} / {lengthMeters !== null ? `${lengthMeters.toFixed(1)} m` : '--'}</div>
+                                                    <div className={`ui-caption mt-0.5 ${t.textSub}`}>{(line.type || 'LINE').replace(/_/g, ' ')} / {lengthMeters !== null ? `${lengthMeters.toFixed(1)} m` : '--'}</div>
                                                 </div>
                                             </div>
                                             <div className="mt-2 flex items-center justify-between gap-2">
-                                                <span className={`text-[10px] ${t.textSub}`}>{formatLineDate(line)}</span>
+                                                <span className={`ui-meta ${t.textSub}`}>{formatLineDate(line)}</span>
                                                 <div className="flex items-center gap-1.5">
                                                     {archived ? (
                                                         <button onClick={(e) => { e.stopPropagation(); handleRestoreLine(line); }} className="px-3 py-2 rounded-lg text-xs font-black border border-yellow-500/40 text-yellow-500 hover:bg-yellow-500/10">
@@ -10253,7 +10510,7 @@ const renderLinesPanel = () => {
                                                             <button aria-label={`Rename ${line.name}`} onClick={(e) => { e.stopPropagation(); handleRenameLine(line); }} className={`p-1.5 rounded-lg ${t.textSub} hover:bg-blue-500/10 hover:text-blue-500`}>
                                                                 <PenTool className="w-3.5 h-3.5" />
                                                             </button>
-                                                            <button onClick={(e) => { e.stopPropagation(); handleLoadLine(line); }} className={`px-2.5 py-1.5 rounded-lg text-[11px] font-black ${active ? 'bg-blue-600 text-white' : `border ${t.borderCard} ${t.textMain} hover:brightness-95`}`}>
+                                                            <button onClick={(e) => { e.stopPropagation(); handleLoadLine(line); }} className={`ui-compact-action px-2.5 py-1.5 rounded-lg ${active ? 'bg-blue-600 text-white' : `border ${t.borderCard} ${t.textMain} hover:brightness-95`}`}>
                                                                 {active ? 'Loaded' : 'Load'}
                                                             </button>
                                                         </>
@@ -10267,19 +10524,19 @@ const renderLinesPanel = () => {
                         </div>
                     </aside>
 
-                    <div className={`flex-1 min-w-0 min-h-0 p-3 lg:p-4 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
-                    <section className={`${surfaceBg} border ${t.borderCard} rounded-xl min-w-0 min-h-0 h-full overflow-hidden flex flex-col`}>
+                    <div className={`flex-1 min-w-0 min-h-0 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
+                    <section className={`${surfaceBg} min-w-0 min-h-0 h-full overflow-hidden flex flex-col`}>
                         {selectedLine ? (
                             <>
                                 <div className={`shrink-0 px-4 py-3 border-b ${t.divider} flex items-start justify-between gap-3`}>
                                     <div className="min-w-0">
-                                        <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Selected line</div>
-                                        <h3 className={`text-lg font-black ${t.textMain} truncate`}>{selectedLine.name}</h3>
-                                        <div className={`mt-0.5 text-xs ${t.textSub}`}>{(selectedLine.type || 'LINE').replace(/_/g, ' ')} / {selectedLine.isMulti ? 'Parallel lines enabled' : 'Single path'}</div>
+                                        <div className={`ui-eyebrow ${t.textSub}`}>Selected line</div>
+                                        <h3 className={`ui-detail-title ${t.textMain} truncate`}>{selectedLine.name}</h3>
+                                        <div className={`ui-caption mt-0.5 ${t.textSub}`}>{(selectedLine.type || 'LINE').replace(/_/g, ' ')} / {selectedLine.isMulti ? 'Parallel lines enabled' : 'Single path'}</div>
                                     </div>
                                     <div className="shrink-0 flex items-center gap-2">
-                                        {selectedLine.archived && <span className="px-2 py-1 rounded-lg bg-yellow-500/15 text-yellow-500 text-[10px] font-black uppercase">Archived</span>}
-                                        {activeLineId === selectedLine.id && <span className="px-2 py-1 rounded-lg bg-green-500/15 text-green-500 text-[10px] font-black uppercase">Active</span>}
+                                        {selectedLine.archived && <span className="ui-badge px-2 py-1 rounded-lg bg-yellow-500/15 text-yellow-500">Archived</span>}
+                                        {activeLineId === selectedLine.id && <span className="ui-badge px-2 py-1 rounded-lg bg-green-500/15 text-green-500">Active</span>}
                                     </div>
                                 </div>
 
@@ -10294,9 +10551,9 @@ const renderLinesPanel = () => {
                                                 { label: 'Quality', value: selectedLine.archived ? 'Archived' : (selectedLine.quality || 'Good') }
                                             ].map(({ label, value, sub }) => (
                                                 <div key={label} className={`${mutedBg} border ${t.borderCard} rounded-lg p-2.5 min-w-0`}>
-                                                    <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
-                                                    <div className={`mt-1 text-xs leading-tight font-black ${t.textMain} truncate`} title={value}>{value}</div>
-                                                    {sub && <div className={`mt-0.5 text-[9px] font-bold ${t.textSub}`}>{sub}</div>}
+                                                    <div className={`ui-label ${t.textSub}`}>{label}</div>
+                                                    <div className={`ui-metric-small mt-1 ${t.textMain} truncate`} title={value}>{value}</div>
+                                                    {sub && <div className={`ui-meta mt-0.5 ${t.textSub}`}>{sub}</div>}
                                                 </div>
                                             ))}
                                         </div>
@@ -10308,16 +10565,16 @@ const renderLinesPanel = () => {
                                                 <Settings className="w-4 h-4" />
                                             </div>
                                             <div className="min-w-0">
-                                                <h4 className={`font-black uppercase tracking-wider text-[11px] ${t.textMain}`}>Guidance setup</h4>
-                                                <div className={`mt-0.5 text-[10px] leading-tight ${t.textSub}`}>Spacing generated from the active implement.</div>
+                                                <h4 className={`ui-list-title ${t.textMain}`}>Guidance setup</h4>
+                                                <div className={`ui-caption mt-0.5 ${t.textSub}`}>Spacing generated from the active implement.</div>
                                             </div>
                                         </div>
 
                                         <div className={`mt-3 rounded-xl border border-blue-500/25 ${theme === 'dark' ? 'bg-blue-950/25' : 'bg-blue-50'} p-3`}>
-                                            <div className={`text-[9px] font-black uppercase tracking-wider ${t.textSub}`}>Pass spacing</div>
+                                            <div className={`ui-label ${t.textSub}`}>Pass spacing</div>
                                             <div className="mt-1 flex items-end justify-between gap-3">
-                                                <div className="text-2xl leading-none font-black text-blue-600">{passSpacingMeters.toFixed(2)} <span className="text-sm">m</span></div>
-                                                <div className={`text-[9px] font-bold text-right ${t.textSub}`}>Width − overlap</div>
+                                                <div className="ui-metric text-blue-600">{passSpacingMeters.toFixed(2)} <span className="ui-caption">m</span></div>
+                                                <div className={`ui-meta text-right ${t.textSub}`}>Width − overlap</div>
                                             </div>
                                         </div>
 
@@ -10329,15 +10586,15 @@ const renderLinesPanel = () => {
                                                 ['Pass layout', selectedLine.isMulti ? 'Parallel' : 'Single']
                                             ].map(([label, value]) => (
                                                 <div key={label} className={`${surfaceBg} border ${t.borderCard} rounded-lg p-2.5 min-w-0`}>
-                                                    <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
-                                                    <div className={`mt-1 text-xs leading-tight font-black ${t.textMain} truncate`} title={value}>{value}</div>
+                                                    <div className={`ui-label ${t.textSub}`}>{label}</div>
+                                                    <div className={`ui-metric-small mt-1 ${t.textMain} truncate`} title={value}>{value}</div>
                                                 </div>
                                             ))}
                                         </div>
                                     </div>
                                 </div>
 
-                                <div className={`shrink-0 px-4 py-3 border-t ${t.divider} flex flex-wrap justify-between gap-2 ${theme === 'dark' ? 'bg-slate-950/50' : 'bg-white/70'}`}>
+                                <div className={`ui-action-bar shrink-0 px-4 py-3 border-t ${t.divider} flex flex-wrap justify-between gap-2 ${theme === 'dark' ? 'bg-slate-950/50' : 'bg-white/70'}`}>
                                     <div className="flex flex-wrap items-center gap-2">
                                         <button onClick={() => confirmDelete('line', selectedLine.id)} className="px-3 py-2 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold flex items-center gap-2">
                                             <Trash2 className="w-4 h-4" />
@@ -10909,15 +11166,15 @@ const renderLinesPanel = () => {
               : 0;
 
           return (
-              <div className={`w-full h-full flex flex-col ${panelBg}`}>
-                  <div className={`flex items-center justify-between gap-4 px-5 py-4 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+              <div data-manager-screen="boundaries" className={`w-full h-full flex flex-col ${panelBg}`}>
+                  <div data-screen-header="boundaries" className={`h-[88px] min-h-[88px] flex items-center justify-between gap-4 px-5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
                       <div className="min-w-0 flex items-center gap-3">
                           <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
                               <MapPin className="w-5 h-5 text-orange-500" />
                           </div>
                           <div className="min-w-0">
-                              <h2 className={`text-lg font-black ${t.textMain}`}>Boundary Manager</h2>
-                              <div className={`text-xs ${t.textSub} truncate`}>{activeField?.name || 'No field selected'} / {boundaries.length} saved loops</div>
+                              <h2 className={`ui-screen-title ${t.textMain}`}>Boundary Manager</h2>
+                              <div className={`ui-screen-subtitle ${t.textSub} truncate`}>{activeField?.name || 'No field selected'} / {boundaries.length} saved loops</div>
                           </div>
                       </div>
                       <div className="shrink-0 flex items-center gap-2">
@@ -10933,11 +11190,11 @@ const renderLinesPanel = () => {
                                   <MapPin className="w-4 h-4" />
                               </div>
                               <div className="min-w-0">
-                                  <div className={`text-[9px] uppercase font-black tracking-widest ${t.textSub}`}>Active boundary</div>
-                                  <div className={`text-sm font-black truncate ${activeBoundary ? t.textMain : t.textSub}`}>{activeBoundary?.name || 'No boundary active'}</div>
+                                  <div className={`ui-eyebrow ${t.textSub}`}>Active boundary</div>
+                                  <div className={`ui-list-title truncate ${activeBoundary ? t.textMain : t.textSub}`}>{activeBoundary?.name || 'No boundary active'}</div>
                               </div>
                           </div>
-                          <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-black">
+                          <div className="ui-badge flex flex-wrap items-center gap-1.5">
                               <span className={`px-2.5 py-1 rounded-lg border ${activeBoundary ? 'border-green-500/35 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`}`}>{activeBoundary ? 'ACTIVE' : 'NO ACTIVE'}</span>
                               <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{activePoints || 0} pts</span>
                               <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{activeField?.name || '--'}</span>
@@ -10946,16 +11203,16 @@ const renderLinesPanel = () => {
                   </div>
 
                   <div className="flex-1 min-h-0 flex overflow-hidden">
-                      <aside className={`w-[30%] min-w-[240px] max-w-[300px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
+                      <aside className={`w-[232px] min-w-[232px] max-w-[232px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
                           <div className={`shrink-0 px-3 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/55' : 'bg-white/70'}`}>
                               <div className="flex items-center justify-between gap-3">
                                   <div>
-                                      <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Catalog</div>
-                                      <div className={`text-sm font-black ${t.textMain}`}>Saved Boundaries</div>
+                                      <div className={`ui-eyebrow ${t.textSub}`}>Catalog</div>
+                                      <div className={`ui-pane-title ${t.textMain}`}>Saved Boundaries</div>
                                   </div>
-                                  <span className="px-2 py-1 rounded-lg bg-orange-500/10 text-orange-500 text-[10px] font-black">{boundaries.length}</span>
+                                  <span className="ui-badge px-2 py-1 rounded-lg bg-orange-500/10 text-orange-500">{boundaries.length}</span>
                               </div>
-                              <div className={`mt-2 text-[10px] ${t.textSub}`}>Select a loop to inspect its location and capture details.</div>
+                              <div className={`ui-caption mt-2 ${t.textSub}`}>Select a loop to inspect its location and capture details.</div>
                           </div>
 
                           <div className="flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2">
@@ -10985,17 +11242,22 @@ const renderLinesPanel = () => {
                                               </div>
                                               <div className="min-w-0 flex-1">
                                                   <div className="flex items-start justify-between gap-2">
-                                                      <div className={`text-sm font-black leading-tight ${t.textMain} truncate`}>{boundary.name || `Boundary ${index + 1}`}</div>
-                                                      {active && <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-green-500/15 text-green-500 text-[8px] font-black uppercase">Active</span>}
-                                                      {selected && !active && <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-orange-500/15 text-orange-500 text-[8px] font-black uppercase">Selected</span>}
+                                                      <div
+                                                          className={`ui-list-title ${t.textMain} break-words`}
+                                                          style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                                                      >
+                                                          {boundary.name || `Boundary ${index + 1}`}
+                                                      </div>
+                                                      {active && <span className="ui-badge shrink-0 px-1.5 py-0.5 rounded-md bg-green-500/15 text-green-500">Active</span>}
+                                                      {selected && !active && <span className="ui-badge shrink-0 px-1.5 py-0.5 rounded-md bg-orange-500/15 text-orange-500">Selected</span>}
                                                   </div>
-                                                  <div className={`mt-0.5 text-[10px] ${t.textSub}`}>{points.length} points / Loop {index + 1}</div>
+                                                  <div className={`ui-caption mt-0.5 ${t.textSub}`}>{points.length} points / Loop {index + 1}</div>
                                               </div>
                                           </div>
                                           <div className={`mt-2 pt-2 border-t ${t.divider} flex items-center justify-between gap-2`}>
                                               <div className="min-w-0">
-                                                  <div className={`text-[9px] font-bold ${t.textSub} truncate`}>{created.date}</div>
-                                                  <div className={`text-[9px] ${t.textDim} truncate`}>{getCreatedLocation(boundary, activeField)}</div>
+                                                  <div className={`ui-meta ${t.textSub} truncate`}>{created.date}</div>
+                                                  <div className={`ui-meta ${t.textDim} truncate`}>{getCreatedLocation(boundary, activeField)}</div>
                                               </div>
                                               <ChevronRight className={`w-4 h-4 shrink-0 ${selected ? 'text-orange-500' : t.textDim}`} />
                                           </div>
@@ -11004,26 +11266,26 @@ const renderLinesPanel = () => {
                               }) : (
                                   <div className={`h-full min-h-[280px] flex flex-col items-center justify-center text-center px-5 ${t.textDim}`}>
                                       <MapPin className="w-14 h-14 mb-4 opacity-45" />
-                                      <div className={`text-lg font-black ${t.textMain}`}>No boundary saved</div>
-                                      <div className="mt-2 text-sm">Use New Boundary, position the vehicle, then press Start to record.</div>
+                                      <div className={`ui-pane-title ${t.textMain}`}>No boundary saved</div>
+                                      <div className="ui-caption mt-2">Use New Boundary, position the vehicle, then press Start to record.</div>
                                   </div>
                               )}
                           </div>
                       </aside>
 
-                      <div className={`flex-1 min-w-0 min-h-0 p-3 lg:p-4 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
-                          <section className={`${softPanelBg} border ${t.borderCard} rounded-xl min-w-0 min-h-0 h-full overflow-hidden flex flex-col`}>
+                      <div className={`flex-1 min-w-0 min-h-0 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
+                          <section className={`${softPanelBg} min-w-0 min-h-0 h-full overflow-hidden flex flex-col`}>
                               {selectedBoundary ? (
                                   <>
                                       <div className={`shrink-0 px-4 py-3 border-b ${t.divider} flex items-start justify-between gap-3`}>
                                           <div className="min-w-0">
-                                              <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Selected boundary</div>
-                                              <h3 className={`text-lg font-black ${t.textMain} truncate`}>{selectedBoundary.name || `Boundary ${selectedIndex + 1}`}</h3>
-                                              <div className={`mt-0.5 text-xs ${t.textSub}`}>{selectedPoints.length} recorded points / Loop {selectedIndex + 1}</div>
+                                              <div className={`ui-eyebrow ${t.textSub}`}>Selected boundary</div>
+                                              <h3 className={`ui-detail-title ${t.textMain} truncate`}>{selectedBoundary.name || `Boundary ${selectedIndex + 1}`}</h3>
+                                              <div className={`ui-caption mt-0.5 ${t.textSub}`}>{selectedPoints.length} recorded points / Loop {selectedIndex + 1}</div>
                                           </div>
                                           <div className="shrink-0 flex items-center gap-2">
-                                              {selectedIndex === activeIndex && <span className="px-2 py-1 rounded-lg bg-green-500/15 text-green-500 text-[10px] font-black uppercase">Active</span>}
-                                              <span className="px-2 py-1 rounded-lg bg-orange-500/15 text-orange-500 text-[10px] font-black uppercase">Closed loop</span>
+                                              {selectedIndex === activeIndex && <span className="ui-badge px-2 py-1 rounded-lg bg-green-500/15 text-green-500">Active</span>}
+                                              <span className="ui-badge px-2 py-1 rounded-lg bg-orange-500/15 text-orange-500">Closed loop</span>
                                           </div>
                                       </div>
 
@@ -11040,8 +11302,8 @@ const renderLinesPanel = () => {
                                                       ['Status', selectedIndex === activeIndex ? 'Active' : 'Saved']
                                                   ].map(([label, value]) => (
                                                       <div key={label} className={`${mutedPanelBg} border ${t.borderCard} rounded-lg p-2.5 min-w-0`}>
-                                                          <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
-                                                          <div className={`mt-1 text-xs leading-tight font-black ${label === 'Status' && value === 'Active' ? 'text-green-500' : t.textMain} break-words`}>{value}</div>
+                                                          <div className={`ui-label ${t.textSub}`}>{label}</div>
+                                                          <div className={`ui-metric-small mt-1 ${label === 'Status' && value === 'Active' ? 'text-green-500' : t.textMain} break-words`}>{value}</div>
                                                       </div>
                                                   ))}
                                               </div>
@@ -11050,7 +11312,7 @@ const renderLinesPanel = () => {
                                           <div className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${mutedPanelBg} p-3 flex flex-col overflow-y-auto`}>
                                               <div className="flex items-center gap-2 mb-3">
                                                   <MapPin className="w-4 h-4 text-orange-500 shrink-0" />
-                                                  <h4 className={`font-black uppercase tracking-wider text-[11px] ${t.textSub}`}>Capture details</h4>
+                                                  <h4 className={`ui-label ${t.textSub}`}>Capture details</h4>
                                               </div>
                                               <div className="space-y-2">
                                                   {[
@@ -11064,9 +11326,9 @@ const renderLinesPanel = () => {
                                                               <Icon className="w-3.5 h-3.5" />
                                                           </div>
                                                           <div className="min-w-0">
-                                                              <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
-                                                              <div className={`mt-0.5 text-xs font-black ${t.textMain} break-words`}>{value}</div>
-                                                              <div className={`mt-0.5 text-[9px] ${t.textDim}`}>{sub}</div>
+                                                              <div className={`ui-label ${t.textSub}`}>{label}</div>
+                                                              <div className={`ui-metric-small mt-0.5 ${t.textMain} break-words`}>{value}</div>
+                                                              <div className={`ui-meta mt-0.5 ${t.textDim}`}>{sub}</div>
                                                           </div>
                                                       </div>
                                                   ))}
@@ -11074,7 +11336,7 @@ const renderLinesPanel = () => {
                                           </div>
                                       </div>
 
-                                      <div className={`shrink-0 px-4 py-3 border-t ${t.divider} flex flex-wrap items-center justify-between gap-2 ${theme === 'dark' ? 'bg-slate-950/50' : 'bg-white/70'}`}>
+                                      <div className={`ui-action-bar shrink-0 px-4 py-3 border-t ${t.divider} flex flex-wrap items-center justify-between gap-2 ${theme === 'dark' ? 'bg-slate-950/50' : 'bg-white/70'}`}>
                                           <button onClick={() => confirmDelete('boundary', null, selectedIndex)} className="px-3 py-2 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold flex items-center gap-2">
                                               <Trash2 className="w-4 h-4" />
                                               Delete
@@ -11092,8 +11354,8 @@ const renderLinesPanel = () => {
                               ) : (
                                   <div className={`h-full min-h-[360px] flex flex-col items-center justify-center text-center px-8 ${t.textDim}`}>
                                       <MapPin className="w-16 h-16 mb-4 opacity-45" />
-                                      <h3 className={`text-xl font-black ${t.textMain}`}>No boundary selected</h3>
-                                      <p className="text-sm mt-2 max-w-[340px]">Create a boundary first. The saved loop, creation time and field location will appear here.</p>
+                                      <h3 className={`ui-detail-title ${t.textMain}`}>No boundary selected</h3>
+                                      <p className="ui-caption mt-2 max-w-[340px]">Create a boundary first. The saved loop, creation time and field location will appear here.</p>
                                   </div>
                               )}
                           </section>
@@ -11128,15 +11390,15 @@ const renderLinesPanel = () => {
           };
 
           return (
-              <div className={`w-full h-full flex flex-col ${panelBg}`}>
-                  <div className={`flex items-center justify-between gap-4 px-5 py-4 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+              <div data-manager-screen="tasks" className={`w-full h-full flex flex-col ${panelBg}`}>
+                  <div data-screen-header="tasks" className={`h-[88px] min-h-[88px] flex items-center justify-between gap-4 px-5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
                       <div className="min-w-0 flex items-center gap-3">
                           <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
                               <FileText className="w-5 h-5 text-green-500" />
                           </div>
                           <div className="min-w-0">
-                              <h2 className={`text-lg font-black ${t.textMain}`}>Task Board</h2>
-                              <div className={`text-xs ${t.textSub} truncate`}>{activeField?.name || 'No field selected'} / {tasks.length} tasks</div>
+                              <h2 className={`ui-screen-title ${t.textMain}`}>Task Board</h2>
+                              <div className={`ui-screen-subtitle ${t.textSub} truncate`}>{activeField?.name || 'No field selected'} / {tasks.length} tasks</div>
                           </div>
                       </div>
                       <div className="shrink-0 flex items-center gap-2">
@@ -11152,11 +11414,11 @@ const renderLinesPanel = () => {
                                   <Activity className="w-4 h-4" />
                               </div>
                               <div className="min-w-0">
-                                  <div className={`text-[9px] uppercase font-black tracking-widest ${t.textSub}`}>Active task</div>
-                                  <div className={`text-sm font-black truncate ${activeTask ? t.textMain : t.textSub}`}>{activeTask?.name || 'No task running'}</div>
+                                  <div className={`ui-eyebrow ${t.textSub}`}>Active task</div>
+                                  <div className={`ui-list-title truncate ${activeTask ? t.textMain : t.textSub}`}>{activeTask?.name || 'No task running'}</div>
                               </div>
                           </div>
-                          <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-black">
+                          <div className="ui-badge flex flex-wrap items-center gap-1.5">
                               <span className={`px-2.5 py-1 rounded-lg border ${activeTask ? 'border-green-500/35 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`}`}>{activeTask ? 'RUNNING' : 'NO ACTIVE'}</span>
                               <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{pendingTasks.length} pending</span>
                               <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${softPanelBg} ${t.textMain}`}>{doneTasks.length} done</span>
@@ -11169,10 +11431,10 @@ const renderLinesPanel = () => {
                           <div className="max-w-5xl mx-auto">
                               <div className={`mb-5 rounded-xl border ${t.borderCard} ${softPanelBg} p-4 flex flex-wrap items-center justify-between gap-3`}>
                                   <div>
-                                      <div className={`text-[10px] uppercase font-black ${t.textSub}`}>New task target</div>
-                                      <div className={`font-black ${t.textMain}`}>{activeField?.name || 'Select field first'}</div>
+                                      <div className={`ui-eyebrow ${t.textSub}`}>New task target</div>
+                                      <div className={`ui-list-title ${t.textMain}`}>{activeField?.name || 'Select field first'}</div>
                                   </div>
-                                  <button onClick={() => actions.setViewMode('LIST')} className={`h-10 px-4 rounded-lg border ${t.borderCard} ${t.textMain} font-black hover:brightness-95`}>
+                                  <button onClick={() => actions.setViewMode('LIST')} className={`ui-action h-10 px-4 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}>
                                       Back to Tasks
                                   </button>
                               </div>
@@ -11187,8 +11449,8 @@ const renderLinesPanel = () => {
                                               <Icon className="w-6 h-6" />
                                           </div>
                                           <div className="min-w-0">
-                                              <div className={`font-black ${t.textMain}`}>{title}</div>
-                                              <div className={`mt-1 text-sm ${t.textSub}`}>{detail}</div>
+                                              <div className={`ui-pane-title ${t.textMain}`}>{title}</div>
+                                              <div className={`ui-caption mt-1 ${t.textSub}`}>{detail}</div>
                                           </div>
                                       </button>
                                   ))}
@@ -11197,14 +11459,14 @@ const renderLinesPanel = () => {
                       </div>
                   ) : (
                       <div className="flex-1 min-h-0 flex overflow-hidden">
-                          <aside className={`w-[30%] min-w-[240px] max-w-[300px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
+                          <aside className={`w-[232px] min-w-[232px] max-w-[232px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
                               <div className={`shrink-0 px-3 py-3 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/55' : 'bg-white/70'}`}>
                                   <div className="flex items-center justify-between gap-3">
                                       <div>
-                                          <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Catalog</div>
-                                          <div className={`text-sm font-black ${t.textMain}`}>Field Tasks</div>
+                                          <div className={`ui-eyebrow ${t.textSub}`}>Catalog</div>
+                                          <div className={`ui-pane-title ${t.textMain}`}>Field Tasks</div>
                                       </div>
-                                      <span className="px-2 py-1 rounded-lg bg-green-500/10 text-green-500 text-[10px] font-black">{tasks.length}</span>
+                                      <span className="ui-badge px-2 py-1 rounded-lg bg-green-500/10 text-green-500">{tasks.length}</span>
                                   </div>
                                   <div className="mt-2 grid grid-cols-3 gap-1.5">
                                       {[
@@ -11212,9 +11474,9 @@ const renderLinesPanel = () => {
                                           ['Pending', pendingTasks.length, 'text-blue-500'],
                                           ['Done', doneTasks.length, 'text-slate-500']
                                       ].map(([label, value, tone]) => (
-                                          <div key={label} className={`rounded-lg border ${t.borderCard} ${softPanelBg} px-2 py-1.5 text-center`}>
-                                              <div className={`text-sm font-black ${tone}`}>{value}</div>
-                                              <div className={`text-[8px] font-black uppercase ${t.textSub}`}>{label}</div>
+                                          <div key={label} className={`rounded-lg border ${t.borderCard} ${softPanelBg} px-1.5 py-1.5 text-center`}>
+                                              <div className={`ui-metric-small ${tone}`}>{value}</div>
+                                              <div className={`ui-badge ${t.textSub}`}>{label}</div>
                                           </div>
                                       ))}
                                   </div>
@@ -11247,16 +11509,21 @@ const renderLinesPanel = () => {
                                                   </div>
                                                   <div className="min-w-0 flex-1">
                                                       <div className="flex items-start justify-between gap-2">
-                                                          <div className={`text-sm font-black leading-tight ${t.textMain} truncate`}>{task.name}</div>
-                                                          <span className={`shrink-0 px-1.5 py-0.5 rounded-md border text-[8px] font-black uppercase ${getTaskStatusTone(task)}`}>{active ? 'Running' : task.status}</span>
+                                                          <div
+                                                              className={`ui-list-title ${t.textMain} break-words`}
+                                                              style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                                                          >
+                                                              {task.name}
+                                                          </div>
+                                                          <span className={`ui-badge shrink-0 px-1.5 py-0.5 rounded-md border ${getTaskStatusTone(task)}`}>{active ? 'Running' : task.status}</span>
                                                       </div>
-                                                      <div className={`mt-0.5 text-[10px] ${t.textSub}`}>{task.type || 'Field work'}</div>
+                                                      <div className={`ui-caption mt-0.5 ${t.textSub}`}>{task.type || 'Field work'}</div>
                                                   </div>
                                               </div>
                                               <div className={`mt-2 pt-2 border-t ${t.divider} flex items-center justify-between gap-2`}>
                                                   <div className="min-w-0">
-                                                      <div className={`text-[9px] font-bold ${t.textSub} truncate`}>{created.date}</div>
-                                                      <div className={`text-[9px] ${t.textDim} truncate`}>{getCreatedLocation(task, activeField)}</div>
+                                                      <div className={`ui-meta ${t.textSub} truncate`}>{created.date}</div>
+                                                      <div className={`ui-meta ${t.textDim} truncate`}>{getCreatedLocation(task, activeField)}</div>
                                                   </div>
                                                   <ChevronRight className={`w-4 h-4 shrink-0 ${selected ? 'text-green-500' : t.textDim}`} />
                                               </div>
@@ -11265,15 +11532,15 @@ const renderLinesPanel = () => {
                                   }) : (
                                       <div className={`h-full min-h-[280px] flex flex-col items-center justify-center text-center px-5 ${t.textDim}`}>
                                           <FileText className="w-14 h-14 mb-4 opacity-45" />
-                                          <div className={`text-lg font-black ${t.textMain}`}>No task created</div>
-                                          <div className="mt-2 text-sm">Create a job for this field, then start it when the vehicle is ready.</div>
+                                          <div className={`ui-pane-title ${t.textMain}`}>No task created</div>
+                                          <div className="ui-caption mt-2">Create a job for this field, then start it when the vehicle is ready.</div>
                                       </div>
                                   )}
                               </div>
                           </aside>
 
-                          <div className={`flex-1 min-w-0 min-h-0 p-3 lg:p-4 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
-                              <section className={`${softPanelBg} border ${t.borderCard} rounded-xl min-w-0 min-h-0 h-full overflow-hidden flex flex-col`}>
+                          <div className={`flex-1 min-w-0 min-h-0 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
+                              <section className={`${softPanelBg} min-w-0 min-h-0 h-full overflow-hidden flex flex-col`}>
                                   {selectedTask ? (
                                       <>
                                           <div className={`shrink-0 px-4 py-3 border-b ${t.divider} flex items-start justify-between gap-3`}>
@@ -11282,12 +11549,12 @@ const renderLinesPanel = () => {
                                                       <SelectedTaskIcon className="w-5 h-5" />
                                                   </div>
                                                   <div className="min-w-0">
-                                                      <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Selected task</div>
-                                                      <h3 className={`text-lg font-black ${t.textMain} truncate`}>{selectedTask.name}</h3>
-                                                      <div className={`mt-0.5 text-xs ${t.textSub}`}>{selectedTask.type || 'Field work'} / {activeField?.name || 'No field'}</div>
+                                                      <div className={`ui-eyebrow ${t.textSub}`}>Selected task</div>
+                                                      <h3 className={`ui-detail-title ${t.textMain} truncate`}>{selectedTask.name}</h3>
+                                                      <div className={`ui-caption mt-0.5 ${t.textSub}`}>{selectedTask.type || 'Field work'} / {activeField?.name || 'No field'}</div>
                                                   </div>
                                               </div>
-                                              <span className={`shrink-0 px-2.5 py-1 rounded-lg border text-[10px] font-black uppercase ${getTaskStatusTone(selectedTask)}`}>
+                                              <span className={`ui-badge shrink-0 px-2.5 py-1 rounded-lg border ${getTaskStatusTone(selectedTask)}`}>
                                                   {activeTaskId === selectedTask.id ? 'Running' : selectedTask.status}
                                               </span>
                                           </div>
@@ -11297,9 +11564,9 @@ const renderLinesPanel = () => {
                                                   <div className={`rounded-xl border ${t.borderCard} ${mutedPanelBg} p-4`}>
                                                       <div className="flex items-center justify-between gap-4">
                                                           <div className="min-w-0">
-                                                              <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Work profile</div>
-                                                              <div className={`mt-1 text-xl font-black ${t.textMain}`}>{selectedTask.type || 'General field work'}</div>
-                                                              <div className={`mt-1 text-sm ${t.textSub}`}>{taskOptions.find(option => option.type === selectedTask.type)?.detail || 'Field operation and progress tracking'}</div>
+                                                              <div className={`ui-eyebrow ${t.textSub}`}>Work profile</div>
+                                                              <div className={`ui-detail-title mt-1 ${t.textMain}`}>{selectedTask.type || 'General field work'}</div>
+                                                              <div className={`ui-caption mt-1 ${t.textSub}`}>{taskOptions.find(option => option.type === selectedTask.type)?.detail || 'Field operation and progress tracking'}</div>
                                                           </div>
                                                           <div className={`shrink-0 w-16 h-16 rounded-2xl flex items-center justify-center ${getTaskStatusTone(selectedTask)} border`}>
                                                               <SelectedTaskIcon className="w-8 h-8" />
@@ -11315,22 +11582,22 @@ const renderLinesPanel = () => {
                                                           ['Completed', selectedTask.completedAt ? getCreatedDateTime({ createdAt: selectedTask.completedAt }).date : 'Not completed']
                                                       ].map(([label, value]) => (
                                                           <div key={label} className={`${mutedPanelBg} border ${t.borderCard} rounded-lg p-2.5 min-w-0`}>
-                                                              <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
-                                                              <div className={`mt-1 text-xs leading-tight font-black ${label === 'Status' && activeTaskId === selectedTask.id ? 'text-green-500' : t.textMain} break-words`}>{value}</div>
+                                                              <div className={`ui-label ${t.textSub}`}>{label}</div>
+                                                              <div className={`ui-metric-small mt-1 ${label === 'Status' && activeTaskId === selectedTask.id ? 'text-green-500' : t.textMain} break-words`}>{value}</div>
                                                           </div>
                                                       ))}
                                                   </div>
 
                                                   <div className={`rounded-xl border ${t.borderCard} ${mutedPanelBg} p-3`}>
-                                                      <div className={`text-[9px] uppercase tracking-wider font-black ${t.textSub}`}>Operator note</div>
-                                                      <div className={`mt-1 text-sm ${t.textMain}`}>Task is tied to <span className="font-black">{activeField?.name || 'this field'}</span>. Start it only when the vehicle and implement are positioned for work.</div>
+                                                      <div className={`ui-label ${t.textSub}`}>Operator note</div>
+                                                      <div className={`ui-body mt-1 ${t.textMain}`}>Task is tied to <span className="font-black">{activeField?.name || 'this field'}</span>. Start it only when the vehicle and implement are positioned for work.</div>
                                                   </div>
                                               </div>
 
                                               <div className={`min-w-0 min-h-0 rounded-xl border ${t.borderCard} ${mutedPanelBg} p-3 flex flex-col overflow-y-auto`}>
                                                   <div className="flex items-center gap-2 mb-3">
                                                       <MapPin className="w-4 h-4 text-green-500 shrink-0" />
-                                                      <h4 className={`font-black uppercase tracking-wider text-[11px] ${t.textSub}`}>Creation details</h4>
+                                                      <h4 className={`ui-label ${t.textSub}`}>Creation details</h4>
                                                   </div>
                                                   <div className="space-y-2">
                                                       {[
@@ -11344,9 +11611,9 @@ const renderLinesPanel = () => {
                                                                   <Icon className="w-3.5 h-3.5" />
                                                               </div>
                                                               <div className="min-w-0">
-                                                                  <div className={`text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
-                                                                  <div className={`mt-0.5 text-xs font-black ${t.textMain} break-words`}>{value}</div>
-                                                                  <div className={`mt-0.5 text-[9px] ${t.textDim}`}>{sub}</div>
+                                                                  <div className={`ui-label ${t.textSub}`}>{label}</div>
+                                                                  <div className={`ui-metric-small mt-0.5 ${t.textMain} break-words`}>{value}</div>
+                                                                  <div className={`ui-meta mt-0.5 ${t.textDim}`}>{sub}</div>
                                                               </div>
                                                           </div>
                                                       ))}
@@ -11354,7 +11621,7 @@ const renderLinesPanel = () => {
                                               </div>
                                           </div>
 
-                                          <div className={`shrink-0 px-4 py-3 border-t ${t.divider} flex flex-wrap items-center justify-between gap-2 ${theme === 'dark' ? 'bg-slate-950/50' : 'bg-white/70'}`}>
+                                          <div className={`ui-action-bar shrink-0 px-4 py-3 border-t ${t.divider} flex flex-wrap items-center justify-between gap-2 ${theme === 'dark' ? 'bg-slate-950/50' : 'bg-white/70'}`}>
                                               <button onClick={() => confirmDelete('task', selectedTask.id)} className="px-3 py-2 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold flex items-center gap-2">
                                                   <Trash2 className="w-4 h-4" />
                                                   Delete
@@ -11388,8 +11655,8 @@ const renderLinesPanel = () => {
                                   ) : (
                                       <div className={`h-full min-h-[360px] flex flex-col items-center justify-center text-center px-8 ${t.textDim}`}>
                                           <FileText className="w-16 h-16 mb-4 opacity-45" />
-                                          <h3 className={`text-xl font-black ${t.textMain}`}>No task selected</h3>
-                                          <p className="text-sm mt-2 max-w-[340px]">Create a task first. Its time, field and vehicle location will be stored here.</p>
+                                          <h3 className={`ui-detail-title ${t.textMain}`}>No task selected</h3>
+                                          <p className="ui-caption mt-2 max-w-[340px]">Create a task first. Its time, field and vehicle location will be stored here.</p>
                                       </div>
                                   )}
                               </section>
@@ -11422,19 +11689,19 @@ const renderLinesPanel = () => {
           const estimatedArea = (currentFieldBoundaries.reduce((acc, boundary) => acc + (boundary.points?.length || 0), 0) * 0.05).toFixed(1);
 
           rightContent = (
-              <div className="flex-1 min-h-0 flex flex-col">
+              <div data-manager-screen="create-field" className="flex-1 min-h-0 flex flex-col">
                   <div className={`shrink-0 px-4 lg:px-5 py-3 border-b ${t.divider} flex items-center justify-between gap-4 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
                       <div className="flex items-center gap-3 min-w-0">
                           <button onClick={() => actions.setViewMode('LIST')} className={`shrink-0 p-2 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95`}>
                               <ArrowLeftRight className="w-5 h-5 rotate-180" />
                           </button>
                           <div className="min-w-0">
-                              <div className={`text-[10px] font-black uppercase tracking-widest ${t.textSub}`}>Field setup</div>
-                              <h3 className={`text-lg font-black ${t.textMain} truncate`}>Create new field</h3>
-                              <div className={`text-[11px] ${t.textSub}`}>Name the field, then add a boundary when available.</div>
+                              <div className={`ui-eyebrow ${t.textSub}`}>Field setup</div>
+                              <h3 className={`ui-detail-title ${t.textMain} truncate`}>Create new field</h3>
+                              <div className={`ui-caption ${t.textSub}`}>Name the field, then add a boundary when available.</div>
                           </div>
                       </div>
-                      <div className={`shrink-0 h-9 px-3 rounded-lg border ${hasFieldName ? 'border-green-500/30 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`} flex items-center gap-2 text-[10px] font-black uppercase`}>
+                      <div className={`ui-badge shrink-0 h-9 px-3 rounded-lg border ${hasFieldName ? 'border-green-500/30 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`} flex items-center gap-2`}>
                           {hasFieldName ? <CheckCircle2 className="w-4 h-4" /> : <CircleDashed className="w-4 h-4" />}
                           {hasFieldName ? 'Ready to save' : 'Name required'}
                       </div>
@@ -11448,13 +11715,13 @@ const renderLinesPanel = () => {
                                       <div className="flex items-center gap-3 min-w-0">
                                           <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-black ${hasFieldName ? 'bg-blue-600 text-white' : `${mutedPanelBg} ${t.textSub} border ${t.borderCard}`}`}>1</div>
                                           <div className="min-w-0">
-                                              <div className={`font-black ${t.textMain}`}>Field identity</div>
-                                              <div className={`text-[11px] ${t.textSub}`}>Use a name that is easy to find later.</div>
+                                              <div className={`ui-list-title ${t.textMain}`}>Field identity</div>
+                                              <div className={`ui-caption ${t.textSub}`}>Use a name that is easy to find later.</div>
                                           </div>
                                       </div>
-                                      <span className="shrink-0 text-[9px] font-black uppercase text-blue-500">Required</span>
+                                      <span className="ui-badge shrink-0 text-blue-500">Required</span>
                                   </div>
-                                  <label className={`block text-[9px] font-black uppercase tracking-wider mb-1 ${t.textSub}`}>Field name</label>
+                                  <label className={`ui-label block mb-1 ${t.textSub}`}>Field name</label>
                                   <div className="relative">
                                       <MapIcon className={`absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 ${hasFieldName ? 'text-blue-500' : t.textDim}`} />
                                       <input
@@ -11462,7 +11729,7 @@ const renderLinesPanel = () => {
                                           value={newFieldName}
                                           onChange={e => actions.setNewFieldName(e.target.value)}
                                           placeholder="e.g. South Farm 02"
-                                          className={`w-full h-11 pl-11 pr-11 rounded-xl border ${hasFieldName ? 'border-blue-500' : t.borderCard} ${t.bgInput} ${t.textMain} font-bold focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 outline-none`}
+                                          className={`ui-body w-full h-11 pl-11 pr-11 rounded-xl border ${hasFieldName ? 'border-blue-500' : t.borderCard} ${t.bgInput} ${t.textMain} focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 outline-none`}
                                           autoFocus
                                       />
                                       {hasFieldName && <CheckCircle2 className="absolute right-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-green-500" />}
@@ -11474,11 +11741,11 @@ const renderLinesPanel = () => {
                                       <div className="flex items-center gap-3 min-w-0">
                                           <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-black ${boundaryCount > 0 ? 'bg-orange-500 text-white' : `${mutedPanelBg} ${t.textSub} border ${t.borderCard}`}`}>2</div>
                                           <div className="min-w-0">
-                                              <div className={`font-black ${t.textMain}`}>Field boundary</div>
-                                              <div className={`text-[11px] ${t.textSub}`}>{boundaryCount > 0 ? `${boundaryCount} loop saved / ${estimatedArea} ha estimated` : 'You can add this now or later.'}</div>
+                                              <div className={`ui-list-title ${t.textMain}`}>Field boundary</div>
+                                              <div className={`ui-caption ${t.textSub}`}>{boundaryCount > 0 ? `${boundaryCount} loop saved / ${estimatedArea} ha estimated` : 'You can add this now or later.'}</div>
                                           </div>
                                       </div>
-                                      <span className={`shrink-0 text-[9px] font-black uppercase ${boundaryCount > 0 ? 'text-orange-500' : t.textSub}`}>{boundaryCount > 0 ? 'Captured' : 'Optional'}</span>
+                                      <span className={`ui-badge shrink-0 ${boundaryCount > 0 ? 'text-orange-500' : t.textSub}`}>{boundaryCount > 0 ? 'Captured' : 'Optional'}</span>
                                   </div>
                                   <button
                                       type="button"
@@ -11490,8 +11757,8 @@ const renderLinesPanel = () => {
                                               <MapPin className="w-5 h-5" />
                                           </div>
                                           <div className="min-w-0">
-                                              <div className={`text-sm font-black ${t.textMain}`}>{boundaryCount > 0 ? 'Record another boundary' : 'Record boundary'}</div>
-                                              <div className={`text-[10px] ${t.textSub}`}>Drive the perimeter to capture the field edge</div>
+                                              <div className={`ui-list-title ${t.textMain}`}>{boundaryCount > 0 ? 'Record another boundary' : 'Record boundary'}</div>
+                                              <div className={`ui-caption ${t.textSub}`}>Drive the perimeter to capture the field edge</div>
                                           </div>
                                       </div>
                                       <ArrowLeftRight className={`shrink-0 w-4 h-4 ${t.textDim}`} />
@@ -11501,8 +11768,8 @@ const renderLinesPanel = () => {
                               <div className={`rounded-xl border ${hasFieldName ? 'border-green-500/30 bg-green-500/5' : t.borderCard} ${!hasFieldName ? softPanelBg : ''} p-3 flex items-center gap-3`}>
                                   <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-black ${hasFieldName ? 'bg-green-600 text-white' : `${mutedPanelBg} ${t.textSub} border ${t.borderCard}`}`}>3</div>
                                   <div className="min-w-0 flex-1">
-                                      <div className={`font-black ${t.textMain}`}>Review and save</div>
-                                      <div className={`text-[11px] ${t.textSub}`}>{hasFieldName ? `${newFieldName.trim()} is ready for the field library.` : 'Enter a field name to continue.'}</div>
+                                      <div className={`ui-list-title ${t.textMain}`}>Review and save</div>
+                                      <div className={`ui-caption ${t.textSub}`}>{hasFieldName ? `${newFieldName.trim()} is ready for the field library.` : 'Enter a field name to continue.'}</div>
                                   </div>
                                   {hasFieldName && <CheckCircle2 className="shrink-0 w-5 h-5 text-green-500" />}
                               </div>
@@ -11511,10 +11778,10 @@ const renderLinesPanel = () => {
                           <section className={`min-w-0 min-h-[300px] rounded-xl border ${t.borderCard} ${softPanelBg} p-3 flex flex-col`}>
                               <div className="shrink-0 px-1 pb-3 flex items-center justify-between gap-3">
                                   <div className="min-w-0">
-                                      <div className={`text-[9px] font-black uppercase tracking-wider ${t.textSub}`}>Live preview</div>
-                                      <div className={`font-black truncate ${t.textMain}`}>{newFieldName.trim() || 'Untitled field'}</div>
+                                      <div className={`ui-eyebrow ${t.textSub}`}>Live preview</div>
+                                      <div className={`ui-list-title truncate ${t.textMain}`}>{newFieldName.trim() || 'Untitled field'}</div>
                                   </div>
-                                  <span className={`shrink-0 px-2 py-1 rounded-md text-[9px] font-black uppercase ${boundaryCount > 0 ? 'bg-orange-500/15 text-orange-500' : `${mutedPanelBg} ${t.textSub}`}`}>
+                                  <span className={`ui-badge shrink-0 px-2 py-1 rounded-md ${boundaryCount > 0 ? 'bg-orange-500/15 text-orange-500' : `${mutedPanelBg} ${t.textSub}`}`}>
                                       {boundaryCount > 0 ? `${boundaryCount} boundary` : 'No boundary'}
                                   </span>
                               </div>
@@ -11528,8 +11795,8 @@ const renderLinesPanel = () => {
                                       ['Status', hasFieldName ? 'Ready' : 'Draft']
                                   ].map(([label, value]) => (
                                       <div key={label} className={`min-w-0 rounded-lg border ${t.borderCard} ${mutedPanelBg} p-2 text-center`}>
-                                          <div className={`text-xs font-black truncate ${label === 'Status' && hasFieldName ? 'text-green-500' : t.textMain}`}>{value}</div>
-                                          <div className={`mt-0.5 text-[8px] font-black uppercase ${t.textSub}`}>{label}</div>
+                                          <div className={`ui-metric-small truncate ${label === 'Status' && hasFieldName ? 'text-green-500' : t.textMain}`}>{value}</div>
+                                          <div className={`ui-badge mt-0.5 ${t.textSub}`}>{label}</div>
                                       </div>
                                   ))}
                               </div>
@@ -11537,8 +11804,8 @@ const renderLinesPanel = () => {
                       </div>
                   </div>
 
-                  <div className={`shrink-0 px-4 lg:px-5 py-3 border-t ${t.divider} ${theme === 'dark' ? 'bg-slate-950/85' : 'bg-white/90'} flex items-center justify-between gap-3`}>
-                      <div className={`hidden sm:flex items-center gap-2 text-[10px] ${t.textSub}`}>
+                  <div className={`ui-action-bar shrink-0 px-4 lg:px-5 py-3 border-t ${t.divider} ${theme === 'dark' ? 'bg-slate-950/85' : 'bg-white/90'} flex items-center justify-between gap-3`}>
+                      <div className={`ui-caption hidden sm:flex items-center gap-2 ${t.textSub}`}>
                           <CheckCircle2 className={`w-4 h-4 ${hasFieldName ? 'text-green-500' : t.textDim}`} />
                           Boundary is optional and can be added later.
                       </div>
@@ -11646,7 +11913,7 @@ const renderLinesPanel = () => {
                       <div className={`h-9 px-3 flex items-center justify-between gap-2 border-b ${selected ? 'border-blue-500/30 bg-blue-500/10' : t.divider}`}>
                           <div className="min-w-0 flex items-center gap-2">
                               <Icon className={`w-4 h-4 shrink-0 ${selected ? 'text-blue-500' : t.textSub}`} />
-                              <span className={`text-[11px] font-black uppercase tracking-wider truncate ${selected ? 'text-blue-600' : t.textSub}`}>{label}</span>
+                              <span className={`ui-label truncate ${selected ? 'text-blue-600' : t.textSub}`}>{label}</span>
                           </div>
                           <div className="shrink-0 flex items-center gap-2" title={status}>
                               <span className={`w-2 h-2 rounded-full ${status === 'Ready' || status === 'Active' ? 'bg-green-500' : status === 'No data' ? 'bg-slate-300' : 'bg-blue-400'}`} />
@@ -11658,8 +11925,8 @@ const renderLinesPanel = () => {
                               <Icon className="w-5 h-5" />
                           </div>
                           <div className="min-w-0 flex-1">
-                              <div className={`font-black leading-tight truncate ${t.textMain}`}>{value}</div>
-                              <div className={`mt-1 text-[11px] leading-tight truncate ${t.textSub}`}>{detail}</div>
+                              <div className={`ui-card-title truncate ${t.textMain}`}>{value}</div>
+                              <div className={`ui-meta mt-0.5 truncate ${t.textSub}`}>{detail}</div>
                           </div>
                       </div>
                   </button>
@@ -11674,12 +11941,12 @@ const renderLinesPanel = () => {
                               <MapIcon className="w-5 h-5 text-white" />
                           </div>
                           <div className="min-w-0">
-                              <div className="text-[9px] font-black uppercase tracking-[0.18em] text-blue-100">Field overview</div>
+                              <div className="ui-eyebrow text-blue-100">Field overview</div>
                               <div className="flex items-center gap-2 min-w-0">
-                                  <h3 className="text-lg font-black truncate">{activeField.name}</h3>
-                                  {isLoadedActiveField && <span className="shrink-0 px-2 py-1 rounded-md bg-white/15 text-white text-[9px] font-black uppercase">Loaded</span>}
+                                  <h3 className="ui-hero-title truncate">{activeField.name}</h3>
+                                  {isLoadedActiveField && <span className="ui-badge shrink-0 px-2 py-1 rounded-md bg-white/15 text-white">Loaded</span>}
                               </div>
-                              <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-blue-100">
+                              <div className="ui-caption mt-0.5 flex flex-wrap items-center gap-2 text-blue-100">
                                   <span>{fieldArea}</span>
                                   <span className="text-blue-200">/</span>
                                   <span>Last used {activeField.lastUsed || '--'}</span>
@@ -11687,7 +11954,7 @@ const renderLinesPanel = () => {
                           </div>
                       </div>
                       <div className="shrink-0 flex items-center gap-2">
-                          <span className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase ${fieldSetupReady ? 'bg-green-500 text-white' : 'bg-white/15 text-white'}`}>
+                          <span className={`ui-badge px-3 py-1.5 rounded-lg ${fieldSetupReady ? 'bg-green-500 text-white' : 'bg-white/15 text-white'}`}>
                               {fieldSetupReady ? 'Setup ready' : 'Needs setup'}
                           </span>
                       </div>
@@ -11698,9 +11965,9 @@ const renderLinesPanel = () => {
                           <div className="flex items-center justify-between gap-3 mb-3">
                               <div className="flex items-center gap-2 min-w-0">
                                   <MapIcon className="w-4 h-4 text-blue-500 shrink-0" />
-                                  <span className={`text-[11px] font-black uppercase tracking-wider ${t.textSub}`}>Field map</span>
+                                  <span className={`ui-section-title ${t.textSub}`}>Field map</span>
                               </div>
-                              <span className={`text-[10px] font-black ${t.textSub}`}>{boundaries.length} boundary</span>
+                              <span className={`ui-meta ${t.textSub}`}>{boundaries.length} boundary</span>
                           </div>
                           <div className="min-h-[180px] flex-1">
                                   <MiniFieldPreview field={activeField} compact />
@@ -11708,12 +11975,12 @@ const renderLinesPanel = () => {
                           <div className={`mt-3 rounded-xl border ${t.borderCard} ${softPanelBg} p-3`}>
                               <div className="flex items-end justify-between gap-3">
                                   <div>
-                                      <div className={`text-[10px] font-black uppercase tracking-wider ${t.textSub}`}>Total area</div>
-                                      <div className={`mt-1 text-3xl font-black leading-none ${t.textMain}`}>{fieldArea}</div>
+                                      <div className={`ui-label ${t.textSub}`}>Total area</div>
+                                      <div className={`ui-metric-large mt-1 ${t.textMain}`}>{fieldArea}</div>
                                   </div>
-                                  <div className={`text-right text-[11px] ${t.textSub}`}>
+                                  <div className={`ui-meta text-right ${t.textSub}`}>
                                       <div>Last used</div>
-                                      <div className={`font-black ${t.textMain}`}>{activeField.lastUsed || '--'}</div>
+                                      <div className={`ui-list-title ${t.textMain}`}>{activeField.lastUsed || '--'}</div>
                                   </div>
                               </div>
                               <div className="mt-3 grid grid-cols-3 gap-2">
@@ -11723,8 +11990,8 @@ const renderLinesPanel = () => {
                                       ['Tasks', tasks.length]
                                   ].map(([label, value]) => (
                                       <div key={label} className={`rounded-lg border ${t.borderCard} ${mutedPanelBg} px-2 py-2.5 text-center`}>
-                                          <div className={`text-lg font-black leading-none ${t.textMain}`}>{value}</div>
-                                          <div className={`mt-1 text-[9px] font-black uppercase ${t.textSub}`}>{label}</div>
+                                          <div className={`ui-metric ${t.textMain}`}>{value}</div>
+                                          <div className={`ui-label mt-1 ${t.textSub}`}>{label}</div>
                                       </div>
                                   ))}
                               </div>
@@ -11774,15 +12041,15 @@ const renderLinesPanel = () => {
                               >
                                   <div className="min-w-0 flex items-center gap-2">
                                       <Ruler className="w-4 h-4 text-blue-500 shrink-0" />
-                                      <span className={`text-[11px] font-black uppercase tracking-wider ${t.textSub}`}>Implement</span>
-                                      <span className={`font-black truncate ${t.textMain}`}>{implementLabel}</span>
+                                      <span className={`ui-label ${t.textSub}`}>Implement</span>
+                                      <span className={`ui-list-title truncate ${t.textMain}`}>{implementLabel}</span>
                                   </div>
                                   <ArrowLeftRight className={`w-4 h-4 shrink-0 ${t.textDim}`} />
                               </button>
                               <div className="p-3 grid grid-cols-[80px_minmax(0,1fr)] gap-3 items-center">
                                   <div className={`h-[84px] rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-blue-500/10' : 'bg-gradient-to-b from-blue-50 to-slate-100'} flex flex-col items-center justify-center text-blue-600`}>
                                       <Tractor className="w-8 h-8" />
-                                      <span className="mt-1.5 text-[8px] font-black uppercase">{implementSettings.type || 'Implement'}</span>
+                                      <span className="ui-badge mt-1.5">{implementSettings.type || 'Implement'}</span>
                                   </div>
                                   <div className="min-w-0">
                                       <div className="grid grid-cols-2 gap-2">
@@ -11791,14 +12058,14 @@ const renderLinesPanel = () => {
                                               ['Skip / overlap', `${Number(implementSettings.overlap || 0).toFixed(3)} m`]
                                           ].map(([label, value]) => (
                                               <div key={label} className="min-w-0">
-                                                  <div className={`mb-1 text-[9px] font-bold truncate ${t.textSub}`}>{label}</div>
+                                                  <div className={`ui-meta mb-1 truncate ${t.textSub}`}>{label}</div>
                                                   <div className={`h-9 rounded-lg border ${t.borderCard} ${mutedPanelBg} px-2 flex items-center`}>
-                                                      <span className={`font-mono text-sm font-black truncate ${t.textMain}`}>{value}</span>
+                                                      <span className={`ui-metric-small font-mono truncate ${t.textMain}`}>{value}</span>
                                                   </div>
                                               </div>
                                           ))}
                                       </div>
-                                      <div className={`mt-2 flex items-center gap-2 text-[9px] font-bold ${t.textSub}`}>
+                                      <div className={`ui-meta mt-2 flex items-center gap-2 ${t.textSub}`}>
                                           <span>{implementSettings.sections || 1} sections</span>
                                           <span className={t.textDim}>/</span>
                                           <span className="truncate">{implementSettings.controlMode || 'Manual control'}</span>
@@ -11809,7 +12076,7 @@ const renderLinesPanel = () => {
                       </section>
                   </div>
 
-                  <div className={`px-5 py-3 border-t ${t.divider} flex flex-wrap items-center justify-between gap-3 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
+                  <div className={`ui-action-bar px-5 py-3 border-t ${t.divider} flex flex-wrap items-center justify-between gap-3 ${theme === 'dark' ? 'bg-slate-950/80' : 'bg-white/80'}`}>
                       <button onClick={handleDeleteField} className="px-4 py-2.5 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold flex items-center gap-2">
                           <Trash2 className="w-4 h-4" />
                           Delete Field
@@ -11836,15 +12103,15 @@ const renderLinesPanel = () => {
       }
 
       return (
-          <div className={`relative w-full h-full flex flex-col ${panelBg}`}>
-              <div className={`flex items-center justify-between gap-4 px-5 py-4 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
+          <div data-manager-screen="fields" className={`relative w-full h-full flex flex-col ${panelBg}`}>
+              <div data-screen-header="fields" className={`h-[88px] min-h-[88px] flex items-center justify-between gap-4 px-5 border-b ${t.divider} ${theme === 'dark' ? 'bg-slate-950/90' : 'bg-white/90'}`}>
                   <div className="min-w-0 flex items-center gap-3">
                       <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${softPanelBg} flex items-center justify-center`}>
                           <FolderOpen className="w-5 h-5 text-blue-500" />
                       </div>
                       <div className="min-w-0">
-                          <h2 className={`text-lg font-black ${t.textMain}`}>Field Library</h2>
-                          <div className={`text-xs ${t.textSub} truncate`}>{fields.length} saved fields / {loadedField ? `${loadedField.name} loaded` : 'No field loaded'}</div>
+                          <h2 className={`ui-screen-title ${t.textMain}`}>Field Library</h2>
+                          <div className={`ui-screen-subtitle ${t.textSub} truncate`}>{fields.length} saved fields / {loadedField ? `${loadedField.name} loaded` : 'No field loaded'}</div>
                       </div>
                   </div>
                   <div className="shrink-0 flex items-center gap-2">
@@ -11860,12 +12127,12 @@ const renderLinesPanel = () => {
               </div>
 
               <div className="flex-1 min-h-0 flex overflow-hidden">
-                      <aside className={`w-[25%] min-w-[228px] max-w-[286px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
+                      <aside className={`w-[232px] min-w-[232px] max-w-[232px] border-r ${t.border} ${panelBg} flex flex-col min-h-0`}>
                           <div className={`shrink-0 px-4 py-3 border-b ${t.divider}`}>
                               <div className="flex items-center justify-between gap-3">
                                   <div className="min-w-0">
-                                      <div className={`text-[9px] font-black uppercase tracking-wider ${t.textSub}`}>Library</div>
-                                      <div className={`text-base font-black ${t.textMain}`}>Fields</div>
+                                      <div className={`ui-eyebrow ${t.textSub}`}>Library</div>
+                                      <div className={`ui-pane-title ${t.textMain}`}>Fields</div>
                                   </div>
                               </div>
                               <div className={`mt-3 h-10 rounded-lg border flex items-center px-2 ${theme === 'dark' ? 'bg-blue-500/10 border-blue-500/20' : 'bg-blue-50 border-blue-200'}`}>
@@ -11875,8 +12142,8 @@ const renderLinesPanel = () => {
                                       ['Lines', fields.reduce((total, f) => total + (f.lines || []).filter(line => !line.archived).length, 0)]
                                   ].map(([label, value], index) => (
                                       <div key={label} className={`min-w-0 flex-1 flex items-center justify-center gap-1.5 ${index > 0 ? `${theme === 'dark' ? 'border-l border-blue-500/20' : 'border-l border-blue-200'}` : ''}`}>
-                                          <span className={`text-sm font-black leading-none ${theme === 'dark' ? 'text-blue-300' : 'text-blue-700'}`}>{value}</span>
-                                          <span className={`text-[8px] font-black uppercase truncate ${theme === 'dark' ? 'text-blue-200/70' : 'text-blue-700/70'}`}>{label}</span>
+                                          <span className={`ui-metric-small ${theme === 'dark' ? 'text-blue-300' : 'text-blue-700'}`}>{value}</span>
+                                          <span className={`ui-badge truncate ${theme === 'dark' ? 'text-blue-200/70' : 'text-blue-700/70'}`}>{label}</span>
                                       </div>
                                   ))}
                               </div>
@@ -11894,35 +12161,35 @@ const renderLinesPanel = () => {
                                           key={f.id}
                                           onClick={() => { setFieldQuickView(null); setFieldAssetTab('lines'); actions.setSelectedFieldId(f.id); actions.setViewMode('LIST'); }}
                                           title={f.name}
-                                          className={`relative w-full text-left p-3 rounded-lg border transition-all ${selected ? `${t.selectedItem} shadow-sm` : `${softPanelBg} ${t.borderCard} hover:brightness-95`}`}
+                                          className={`relative w-full text-left p-2.5 rounded-lg border transition-all ${selected ? `${t.selectedItem} shadow-sm` : `${softPanelBg} ${t.borderCard} hover:brightness-95`}`}
                                       >
                                           {selected && <span className="absolute left-0 top-3 bottom-3 w-1 rounded-r bg-blue-600" />}
-                                          <div className="flex items-start justify-between gap-3">
-                                              <div className="min-w-0 flex items-center gap-3">
-                                                  <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${selected ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textSub}`}`}>
+                                          <div className="flex items-start justify-between gap-2">
+                                              <div className="min-w-0 flex items-center gap-2">
+                                                  <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${selected ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textSub}`}`}>
                                                       <MapIcon className="w-4 h-4" />
                                                   </div>
                                                   <div className="min-w-0">
                                                       <div
-                                                          className={`font-black ${t.textMain} leading-tight`}
+                                                      className={`ui-list-title break-words ${t.textMain}`}
                                                           style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
                                                       >
                                                           {f.name}
                                                       </div>
-                                                      <div className={`mt-0.5 text-xs ${t.textSub}`}>{f.area || '--'} / {f.lastUsed || '--'}</div>
+                                                      <div className={`ui-caption mt-0.5 ${t.textSub}`}>{f.area || '--'} / {f.lastUsed || '--'}</div>
                                                   </div>
                                               </div>
                                               {loaded ? <CheckCircle2 className="shrink-0 w-5 h-5 text-green-500" /> : selected ? <Check className="shrink-0 w-5 h-5 text-blue-500" /> : null}
                                           </div>
-                                          <div className="mt-2.5 flex items-center gap-1.5 min-w-0">
+                                          <div className="mt-2 flex items-center gap-1.5 min-w-0">
                                               {[
                                                   ['B', fieldBoundaries.length],
                                                   ['L', fieldLines.length],
                                                   ['T', fieldTasks.length]
                                               ].map(([label, value]) => (
                                                   <span key={label} className={`min-w-0 flex-1 rounded-md ${mutedPanelBg} border ${t.borderCard} px-1.5 py-1 text-center`}>
-                                                      <span className={`text-xs font-black ${t.textMain}`}>{value}</span>
-                                                      <span className={`ml-1 text-[8px] uppercase font-black ${t.textSub}`}>{label}</span>
+                                                      <span className={`ui-metric-small ${t.textMain}`}>{value}</span>
+                                                      <span className={`ui-badge ml-1 ${t.textSub}`}>{label}</span>
                                                   </span>
                                               ))}
                                           </div>
@@ -11931,8 +12198,8 @@ const renderLinesPanel = () => {
                               })}
                           </div>
                       </aside>
-                      <div className={`flex-1 min-w-0 min-h-0 p-4 lg:p-5 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
-                      <section className={`${softPanelBg} border ${t.borderCard} rounded-xl flex flex-col min-h-0 h-full overflow-hidden`}>
+                      <div className={`flex-1 min-w-0 min-h-0 overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
+                      <section className={`${softPanelBg} flex flex-col min-h-0 h-full overflow-hidden`}>
                           {rightContent}
                       </section>
                       </div>
@@ -11943,10 +12210,21 @@ const renderLinesPanel = () => {
   };
 
   return (
-    <div className="w-full h-screen bg-neutral-900 flex items-center justify-center p-4 overflow-hidden">
-        <div className={`relative ${t.deviceFrame} shadow-2xl flex border-[12px] rounded-2xl ring-4 ring-black/50 transition-colors duration-500`} style={{ width: '100%', maxWidth: '1280px', height: 'min(800px, calc(100vh - 32px))', maxHeight: '100%', overflow: 'clip' }}>
+    <div className="w-full h-screen bg-neutral-900 flex items-center justify-center overflow-hidden">
+        <div
+            data-device-screen
+            data-target-resolution="1280x800"
+            data-target-orientation="landscape"
+            className={`pilot-ui relative ${t.deviceFrame} shadow-2xl flex transition-colors duration-500`}
+            style={{
+                width: 'min(100vw, calc(100vh * 1.6), 1280px)',
+                aspectRatio: '16 / 10',
+                maxHeight: '800px',
+                overflow: 'clip'
+            }}
+        >
             {/* LEFT RAIL */}
-            <aside className={`w-[8.5%] min-w-[82px] flex-shrink-0 ${t.bgPanel} border-r ${t.border} flex flex-col items-center overflow-hidden z-30 shadow-2xl`}>
+            <aside data-primary-rail className={`w-[92px] min-w-[92px] max-w-[92px] flex-shrink-0 ${t.bgPanel} border-r ${t.border} flex flex-col items-center overflow-hidden z-30 shadow-2xl`}>
                 <div className="relative h-[88px] w-full flex flex-shrink-0 items-center justify-center">
                     <div className="flex h-11 w-11 xl:h-12 xl:w-12 items-center justify-center">
                         <div
@@ -11967,7 +12245,7 @@ const renderLinesPanel = () => {
                     </div>
                     <div className={`absolute bottom-0 left-1/2 h-px w-1/2 -translate-x-1/2 ${t.divider}`} />
                 </div>
-                <nav className="flex-1 min-h-0 w-full flex flex-col items-center gap-1.5 overflow-y-auto overflow-x-hidden pt-2 [scrollbar-width:none]">
+                <nav className="flex-1 min-h-0 w-full flex flex-col items-center gap-1 overflow-y-auto overflow-x-hidden pt-2 [scrollbar-width:none]">
                     <RailButton theme={t} icon={MapIcon} label="Run" active={!settingsOpen && !fieldManagerOpen && !linesPanelOpen} onClick={openRunScreen} />
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
                     <RailButton theme={t} icon={LayoutGrid} label="Field" active={fieldManagerOpen && fieldAssetTab === 'lines'} onClick={() => openFieldAssetPanel('lines')} />
@@ -12003,7 +12281,7 @@ const renderLinesPanel = () => {
                     <button
                         type="button"
                         onClick={openWifiPanel}
-                        className={`group relative flex w-full flex-col items-center gap-1 rounded-lg py-[10%] text-center transition-all duration-150 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 ${
+                        className={`group relative flex h-14 min-h-14 w-full flex-col items-center justify-center gap-1 rounded-lg text-center transition-all duration-150 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 ${
                             settingsOpen && settingsTab === 'wifi'
                                 ? 'bg-blue-600 text-white shadow-md shadow-blue-900/20'
                                 : wifiConnectionAttempt.status === 'connecting'
@@ -12056,7 +12334,7 @@ const renderLinesPanel = () => {
                         role="status"
                         title="Local time"
                         aria-label={`Local time ${currentTime}`}
-                        className={`flex w-full flex-col items-center gap-1 rounded-lg py-[10%] ${t.textDim}`}
+                        className={`flex h-14 min-h-14 w-full flex-col items-center justify-center gap-1 rounded-lg ${t.textDim}`}
                     >
                         <Clock className="h-5 w-5 lg:h-6 lg:w-6" aria-hidden="true" />
                         <time
@@ -12331,7 +12609,7 @@ const renderLinesPanel = () => {
                 </div>
 
                 {/* ... rest of the app ... */}
-                <header data-top-bar className={`relative h-[88px] min-h-[88px] ${t.bgHeader} backdrop-blur-md flex items-center justify-between gap-3 px-3 xl:px-[3%] z-20 border-b ${t.border}`}>
+                <header data-top-bar data-screen-header="run" className={`relative h-[88px] min-h-[88px] ${t.bgHeader} backdrop-blur-md flex items-center justify-between gap-3 px-3 xl:px-[3%] z-20 border-b ${t.border}`}>
                     <div className="relative z-20 min-w-0 max-w-[34%] flex items-center gap-3">
                         <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-100'} flex items-center justify-center`}>
                             <MapIcon className="w-5 h-5 text-blue-500" />

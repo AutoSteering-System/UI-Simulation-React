@@ -29,6 +29,62 @@
       .animate-spin-slow {
         animation: spin-slow 2.4s linear infinite;
       }
+
+      /* Pilot HMI typography: one hierarchy for every setup/manager screen. */
+      .pilot-ui {
+        font-family: "Segoe UI Variable Text", "Noto Sans", "Segoe UI", Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+      :where([data-manager-screen], [data-settings-shell]) .font-black { font-weight: 700 !important; }
+      :where([data-manager-screen], [data-settings-shell]) .font-bold { font-weight: 600 !important; }
+      :where([data-manager-screen], [data-settings-shell]) .text-\[8px\] { font-size: 10px !important; line-height: 12px !important; }
+      :where([data-manager-screen], [data-settings-shell]) .text-\[9px\] { font-size: 10px !important; line-height: 14px !important; }
+
+      .ui-screen-title {
+        font-family: "Segoe UI Variable Display", "Noto Sans", "Segoe UI", Arial, sans-serif;
+        font-size: 20px !important;
+        line-height: 26px !important;
+        font-weight: 760 !important;
+        letter-spacing: -0.02em !important;
+      }
+      .ui-screen-subtitle { font-size: 12px !important; line-height: 16px !important; font-weight: 500 !important; }
+      .ui-hero-title {
+        font-family: "Segoe UI Variable Display", "Noto Sans", "Segoe UI", Arial, sans-serif;
+        font-size: 22px !important;
+        line-height: 28px !important;
+        font-weight: 760 !important;
+        letter-spacing: -0.02em !important;
+      }
+      .ui-detail-title { font-size: 18px !important; line-height: 24px !important; font-weight: 740 !important; letter-spacing: -0.015em !important; }
+      .ui-pane-title, .ui-section-title { font-size: 16px !important; line-height: 22px !important; font-weight: 700 !important; letter-spacing: -0.01em !important; }
+      .ui-card-title { font-size: 16px !important; line-height: 22px !important; font-weight: 700 !important; }
+      .ui-control-title { font-size: 14px !important; line-height: 20px !important; font-weight: 600 !important; }
+      .ui-list-title { font-size: 14px !important; line-height: 20px !important; font-weight: 650 !important; }
+      .ui-body { font-size: 14px !important; line-height: 20px !important; font-weight: 500 !important; }
+      .ui-caption { font-size: 12px !important; line-height: 16px !important; font-weight: 500 !important; }
+      .ui-meta { font-size: 11px !important; line-height: 14px !important; font-weight: 500 !important; }
+      .ui-eyebrow, .ui-label {
+        font-size: 11px !important;
+        line-height: 14px !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.08em !important;
+        text-transform: uppercase;
+      }
+      .ui-badge {
+        font-size: 10px !important;
+        line-height: 12px !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.04em !important;
+        text-transform: uppercase;
+      }
+      .ui-action { font-size: 14px !important; line-height: 20px !important; font-weight: 700 !important; }
+      .ui-compact-action { font-size: 12px !important; line-height: 16px !important; font-weight: 650 !important; }
+      .ui-nav-label { font-size: 11px !important; line-height: 14px !important; font-weight: 650 !important; }
+      .ui-metric { font-size: 18px !important; line-height: 22px !important; font-weight: 740 !important; font-variant-numeric: tabular-nums; }
+      .ui-metric-large { font-size: 30px !important; line-height: 32px !important; font-weight: 760 !important; letter-spacing: -0.025em !important; font-variant-numeric: tabular-nums; }
+      .ui-metric-small { font-size: 13px !important; line-height: 18px !important; font-weight: 650 !important; font-variant-numeric: tabular-nums; }
+      .ui-action-bar button { font-size: 14px !important; line-height: 20px !important; font-weight: 700 !important; }
     </style>
   </head>
   <body class="bg-white">
@@ -40,8 +96,8 @@
     <script type="text/babel" src="src/backend/mockBackend.jsx"></script>
     <script type="text/babel" src="src/components/SteeringWheelIcon.jsx"></script>
     <script type="text/babel" src="src/components/TractorVehicle.jsx"></script>
-    <script type="text/babel" src="src/components/ui.jsx?v=20260730-railclock1"></script>
-    <script type="text/babel" src="src/app.jsx?v=20260731-action-dock1"></script>
+    <script type="text/babel" src="src/components/ui.jsx?v=20260801-action-dock2"></script>
+    <script type="text/babel" src="src/app.jsx?v=20260801-action-dock2"></script>
     <script type="text/babel" src="src/bootstrap.jsx"></script>
 
   </body>
