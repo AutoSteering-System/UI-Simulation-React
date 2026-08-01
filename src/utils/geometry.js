@@ -115,9 +115,10 @@ const pointToSegmentDistance = (px, py, x1, y1, x2, y2) => {
 
 // NEW: Advanced Curve Offset Algorithm (Vertex Normals)
 // Ensures curves are parallel and smooth, not deformed
-const getOffsetPolyline = (points, offset) => {
-    if (offset === 0) return points.map(p => `${p.x},${p.y}`).join(' ');
-    if (points.length < 2) return "";
+const getOffsetPolylinePoints = (points, offset) => {
+    if (!Array.isArray(points)) return [];
+    if (offset === 0) return points.map(point => ({ ...point }));
+    if (points.length < 2) return [];
 
     const newPoints = [];
     
@@ -178,5 +179,121 @@ const getOffsetPolyline = (points, offset) => {
         y: points[lastIdx].y + segmentNormals[lastNormIdx].y * offset
     });
 
-    return newPoints.map(p => `${p.x},${p.y}`).join(' ');
+    return newPoints;
+};
+
+const getOffsetPolyline = (points, offset) => {
+    return getOffsetPolylinePoints(points, offset)
+        .map(point => `${point.x},${point.y}`)
+        .join(' ');
+};
+
+// Signed screen-space polygon area. With the map's Y-down coordinate system,
+// a visually clockwise exterior ring has a positive area.
+const getPolygonSignedArea = (points) => {
+    if (!Array.isArray(points) || points.length < 3) return 0;
+    let twiceArea = 0;
+    for (let index = 0; index < points.length; index += 1) {
+        const current = points[index];
+        const next = points[(index + 1) % points.length];
+        twiceArea += current.x * next.y - next.x * current.y;
+    }
+    return twiceArea / 2;
+};
+
+const getInfiniteLineIntersection = (a1, a2, b1, b2) => {
+    const ax = a2.x - a1.x;
+    const ay = a2.y - a1.y;
+    const bx = b2.x - b1.x;
+    const by = b2.y - b1.y;
+    const denominator = ax * by - ay * bx;
+    if (Math.abs(denominator) < 1e-7) return null;
+    const qx = b1.x - a1.x;
+    const qy = b1.y - a1.y;
+    const ratio = (qx * by - qy * bx) / denominator;
+    return { x: a1.x + ax * ratio, y: a1.y + ay * ratio };
+};
+
+const polygonHasSelfIntersection = (points) => {
+    if (!Array.isArray(points) || points.length < 4) return false;
+    for (let first = 0; first < points.length; first += 1) {
+        const firstNext = (first + 1) % points.length;
+        for (let second = first + 1; second < points.length; second += 1) {
+            const secondNext = (second + 1) % points.length;
+            if (first === second || firstNext === second || secondNext === first) continue;
+            if (first === 0 && secondNext === 0) continue;
+            if (getLineIntersection(points[first], points[firstNext], points[second], points[secondNext])) return true;
+        }
+    }
+    return false;
+};
+
+// Constant-distance buffer for a simple closed boundary. Positive values move
+// outward and negative values move inward. Invalid/collapsed buffers return an
+// empty array so callers can block Apply instead of saving broken geometry.
+const getOffsetPolygonPoints = (points, outwardOffset) => {
+    if (!Array.isArray(points)) return [];
+    const clean = [];
+    points.forEach((point) => {
+        if (!Number.isFinite(Number(point?.x)) || !Number.isFinite(Number(point?.y))) return;
+        const next = { x: Number(point.x), y: Number(point.y) };
+        const previous = clean[clean.length - 1];
+        if (!previous || Math.hypot(next.x - previous.x, next.y - previous.y) > 1e-5) clean.push(next);
+    });
+    if (clean.length > 2 && Math.hypot(clean[0].x - clean[clean.length - 1].x, clean[0].y - clean[clean.length - 1].y) <= 1e-5) clean.pop();
+    if (clean.length < 3) return [];
+
+    const sourceArea = getPolygonSignedArea(clean);
+    const distance = Number(outwardOffset);
+    if (!Number.isFinite(distance) || Math.abs(sourceArea) < 1e-5) return [];
+    if (Math.abs(distance) < 1e-7) return clean.map(point => ({ ...point }));
+
+    const outwardFactor = sourceArea > 0 ? -1 : 1;
+    const offsetEdges = [];
+    for (let index = 0; index < clean.length; index += 1) {
+        const start = clean[index];
+        const end = clean[(index + 1) % clean.length];
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const length = Math.hypot(dx, dy);
+        if (length < 1e-6) return [];
+        const normal = {
+            x: (-dy / length) * outwardFactor,
+            y: (dx / length) * outwardFactor
+        };
+        offsetEdges.push({
+            normal,
+            start: { x: start.x + normal.x * distance, y: start.y + normal.y * distance },
+            end: { x: end.x + normal.x * distance, y: end.y + normal.y * distance }
+        });
+    }
+
+    const buffered = clean.map((vertex, index) => {
+        const previous = offsetEdges[(index - 1 + offsetEdges.length) % offsetEdges.length];
+        const next = offsetEdges[index];
+        const intersection = getInfiniteLineIntersection(previous.start, previous.end, next.start, next.end);
+        const maxMiter = Math.max(Math.abs(distance) * 8, Math.abs(distance) + 2);
+        if (intersection && Math.hypot(intersection.x - vertex.x, intersection.y - vertex.y) <= maxMiter) return intersection;
+        const normalX = previous.normal.x + next.normal.x;
+        const normalY = previous.normal.y + next.normal.y;
+        const normalLength = Math.hypot(normalX, normalY) || 1;
+        return {
+            x: vertex.x + normalX / normalLength * distance,
+            y: vertex.y + normalY / normalLength * distance
+        };
+    });
+
+    const bufferedArea = getPolygonSignedArea(buffered);
+    if (Math.abs(bufferedArea) < 1e-5 || Math.sign(bufferedArea) !== Math.sign(sourceArea)) return [];
+    for (let index = 0; index < clean.length; index += 1) {
+        const sourceStart = clean[index];
+        const sourceEnd = clean[(index + 1) % clean.length];
+        const bufferedStart = buffered[index];
+        const bufferedEnd = buffered[(index + 1) % buffered.length];
+        const directionDot = (sourceEnd.x - sourceStart.x) * (bufferedEnd.x - bufferedStart.x)
+            + (sourceEnd.y - sourceStart.y) * (bufferedEnd.y - bufferedStart.y);
+        if (directionDot <= 1e-7) return [];
+    }
+    if (polygonHasSelfIntersection(buffered)) return [];
+    return buffered;
 };

@@ -1,10 +1,45 @@
-const { useState, useEffect, useRef } = React;
+const { useState, useEffect, useRef, useMemo } = React;
 
 const MAP_ZOOM_REFERENCE = 0.6;
 const DEFAULT_MAP_ZOOM = 1.2;
 const MIN_MAP_ZOOM = 0.6;
 const MAX_MAP_ZOOM = 2.4;
 const MAP_ZOOM_STEP = 0.2;
+
+const toOptionalRtkMetric = (value) => {
+    if (value === null || value === undefined || value === '') return null;
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? number : null;
+};
+
+const formatOptionalRtkMetric = (value, digits = 1, suffix = '') => {
+    const number = toOptionalRtkMetric(value);
+    return number === null ? '--' : `${number.toFixed(digits)}${suffix}`;
+};
+
+const evaluateRtkSafety = ({ solution, ageSec, hdop, accuracyCm }) => {
+    const normalizedSolution = String(solution || 'NONE').toUpperCase();
+    const normalizedAge = toOptionalRtkMetric(ageSec);
+    const normalizedHdop = toOptionalRtkMetric(hdop);
+    const normalizedAccuracy = toOptionalRtkMetric(accuracyCm);
+    const metricsKnown = normalizedAge !== null && normalizedHdop !== null && normalizedAccuracy !== null;
+    const stale = normalizedAge === null || normalizedAge > 5;
+    const guidanceGrade = normalizedSolution === 'FIX'
+        && metricsKnown
+        && normalizedAge <= 2
+        && normalizedHdop <= 1.2
+        && normalizedAccuracy <= 5;
+    return {
+        solution: normalizedSolution,
+        ageSec: normalizedAge,
+        hdop: normalizedHdop,
+        accuracyCm: normalizedAccuracy,
+        metricsKnown,
+        stale,
+        guidanceGrade,
+        correctionLinkOk: normalizedSolution !== 'NONE' && normalizedAge !== null && normalizedAge <= 5
+    };
+};
 
 const DEFAULT_FEATURE_SETTINGS = {
     terrainCompensation: true,
@@ -113,6 +148,13 @@ const App = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [rtkStatus, setRtkStatus] = useState('FIX');
   const [crossTrackError, setCrossTrackError] = useState(0.0);
+  const rtkSafetyState = evaluateRtkSafety({
+      solution: rtkStatus,
+      ageSec: rtkTelemetry?.ageSec,
+      hdop: rtkTelemetry?.hdop,
+      accuracyCm: gnssTelemetry?.horizontalAccuracyCm
+  });
+  const rtkGuidanceReady = rtkSafetyState.guidanceGrade;
 
   // ACTION DOCK STATE
   const [isCreating, setIsCreating] = useState(false);
@@ -168,6 +210,10 @@ const App = () => {
   const [dockQuickPicker, setDockQuickPicker] = useState(null);
   const [dockShiftDirection, setDockShiftDirection] = useState('right');
   const [dockShiftDistanceM, setDockShiftDistanceM] = useState('0.10');
+  const [boundaryShiftMode, setBoundaryShiftMode] = useState('MOVE');
+  const [boundaryShiftDirection, setBoundaryShiftDirection] = useState('north');
+  const [boundaryShiftDistanceM, setBoundaryShiftDistanceM] = useState('0.50');
+  const [boundaryRunOverride, setBoundaryRunOverride] = useState(null);
   const [showArchivedLines, setShowArchivedLines] = useState(false);
   const [lineCatalogFilter, setLineCatalogFilter] = useState('ALL');
   const [selectedCatalogLineId, setSelectedCatalogLineId] = useState(null);
@@ -252,6 +298,12 @@ const App = () => {
   const [eventHistoryOpen, setEventHistoryOpen] = useState(false);
   const [productivityOpen, setProductivityOpen] = useState(false);
   const [uTurnPanelOpen, setUTurnPanelOpen] = useState(false);
+  const [uTurnPanelTab, setUTurnPanelTab] = useState('TURN');
+  const [uTurnPreview, setUTurnPreview] = useState(null);
+  const [uTurnStage, setUTurnStage] = useState('IDLE');
+  const [autoUTurnArmed, setAutoUTurnArmed] = useState(false);
+  const [implementRaised, setImplementRaised] = useState(false);
+  const [turnGearRequest, setTurnGearRequest] = useState(null);
 
   useEffect(() => {
       if (!settingsOpen || settingsTab !== 'calibration') {
@@ -304,11 +356,15 @@ const App = () => {
   });
   const mapVisualHeadingRef = useRef(0);
   const turnAssistRef = useRef(null);
+  const cancelTurnAssistRef = useRef(null);
+  const autoLaneStepRef = useRef(null);
+  const autoArmSafetySignatureRef = useRef(null);
+  const autoApproachPreviousSpeedRef = useRef(null);
   const rtkLossHandledRef = useRef(false);
   const [turnAssistActive, setTurnAssistActive] = useState(false);
   const [currentTime, setCurrentTime] = useState('');
   const setupOverlayOpen = menuOpen || settingsOpen || cameraPanelOpen || diagnosticsPanelOpen || linesPanelOpen || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || manualHeadingModalOpen || boundaryAlertOpen || deleteModalOpen || (fieldManagerOpen && !isRecordingBoundary);
-  const runDockSuppressed = setupOverlayOpen || rtkQualityOpen || eventHistoryOpen || productivityOpen || uTurnPanelOpen;
+  const runDockSuppressed = setupOverlayOpen || rtkQualityOpen || eventHistoryOpen || productivityOpen || uTurnPanelOpen || turnAssistActive;
 
   useEffect(() => {
       const mapCanvas = mapCanvasRef.current;
@@ -346,26 +402,41 @@ const App = () => {
       width: 0,
       manualOffset: 0
   });
+  const effectiveCurveMetricPoints = useMemo(() => {
+      if (!Array.isArray(curvePoints) || curvePoints.length < 2) return curvePoints;
+      return Math.abs(effectiveGuidanceOffset) >= 0.001
+          ? getOffsetPolylinePoints(curvePoints, effectiveGuidanceOffset)
+          : curvePoints;
+  }, [curvePoints, effectiveGuidanceOffset]);
 
   // Sync guidanceRef with state
   useEffect(() => {
     // Find active line object to get its specific properties
     const activeField = fields.find(f => f.id === selectedFieldId);
+    const activeLine = activeLineId
+        ? (activeField?.lines || []).find(line => line.id === activeLineId)
+        : null;
+    const defaultTrackSpacingM = Math.max(
+        0.1,
+        (Number(implementSettings.width) || DEFAULT_IMPLEMENT_WIDTH) - (Number(implementSettings.overlap) || 0)
+    );
+    const trackSpacingM = Math.max(0.1, Number(activeLine?.trackSpacingM) || defaultTrackSpacingM);
 
     guidanceRef.current = {
         type: guidanceLine,
         isMulti: isMultiLineMode,
-        width: implementSettings.width * PIXELS_PER_METER,
+        width: trackSpacingM * PIXELS_PER_METER,
         manualOffset: effectiveGuidanceOffset,
         points: {
             a: pointA,
             b: pointB,
             aplus: { point: aPlusPoint, heading: aPlusHeading },
             curve: curvePoints,
+            metricCurve: effectiveCurveMetricPoints,
             pivot: { center: pivotCenter, radius: pivotRadius }
         }
     };
-  }, [guidanceLine, pointA, pointB, aPlusPoint, aPlusHeading, curvePoints, pivotCenter, pivotRadius, activeLineId, fields, selectedFieldId, isMultiLineMode, implementSettings.width, effectiveGuidanceOffset]);
+  }, [guidanceLine, pointA, pointB, aPlusPoint, aPlusHeading, curvePoints, effectiveCurveMetricPoints, pivotCenter, pivotRadius, activeLineId, fields, selectedFieldId, isMultiLineMode, implementSettings.width, implementSettings.overlap, effectiveGuidanceOffset]);
 
   useEffect(() => {
       manualLaneRef.current = null;
@@ -500,27 +571,31 @@ const App = () => {
           const cy = guide.points.pivot.center.y;
           const baseR = guide.points.pivot.radius;
           const dist = Math.hypot(p.x - cx, p.y - cy);
-          const angleToCenter = Math.atan2(p.y - cy, p.x - cx);
-          const vehicleAngle = (p.heading || 0) * Math.PI / 180;
-          const tan1 = angleToCenter + Math.PI / 2;
-          const tan2 = angleToCenter - Math.PI / 2;
-          const normAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-          const diff1 = Math.abs(normAngle(tan1 - vehicleAngle));
-          const diff2 = Math.abs(normAngle(tan2 - vehicleAngle));
+          if (dist <= 0.001) return { validLine: false, xte: 0, lineHeading: 0 };
+          const radialX = (p.x - cx) / dist;
+          const radialY = (p.y - cy) / dist;
+          const tangentX = radialY;
+          const tangentY = -radialX;
           return {
               validLine: true,
               xte: dist - baseR,
-              lineHeading: (diff1 < diff2 ? tan1 : tan2) * 180 / Math.PI
+              lineHeading: Math.atan2(tangentX, -tangentY) * 180 / Math.PI
           };
       }
 
       if ((guide.type === 'CURVE' || guide.type === 'COMBINATION') && guide.points.curve && guide.points.curve.length > 1) {
+          const offset = Number(guide.manualOffset) || 0;
+          const metricPoints = Array.isArray(guide.points.metricCurve) && guide.points.metricCurve.length > 1
+              ? guide.points.metricCurve
+              : Math.abs(offset) >= 0.001
+                  ? getOffsetPolylinePoints(guide.points.curve, offset)
+                  : guide.points.curve;
           let minDist = Infinity;
           let bestSeg = null;
 
-          for (let i = 0; i < guide.points.curve.length - 1; i++) {
-              const p1 = guide.points.curve[i];
-              const p2 = guide.points.curve[i + 1];
+          for (let i = 0; i < metricPoints.length - 1; i++) {
+              const p1 = metricPoints[i];
+              const p2 = metricPoints[i + 1];
               const len = Math.hypot(p2.x - p1.x, p2.y - p1.y);
               if (len <= 0.001) continue;
               const info = pointToSegmentDistance(p.x, p.y, p1.x, p1.y, p2.x, p2.y);
@@ -535,7 +610,10 @@ const App = () => {
           const dy = bestSeg.p2.y - bestSeg.p1.y;
           return {
               validLine: true,
-              xte: bestSeg.cross / bestSeg.len,
+              // The controller subtracts manualOffset downstream. Adding it back
+              // here preserves that contract while measuring against the exact
+              // mitered path rendered on screen.
+              xte: (bestSeg.cross / bestSeg.len) + offset,
               lineHeading: Math.atan2(dx, -dy) * 180 / Math.PI
           };
       }
@@ -611,24 +689,76 @@ const App = () => {
       return crossTrackError < 0 ? 'LEFT' : 'RIGHT';
   };
 
-  const getLineLengthMeters = (line) => {
-      if (Number.isFinite(line?.length)) return line.length;
-
+  const getLineDisplayPoints = (line, { span = 280, pivotSamples = 48 } = {}) => {
       const points = line?.points || {};
-      if (points.a && points.b) {
-          return Math.hypot(points.b.x - points.a.x, points.b.y - points.a.y) / PIXELS_PER_METER;
+      const offset = (Number(line?.translationOffsetM) || 0) * PIXELS_PER_METER;
+      const type = line?.type || (points.pivot?.center ? 'PIVOT' : points.curve?.length ? 'CURVE' : points.aplus?.point ? 'A_PLUS' : 'STRAIGHT_AB');
+
+      if (type === 'PIVOT' && points.pivot?.center && Number(points.pivot?.radius) > 0) {
+          const radius = Number(points.pivot.radius) + offset;
+          if (radius <= 0) return [];
+          return Array.from({ length: pivotSamples + 1 }, (_, index) => {
+              const angle = index / pivotSamples * Math.PI * 2;
+              return {
+                  x: points.pivot.center.x + Math.cos(angle) * radius,
+                  y: points.pivot.center.y + Math.sin(angle) * radius
+              };
+          });
       }
 
-      const curve = points.curve || [];
-      if (curve.length > 1) {
+      if ((type === 'CURVE' || type === 'COMBINATION') && Array.isArray(points.curve) && points.curve.length > 1) {
+          return getOffsetPolylinePoints(points.curve, offset);
+      }
+
+      if (type === 'A_PLUS' && points.aplus?.point && Number.isFinite(Number(points.aplus?.heading))) {
+          const headingRadians = Number(points.aplus.heading) * Math.PI / 180;
+          const unit = { x: Math.sin(headingRadians), y: -Math.cos(headingRadians) };
+          const normal = { x: -unit.y, y: unit.x };
+          const origin = {
+              x: points.aplus.point.x + normal.x * offset,
+              y: points.aplus.point.y + normal.y * offset
+          };
+          return [
+              { x: origin.x - unit.x * span, y: origin.y - unit.y * span },
+              { x: origin.x + unit.x * span, y: origin.y + unit.y * span }
+          ];
+      }
+
+      if (points.a && points.b) return getOffsetPolylinePoints([points.a, points.b], offset);
+      return [];
+  };
+
+  const getLineSemanticMarkerPoints = (line, pathPoints = getLineDisplayPoints(line)) => {
+      if (!Array.isArray(pathPoints) || pathPoints.length === 0) return [];
+      if (line?.type === 'PIVOT' && line?.points?.pivot?.center) return [line.points.pivot.center];
+      if (line?.type === 'A_PLUS') {
+          const first = pathPoints[0];
+          const last = pathPoints[pathPoints.length - 1];
+          return [{ x: (first.x + last.x) / 2, y: (first.y + last.y) / 2 }];
+      }
+      if (pathPoints.length === 1) return [pathPoints[0]];
+      return [pathPoints[0], pathPoints[pathPoints.length - 1]];
+  };
+
+  const getLineLengthMeters = (line) => {
+      const offsetMeters = Number(line?.translationOffsetM) || 0;
+      if (Number.isFinite(line?.length) && Math.abs(offsetMeters) < 0.001) return line.length;
+
+      const points = line?.points || {};
+      if (line?.type === 'PIVOT' && points.pivot?.radius) {
+          const effectiveRadius = points.pivot.radius + offsetMeters * PIXELS_PER_METER;
+          return effectiveRadius > 0 ? (2 * Math.PI * effectiveRadius) / PIXELS_PER_METER : null;
+      }
+      if (line?.type === 'A_PLUS' || points.aplus?.point) return null;
+
+      const displayPoints = getLineDisplayPoints(line);
+      if (displayPoints.length > 1) {
           let total = 0;
-          for (let i = 0; i < curve.length - 1; i++) {
-              total += Math.hypot(curve[i + 1].x - curve[i].x, curve[i + 1].y - curve[i].y);
+          for (let i = 0; i < displayPoints.length - 1; i++) {
+              total += Math.hypot(displayPoints[i + 1].x - displayPoints[i].x, displayPoints[i + 1].y - displayPoints[i].y);
           }
           return total / PIXELS_PER_METER;
       }
-
-      if (points.pivot?.radius) return (2 * Math.PI * points.pivot.radius) / PIXELS_PER_METER;
       return null;
   };
 
@@ -726,12 +856,28 @@ const App = () => {
     const handleKeyDown = (e) => {
         const focusedControl = e.target?.closest?.('input, textarea, select, [contenteditable="true"]');
         const dockButtonActivation = e.target?.closest?.('[data-run-dock] button') && (e.key === ' ' || e.key === 'Enter');
+        if (e.key === 'Escape' && rtkQualityOpen) {
+            e.preventDefault();
+            setRtkQualityOpen(false);
+            return;
+        }
         if (focusedControl || dockButtonActivation) return;
         if (menuOpen || settingsOpen || cameraPanelOpen || diagnosticsPanelOpen || (fieldManagerOpen && !isRecordingBoundary) || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || linesPanelOpen || manualHeadingModalOpen || boundaryAlertOpen || deleteModalOpen) return;
         if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].indexOf(e.key) > -1) e.preventDefault();
         if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-            turnAssistRef.current = null;
-            setTurnAssistActive(false);
+            const wasAutoControlled = steeringMode === 'AUTO' || Boolean(turnAssistRef.current);
+            cancelTurnAssistRef.current?.({ resumePreviousMode: false });
+            if (wasAutoControlled) {
+                setSteeringMode('MANUAL');
+                actions.setRunStatus(prev => ({
+                    ...(prev || {}),
+                    steeringState: 'PAUSED',
+                    steeringReason: 'Operator manual steering override',
+                    overrideDetected: true,
+                    engageAllowed: true,
+                    recoveryAction: 'Re-engage when aligned'
+                }));
+            }
         }
         keysPressed.current[e.key] = true;
     };
@@ -739,7 +885,7 @@ const App = () => {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
-  }, [menuOpen, settingsOpen, cameraPanelOpen, diagnosticsPanelOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen]);
+  }, [menuOpen, settingsOpen, cameraPanelOpen, diagnosticsPanelOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen, steeringMode, rtkQualityOpen]);
 
   // --- 3. PHYSICS ---
   useEffect(() => {
@@ -760,8 +906,182 @@ const App = () => {
         if (keysPressed.current['ArrowUp']) p.targetSpeed = Math.min(p.targetSpeed + 10 * dt, 15);
         else if (keysPressed.current['ArrowDown']) p.targetSpeed = Math.max(p.targetSpeed - 15 * dt, -5);
 
+        // A planned turn has priority over ordinary guidance. The controller
+        // follows the same immutable world path that is drawn on the map.
+        const activeTurnAssist = turnAssistRef.current;
+        if (activeTurnAssist?.points?.length > 1 && window.TurnGeometry) {
+             const abortCurrentTurn = (reason) => {
+                 cancelTurnAssistRef.current?.();
+                 p.speed = 0;
+                 p.targetSpeed = 0;
+                 p.steeringAngle = 0;
+                 setManualTargetSpeed(0);
+                 setSteeringMode('MANUAL');
+                 setAutoUTurnArmed(false);
+                 setIsRecording(false);
+                 showNotification(reason, 'warning');
+             };
+             if (!activeTurnAssist.awaitingGear) activeTurnAssist.driveElapsedSeconds = (activeTurnAssist.driveElapsedSeconds || 0) + dt;
+             if (!rtkGuidanceReady || activeTurnAssist.driveElapsedSeconds > activeTurnAssist.maxDriveSeconds) {
+                 abortCurrentTurn(!rtkGuidanceReady ? 'U-turn aborted / RTK quality lost' : 'U-turn aborted / path timeout');
+                 setSpeed(p.speed);
+                 setSteeringAngle(p.steeringAngle);
+                 setWorldPos({ x: p.x, y: p.y });
+                 animationFrameId = requestAnimationFrame(loop);
+                 return;
+             }
+             // Search only inside the active forward/reverse leg. Fish-tail arcs
+             // sit close together around both cusps; searching the whole path can
+             // snap to a future arc and make the controller chase the route in the
+             // wrong direction after a gear change.
+             const turnSegments = activeTurnAssist.gearLegs || activeTurnAssist.segments || [];
+             const segmentCursor = Math.min(
+                 Math.max(0, Number(activeTurnAssist.segmentCursor) || 0),
+                 Math.max(0, turnSegments.length - 1)
+             );
+             const activeSegment = turnSegments[segmentCursor] || { gear: 'FORWARD', endIndex: activeTurnAssist.points.length - 1 };
+             const nextSegment = turnSegments[segmentCursor + 1];
+             const legStartIndex = Math.max(0, Number(activeSegment.startIndex) || 0);
+             const legEndIndex = Math.min(
+                 activeTurnAssist.points.length - 1,
+                 Math.max(legStartIndex + 1, Number(activeSegment.endIndex) || activeTurnAssist.points.length - 1)
+             );
+             const legPoints = activeTurnAssist.points.slice(legStartIndex, legEndIndex + 1);
+             const localProgressStart = Math.max(0, (activeTurnAssist.progressIndex || legStartIndex) - legStartIndex);
+             const progress = window.TurnGeometry.nearestPathProgress(
+                 legPoints,
+                 { x: p.x, y: p.y },
+                 localProgressStart
+             );
+             const globalProgressIndex = legStartIndex + (progress?.index || 0);
+             activeTurnAssist.progressIndex = Math.max(
+                 Math.min(legEndIndex, activeTurnAssist.progressIndex || legStartIndex),
+                 globalProgressIndex
+             );
+             const hasTurnBoundary = activeTurnAssist.boundaryPoints?.length >= 3;
+             const vehicleInsideBoundary = !hasTurnBoundary
+                 || window.TurnGeometry.isPointInPolygon({ x: p.x, y: p.y }, activeTurnAssist.boundaryPoints);
+             const outsideBoundary = hasTurnBoundary
+                 && activeTurnAssist.driveElapsedSeconds > 1
+                 && !vehicleInsideBoundary;
+             const completedLegDistancePx = turnSegments.slice(0, segmentCursor)
+                 .reduce((sum, segment) => sum + (Number(segment.lengthPx) || 0), 0);
+             const travelledTurnDistancePx = completedLegDistancePx + (Number(progress?.distanceAlongPx) || 0);
+             const requiredEnvelopeClearancePx = Math.min(
+                 Number(activeTurnAssist.safetyMarginPx) || 0,
+                 travelledTurnDistancePx
+             );
+             const boundaryEnvelopeUnsafe = hasTurnBoundary
+                 && vehicleInsideBoundary
+                 && requiredEnvelopeClearancePx > 0
+                 && window.TurnGeometry.distanceToPolygonEdge({ x: p.x, y: p.y }, activeTurnAssist.boundaryPoints) + 1e-6 < requiredEnvelopeClearancePx;
+             if ((progress?.distancePx || 0) > 3 * PIXELS_PER_METER || outsideBoundary || boundaryEnvelopeUnsafe) {
+                 abortCurrentTurn(
+                     outsideBoundary
+                         ? 'U-turn aborted / boundary crossed'
+                         : boundaryEnvelopeUnsafe
+                             ? 'U-turn aborted / implement clearance lost'
+                             : 'U-turn aborted / path deviation'
+                 );
+                 setSpeed(p.speed);
+                 setSteeringAngle(p.steeringAngle);
+                 setWorldPos({ x: p.x, y: p.y });
+                 animationFrameId = requestAnimationFrame(loop);
+                 return;
+             }
+             if (!activeTurnAssist.awaitingGear
+                 && nextSegment
+                 && activeTurnAssist.progressIndex >= activeSegment.endIndex - 1
+                 && nextSegment.gear !== activeSegment.gear) {
+                 activeTurnAssist.awaitingGear = nextSegment.gear;
+                 activeTurnAssist.pendingSegmentCursor = segmentCursor + 1;
+                 p.targetSpeed = 0;
+                 p.steeringAngle = 0;
+                 setTurnGearRequest(nextSegment.gear);
+                 setUTurnStage(nextSegment.gear === 'REVERSE' ? 'SHIFT REVERSE' : 'SHIFT FORWARD');
+             }
+             const lookaheadDistance = Math.max(
+                 1.8 * PIXELS_PER_METER,
+                 Math.min(4.2 * PIXELS_PER_METER, Math.abs(p.speed) * 0.34 * PIXELS_PER_METER)
+             );
+             const lookahead = window.TurnGeometry.lookaheadPoint(
+                 legPoints,
+                 progress || localProgressStart,
+                 lookaheadDistance
+             );
+             const dx = lookahead.x - p.x;
+             const dy = lookahead.y - p.y;
+             const driveGear = activeTurnAssist.currentGear || activeSegment.gear || 'FORWARD';
+             const driveSign = driveGear === 'REVERSE' ? -1 : 1;
+             const isFinalLeg = segmentCursor === turnSegments.length - 1;
+             const remainingLegPx = Math.max(0, (Number(activeSegment.lengthPx) || 0) - (Number(progress?.distanceAlongPx) || 0));
+             const trajectoryHeading = Math.atan2(dx, -dy) * 180 / Math.PI;
+             const useTerminalHeading = isFinalLeg && remainingLegPx <= 1.5 * PIXELS_PER_METER;
+             const desiredHeading = useTerminalHeading
+                 ? activeTurnAssist.targetHeading
+                 : normalizeHeadingValue(trajectoryHeading + (driveSign < 0 ? 180 : 0));
+             const headingError = normalizeAngle(desiredHeading - p.heading);
+             const wheelbase = Math.max(1.2, Number(activeTurnAssist.wheelbaseM) || 2.5);
+             const lookaheadM = Math.max(0.5, Math.hypot(dx, dy) / PIXELS_PER_METER);
+             const pursuitSteer = driveSign * Math.atan2(
+                 2 * wheelbase * Math.sin(headingError * Math.PI / 180),
+                 lookaheadM
+             ) * 180 / Math.PI;
+             const minRadiusM = Math.max(wheelbase + 0.1, Number(activeTurnAssist.minRadiusM) || 6.5);
+             const maxWheelAngle = Math.min(42, Math.atan(wheelbase / minRadiusM) * 180 / Math.PI);
+             if (activeTurnAssist.awaitingGear) {
+                 p.steeringAngle = 0;
+                 p.targetSpeed = 0;
+             } else {
+                 p.steeringAngle = Math.max(-maxWheelAngle, Math.min(maxWheelAngle, pursuitSteer));
+                 const configuredTurnSpeed = Math.max(1, Number(activeTurnAssist.turnSpeedKmh) || 5.5);
+                 const terminalSpeedScale = isFinalLeg
+                     ? Math.max(0.22, Math.min(1, remainingLegPx / (4 * PIXELS_PER_METER)))
+                     : 1;
+                 p.targetSpeed = driveSign * Math.max(1.2, configuredTurnSpeed * terminalSpeedScale);
+             }
+
+             const ratio = activeTurnAssist.points.length > 1
+                 ? activeTurnAssist.progressIndex / (activeTurnAssist.points.length - 1)
+                 : 0;
+             const nextStage = ratio < 0.16 ? 'APPROACH' : ratio < 0.78 ? 'TURNING' : 'ALIGNING';
+             if (!activeTurnAssist.awaitingGear && activeTurnAssist.stage !== nextStage) {
+                 activeTurnAssist.stage = nextStage;
+                 setUTurnStage(nextStage);
+             }
+
+             const endPoint = activeTurnAssist.points[activeTurnAssist.points.length - 1];
+             const endDistance = Math.hypot(endPoint.x - p.x, endPoint.y - p.y);
+             const targetHeadingError = Math.abs(normalizeAngle(activeTurnAssist.targetHeading - p.heading));
+             const finalGuideMetrics = getGuidanceMetrics(guidanceRef.current, p);
+             const finalLaneErrorPx = finalGuideMetrics.validLine && guidanceRef.current?.width > 0
+                 ? finalGuideMetrics.xte
+                     - (activeTurnAssist.targetLaneIndex * guidanceRef.current.width)
+                     - (Number(guidanceRef.current.manualOffset) || 0)
+                 : Infinity;
+             if (activeTurnAssist.progressIndex >= activeTurnAssist.points.length - 3
+                 && isFinalLeg
+                 && driveGear === 'FORWARD'
+                 && endDistance <= 1 * PIXELS_PER_METER
+                 && Math.abs(finalLaneErrorPx) <= 0.75 * PIXELS_PER_METER
+                 && targetHeadingError <= 13) {
+                 activeLaneRef.current = activeTurnAssist.targetLaneIndex;
+                 manualLaneRef.current = activeTurnAssist.targetLaneIndex;
+                 p.steeringAngle = 0;
+                 p.targetSpeed = activeTurnAssist.previousTargetSpeed;
+                 turnAssistRef.current = null;
+                 setTurnAssistActive(false);
+                 setUTurnStage(activeTurnAssist.repeatAuto ? 'ARMED' : 'COMPLETE');
+                 setImplementRaised(false);
+                 setTurnGearRequest(null);
+                 setAutoUTurnArmed(Boolean(activeTurnAssist.repeatAuto));
+                 if (activeTurnAssist.coverageWasRecording && activeTurnAssist.coveragePaused) setIsRecording(true);
+                 setManualTargetSpeed(activeTurnAssist.previousTargetSpeed);
+                 if (activeTurnAssist.resumeAutosteer) setSteeringMode('AUTO');
+                 showNotification(`Turn complete / pass ${activeTurnAssist.targetLaneIndex >= 0 ? '+' : ''}${activeTurnAssist.targetLaneIndex}${activeTurnAssist.repeatAuto ? ' / Auto re-armed' : ''}`, 'success');
+             }
         // --- AUTO STEERING LOGIC ---
-        if (steeringMode === 'AUTO') {
+        } else if (steeringMode === 'AUTO') {
              // REMOVED FORCED SPEED LOGIC
 
              const guide = guidanceRef.current;
@@ -770,7 +1090,6 @@ const App = () => {
              if (metrics.validLine) {
                  let xte = getTargetRelativeXte(metrics.xte, guide);
                  const lineHeading = metrics.lineHeading;
-                 setGuidanceErrorFromPixels(xte);
 
                  let headingErr = normalizeAngle(lineHeading - p.heading);
 
@@ -779,6 +1098,7 @@ const App = () => {
                      headingErr = normalizeAngle(reverseHeading - p.heading);
                      xte = -xte;
                  }
+                 setGuidanceErrorFromPixels(xte);
 
                  const kP_xte = 0.5;
                  const kP_head = 1.0;
@@ -796,20 +1116,7 @@ const App = () => {
             const turnInputActive = keysPressed.current['ArrowLeft'] || keysPressed.current['ArrowRight'];
             const manualSteerLimit = isMap3D ? 30 : 38;
             const steerSpeed = isMap3D ? (turnInputActive ? 32 : 30) : 38;
-            const activeTurnAssist = turnAssistRef.current;
-            if (activeTurnAssist) {
-                const remaining = Math.abs(getHeadingDelta(activeTurnAssist.targetHeading, p.heading));
-                if (remaining <= 3) {
-                    turnAssistRef.current = null;
-                    setTurnAssistActive(false);
-                    p.steeringAngle = 0;
-                } else {
-                    const assistSteer = remaining < 18 ? 26 : 42;
-                    const assistTargetSpeed = remaining < 18 ? 4.5 : 5.5;
-                    p.steeringAngle = Math.max(-45, Math.min(45, activeTurnAssist.direction * assistSteer));
-                    p.targetSpeed = p.targetSpeed < 0 ? -assistTargetSpeed : assistTargetSpeed;
-                }
-            } else if (keysPressed.current['ArrowLeft']) p.steeringAngle = Math.max(p.steeringAngle - steerSpeed * dt, -manualSteerLimit);
+            if (keysPressed.current['ArrowLeft']) p.steeringAngle = Math.max(p.steeringAngle - steerSpeed * dt, -manualSteerLimit);
             else if (keysPressed.current['ArrowRight']) p.steeringAngle = Math.min(p.steeringAngle + steerSpeed * dt, manualSteerLimit);
             else {
                 const steeringReturnSpeed = isMap3D ? 30 : 28;
@@ -842,7 +1149,7 @@ const App = () => {
             p.heading = (p.heading % 360 + 360) % 360;
 
             const headingRad = p.heading * Math.PI / 180;
-            const pxPerSec = p.speed * 15;
+            const pxPerSec = speedMs * PIXELS_PER_METER;
             const moveDist = pxPerSec * dt;
             p.x += Math.sin(headingRad) * moveDist;
             p.y -= Math.cos(headingRad) * moveDist;
@@ -879,7 +1186,7 @@ const App = () => {
 
     animationFrameId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [steeringMode, setManualTargetSpeed, vehicleSettings?.wheelbase, isMap3D, setupOverlayOpen]);
+  }, [steeringMode, setManualTargetSpeed, vehicleSettings?.wheelbase, isMap3D, setupOverlayOpen, rtkGuidanceReady]);
 
   // --- 4. RECORDING ---
   useEffect(() => {
@@ -1030,31 +1337,41 @@ const App = () => {
   };
 
   useEffect(() => {
-      if (steeringMode === 'AUTO' && rtkStatus !== 'FIX') {
+      if (steeringMode === 'AUTO' && !rtkGuidanceReady) {
           setSteeringMode('MANUAL');
+          if (autoUTurnArmed) {
+              setAutoUTurnArmed(false);
+              autoLaneStepRef.current = null;
+              autoArmSafetySignatureRef.current = null;
+              setUTurnStage('IDLE');
+          }
           manualLaneRef.current = activeLaneRef.current;
           activeLaneRef.current = null;
           actions.setRunStatus(prev => ({
               ...(prev || {}),
               steeringState: 'FAULT',
-              steeringReason: 'RTK lost while engaged',
+              steeringReason: 'RTK quality lost while engaged',
               overrideDetected: false,
               engageAllowed: false,
-              recoveryAction: 'Restore RTK FIX'
+              recoveryAction: 'Restore guidance-grade RTK'
           }));
           if (!rtkLossHandledRef.current) {
               rtkLossHandledRef.current = true;
-              addAlarm('rtk-lost', 'critical', 'RTK lost while autosteer engaged');
-              showNotification('RTK lost: autosteer disengaged', 'error');
+              addAlarm('rtk-lost', 'critical', 'RTK quality lost while autosteer engaged');
+              showNotification('RTK quality lost: autosteer disengaged', 'error');
           }
-      } else if (rtkStatus === 'FIX') {
+      } else if (rtkGuidanceReady) {
           rtkLossHandledRef.current = false;
       }
-  }, [steeringMode, rtkStatus]);
+  }, [steeringMode, rtkGuidanceReady, autoUTurnArmed]);
 
   // NEW: Handler for Toggling Multi-Line Mode to calculate Offset
   const handleToggleMultiLine = () => {
       const nextMode = !isMultiLineMode;
+      if (!nextMode && activeLineRecord?.tramline?.enabled) {
+          showNotification('Disable Tramline routing before switching to a single path', 'warning');
+          return;
+      }
       manualLaneRef.current = null;
       actions.setIsMultiLineMode(nextMode);
 
@@ -1093,9 +1410,9 @@ const App = () => {
     // Toggle Mode
     const newMode = steeringMode === 'MANUAL' ? 'AUTO' : 'MANUAL';
 
-    if (newMode === 'AUTO' && rtkStatus !== 'FIX') {
-        addAlarm('rtk-required', 'warning', 'Autosteer blocked: RTK FIX required');
-        return showNotification("RTK FIX required before auto steer", "warning");
+    if (newMode === 'AUTO' && !rtkGuidanceReady) {
+        addAlarm('rtk-required', 'warning', 'Autosteer blocked: guidance-grade RTK required');
+        return showNotification("Stable RTK FIX quality required before autosteer", "warning");
     }
 
     if (newMode === 'AUTO') {
@@ -1240,10 +1557,21 @@ const App = () => {
 
   const handleTrim = (direction) => {
       const trimPixels = PIXELS_PER_METER * 0.01;
-      const directionFactor = getGuidanceDirectionFactor(guidanceRef.current, { ...worldPos, heading });
+      const isPivotGuide = guidanceRef.current?.type === 'PIVOT';
+      const directionFactor = isPivotGuide ? 1 : getGuidanceDirectionFactor(guidanceRef.current, { ...worldPos, heading });
       const userDirection = direction === 'left' ? -1 : 1;
       actions.setManualOffset(prev => prev + (userDirection * directionFactor * trimPixels));
-      showNotification(`Trim ${direction === 'left' ? 'Left' : 'Right'} 1cm`, "info");
+      const directionLabel = isPivotGuide
+          ? (direction === 'left' ? 'Inward' : 'Outward')
+          : (direction === 'left' ? 'Left' : 'Right');
+      showNotification(`Trim ${directionLabel} 1cm`, "info");
+  };
+
+  const getLineShiftSide = (line) => {
+      const offset = Number(line?.translationOffsetM) || 0;
+      if (line?.type === 'PIVOT') return offset < 0 ? 'IN' : 'OUT';
+      if (line?.translationDisplaySide) return line.translationDisplaySide;
+      return offset < 0 ? 'L' : 'R';
   };
   const handleZoom = (type) => {
       setZoomLevel((previous) => {
@@ -1335,50 +1663,83 @@ const App = () => {
       physics.current.targetSpeed = next;
       setManualTargetSpeed(next);
   };
-  const cancelTurnAssist = () => {
+  const cancelTurnAssist = (options = {}) => {
+      const resumePreviousMode = options?.resumePreviousMode !== false;
+      const restoreTargetSpeed = options?.restoreTargetSpeed !== false;
+      const activeTurn = turnAssistRef.current;
       turnAssistRef.current = null;
       setTurnAssistActive(false);
+      setUTurnStage('IDLE');
+      setImplementRaised(false);
+      setTurnGearRequest(null);
+      if (activeTurn?.repeatAuto) {
+          autoLaneStepRef.current = null;
+          autoArmSafetySignatureRef.current = null;
+      }
+      if (!resumePreviousMode && autoUTurnArmed) {
+          setAutoUTurnArmed(false);
+          autoLaneStepRef.current = null;
+          autoArmSafetySignatureRef.current = null;
+          if (restoreTargetSpeed && autoApproachPreviousSpeedRef.current != null) {
+              physics.current.targetSpeed = autoApproachPreviousSpeedRef.current;
+              setManualTargetSpeed(autoApproachPreviousSpeedRef.current);
+          }
+          setUTurnStage('IDLE');
+      }
+      autoApproachPreviousSpeedRef.current = null;
+      physics.current.steeringAngle = 0;
+      setSteeringAngle(0);
+      if (activeTurn?.coverageWasRecording && activeTurn?.coveragePaused) setIsRecording(true);
+      if (restoreTargetSpeed && activeTurn?.previousTargetSpeed != null) {
+          physics.current.targetSpeed = activeTurn.previousTargetSpeed;
+          setManualTargetSpeed(activeTurn.previousTargetSpeed);
+      }
+      if (resumePreviousMode && activeTurn?.previousMode && activeTurn?.resumeAutosteer) {
+          setSteeringMode(activeTurn.previousMode);
+      } else if (activeTurn && !resumePreviousMode) {
+          setSteeringMode('MANUAL');
+      }
   };
+  cancelTurnAssistRef.current = cancelTurnAssist;
   const stopVehicle = () => {
-      cancelTurnAssist();
+      cancelTurnAssist({ resumePreviousMode: false, restoreTargetSpeed: false });
       updateManualSpeed(0);
       physics.current.steeringAngle = 0;
       setSteeringAngle(0);
   };
   const updateSteering = (val) => {
-      cancelTurnAssist();
+      const wasAutoControlled = steeringMode === 'AUTO' || Boolean(turnAssistRef.current);
+      cancelTurnAssist({ resumePreviousMode: false });
+      if (wasAutoControlled) setSteeringMode('MANUAL');
       const limit = sceneViewMode === '3D' ? 30 : 38;
       const next = Math.max(-limit, Math.min(limit, Number(val) || 0));
       physics.current.steeringAngle = next;
       setSteeringAngle(next);
   };
   const handleUTurn = (requestedDirection) => {
-      const current = physics.current;
-      const configuredDirection = uTurnSettings?.direction || 'Auto';
-      const isLeftRequested = requestedDirection === 'left'
-          || configuredDirection === 'Left'
-          || (requestedDirection !== 'right' && configuredDirection !== 'Right' && (keysPressed.current['ArrowLeft'] || current.steeringAngle < -2));
-      const direction = isLeftRequested ? -1 : 1;
-      const configuredSpeed = Number(uTurnSettings?.turnSpeedKmh || 5.5);
-      const targetSpeed = current.targetSpeed < 0 ? -configuredSpeed : configuredSpeed;
-      turnAssistRef.current = {
-          direction,
-          targetHeading: normalizeHeadingValue(current.heading + 180),
-          pattern: uTurnSettings?.pattern || 'Smart U-Turn',
-          nextPass: uTurnSettings?.nextPass || 'Adjacent',
-          skipPasses: Number(uTurnSettings?.skipPasses || 0)
-      };
-      setSteeringMode('MANUAL');
-      setTurnAssistActive(true);
-      current.targetSpeed = targetSpeed;
-      current.steeringAngle = direction * 42;
-      setManualTargetSpeed(targetSpeed);
-      setSteeringAngle(current.steeringAngle);
-      showNotification(`${uTurnSettings?.pattern || 'U-turn'}: ${direction < 0 ? 'left' : 'right'} / ${uTurnSettings?.nextPass || 'Adjacent'}`, 'info');
+      if (turnAssistRef.current) {
+          cancelTurnAssist({ resumePreviousMode: false });
+          showNotification('U-turn cancelled', 'info');
+          return;
+      }
+      if (autoUTurnArmed) {
+          setAutoUTurnArmed(false);
+          autoLaneStepRef.current = null;
+          autoArmSafetySignatureRef.current = null;
+          if (autoApproachPreviousSpeedRef.current != null) {
+              physics.current.targetSpeed = autoApproachPreviousSpeedRef.current;
+              setManualTargetSpeed(autoApproachPreviousSpeedRef.current);
+          }
+          autoApproachPreviousSpeedRef.current = null;
+          setUTurnStage('IDLE');
+          showNotification('Auto U-turn disarmed', 'info');
+          return;
+      }
+      openUTurnPlanner(requestedDirection);
   };
   const setSteerKey = (key, active) => {
       if (active && (key === 'ArrowLeft' || key === 'ArrowRight')) {
-          if (steeringMode === 'AUTO') {
+          if (steeringMode === 'AUTO' || turnAssistRef.current) {
               setSteeringMode('MANUAL');
               actions.setRunStatus(prev => ({
                   ...(prev || {}),
@@ -1391,7 +1752,7 @@ const App = () => {
               addAlarm('manual-override', 'warning', 'Manual steering override detected');
               showNotification('Manual override: autosteer disengaged', 'warning');
           }
-          cancelTurnAssist();
+          cancelTurnAssist({ resumePreviousMode: false });
       }
       keysPressed.current[key] = active;
   };
@@ -1540,6 +1901,17 @@ const App = () => {
         name: tempLineName.trim(),
         type: lineType,
         isMulti: isMultiLineMode,
+        trackSpacingM: Math.max(
+            0.1,
+            (Number(implementSettings.width) || DEFAULT_IMPLEMENT_WIDTH) - (Number(implementSettings.overlap) || 0)
+        ),
+        sourceImplementProfileId: implementSettings.profileId || null,
+        tramline: {
+            enabled: false,
+            intervalPasses: 4,
+            anchorPassIndex: 0,
+            visualOnly: true
+        },
         date: createdAt.toISOString().split('T')[0],
         createdAt: createdAt.toISOString(),
         createdLocation: lineField?.name || loadedField?.name || 'Location unavailable',
@@ -1819,6 +2191,7 @@ const App = () => {
       }
 
       setBoundaryNameModalOpen(false);
+      setBoundaryRunOverride(null);
       setPreviewBoundary(null);
       actions.setTempBoundary([]);
       setTempBoundaryName('');
@@ -1871,6 +2244,7 @@ const App = () => {
                 actions.setLoadedField({...loadedField, boundaries: newBounds});
             }
             if (activeBoundaryIdx === index) actions.setActiveBoundaryIdx(0);
+            setBoundaryRunOverride(null);
             setSelectedBoundaryIndex(null);
             showNotification("Boundary Deleted", "info");
       } else if (type === 'line') {
@@ -1967,6 +2341,7 @@ const App = () => {
   const handleLoadField = () => {
       const field = fields.find(f => f.id === selectedFieldId);
       actions.setLoadedField(field);
+      setBoundaryRunOverride(null);
       showNotification(`Loaded Field: ${field.name}`, "success");
       setFieldManagerOpen(false);
       actions.setCoverageTrail([]);
@@ -1981,11 +2356,111 @@ const App = () => {
   }
 
   const getDisplayHeading = () => { let h = heading % 360; if (h < 0) h += 360; return h.toFixed(1); };
-  const getRtkColor = () => rtkStatus === 'FIX' ? 'bg-green-500 text-white border-green-400' : 'bg-yellow-500 text-black border-yellow-400';
-  const getLineTypeIcon = () => { switch(lineType) { case 'STRAIGHT_AB': return GitCommitHorizontal; case 'A_PLUS': return ArrowUpFromDot; case 'CURVE': return Spline; case 'COMBINATION': return AlignJustify; case 'PIVOT': return CircleDashed; default: return GitCommitHorizontal; } };
+  const getRtkColor = () => rtkGuidanceReady ? 'bg-green-500 text-white border-green-400' : 'bg-yellow-500 text-black border-yellow-400';
+  const getLineTypeIcon = (lineOrType = lineType) => {
+      const type = typeof lineOrType === 'string' ? lineOrType : lineOrType?.type;
+      switch(type) {
+          case 'A_PLUS': return ArrowUpFromDot;
+          case 'CURVE': return Spline;
+          case 'COMBINATION': return AlignJustify;
+          case 'PIVOT': return CircleDashed;
+          case 'STRAIGHT_AB': return GitCommitHorizontal;
+          default: return Route;
+      }
+  };
+
+  const updateSelectedFieldBoundaries = (updater) => {
+      actions.setFields(prev => prev.map(field => {
+          if (field.id !== selectedFieldId) return field;
+          return { ...field, boundaries: updater(field.boundaries || []) };
+      }));
+      if (loadedField?.id === selectedFieldId) {
+          actions.setLoadedField(prev => prev ? { ...prev, boundaries: updater(prev.boundaries || []) } : prev);
+      }
+  };
   const activeFieldRecord = loadedField || fields.find(f => f.id === selectedFieldId);
+  const activeBoundaryIndex = Math.min(
+      Math.max(Number(activeBoundaryIdx) || 0, 0),
+      Math.max((activeFieldRecord?.boundaries || []).length - 1, 0)
+  );
+  const activeBoundaryRecord = (activeFieldRecord?.boundaries || [])[activeBoundaryIndex] || null;
+  const activeBoundarySourcePoints = (Array.isArray(activeBoundaryRecord?.points)
+      ? activeBoundaryRecord.points
+      : Array.isArray(activeBoundaryRecord) ? activeBoundaryRecord : [])
+      .filter(point => Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y)))
+      .map(point => ({ x: Number(point.x), y: Number(point.y) }));
+  const boundaryOverrideMatchesActive = Boolean(
+      boundaryRunOverride
+      && boundaryRunOverride.fieldId === activeFieldRecord?.id
+      && boundaryRunOverride.boundaryIndex === activeBoundaryIndex
+      && Array.isArray(boundaryRunOverride.points)
+  );
+  const activeBoundaryRunPoints = boundaryOverrideMatchesActive
+      ? boundaryRunOverride.points
+      : activeBoundarySourcePoints;
+  const boundaryShiftPreview = useMemo(() => {
+      if (dockQuickPicker !== 'boundary-shift' || activeBoundarySourcePoints.length < 3) {
+          return { points: [], valid: false, reason: 'Select a closed boundary' };
+      }
+      const rawDistanceM = Number(boundaryShiftDistanceM);
+      const distanceM = Number.isFinite(rawDistanceM) ? Math.min(50, Math.max(0, rawDistanceM)) : 0;
+      const distancePx = distanceM * PIXELS_PER_METER;
+      if (boundaryShiftMode === 'BUFFER') {
+          const outward = boundaryShiftDirection === 'outward';
+          const points = getOffsetPolygonPoints(activeBoundarySourcePoints, (outward ? 1 : -1) * distancePx);
+          return {
+              points,
+              valid: points.length >= 3,
+              distanceM,
+              label: `${outward ? 'Outward' : 'Inward'} ${distanceM.toFixed(2)} m`,
+              reason: points.length >= 3 ? null : 'This buffer would collapse or cross the boundary'
+          };
+      }
+      const directionVectors = {
+          north: { x: 0, y: -1, label: 'North' },
+          east: { x: 1, y: 0, label: 'East' },
+          south: { x: 0, y: 1, label: 'South' },
+          west: { x: -1, y: 0, label: 'West' }
+      };
+      const vector = directionVectors[boundaryShiftDirection] || directionVectors.north;
+      return {
+          points: activeBoundarySourcePoints.map(point => ({
+              x: point.x + vector.x * distancePx,
+              y: point.y + vector.y * distancePx
+          })),
+          valid: true,
+          distanceM,
+          label: `${vector.label} ${distanceM.toFixed(2)} m`,
+          reason: null
+      };
+  }, [dockQuickPicker, activeFieldRecord?.id, activeBoundaryIndex, activeBoundaryRecord, boundaryShiftMode, boundaryShiftDirection, boundaryShiftDistanceM]);
   const activeTaskRecord = activeTaskId ? fields.find(f => f.id === selectedFieldId)?.tasks?.find(task => task.id === activeTaskId) : null;
   const activeLineRecord = activeLineId ? (activeFieldRecord?.lines || fields.find(f => f.id === selectedFieldId)?.lines || []).filter(line => !line.archived).find(line => line.id === activeLineId) : null;
+  const activeTrackSpacingM = Math.max(
+      0.1,
+      Number(activeLineRecord?.trackSpacingM)
+          || ((Number(implementSettings.width) || DEFAULT_IMPLEMENT_WIDTH) - (Number(implementSettings.overlap) || 0))
+  );
+  const activeTramline = activeLineRecord?.tramline || {
+      enabled: false,
+      intervalPasses: 4,
+      anchorPassIndex: 0,
+      visualOnly: true
+  };
+  const guidanceLaneRenderRadius = activeTramline.enabled
+      ? Math.min(12, Math.max(4, Math.round(Number(activeTramline.intervalPasses) || 4)))
+      : 4;
+  useEffect(() => {
+      if (activeTramline.enabled && !isMultiLineMode) actions.setIsMultiLineMode(true);
+  }, [activeLineId, activeTramline.enabled, isMultiLineMode]);
+  const normalizedModulo = (value, modulus) => {
+      const safeModulus = Math.max(1, Math.round(Number(modulus) || 1));
+      return ((Math.round(Number(value) || 0) % safeModulus) + safeModulus) % safeModulus;
+  };
+  const isTramlinePass = (passIndex, config = activeTramline) => Boolean(
+      config?.enabled
+      && normalizedModulo(passIndex - (Number(config.anchorPassIndex) || 0), config.intervalPasses) === 0
+  );
 
   useEffect(() => {
       if (!activeLineId || !activeLineRecord) {
@@ -2005,18 +2480,20 @@ const App = () => {
   const liveGuide = {
       type: guidanceLine,
       isMulti: isMultiLineMode,
-      width: implementSettings.width * PIXELS_PER_METER,
+      width: activeTrackSpacingM * PIXELS_PER_METER,
       manualOffset: effectiveGuidanceOffset,
       points: {
           a: pointA,
           b: pointB,
           aplus: { point: aPlusPoint, heading: aPlusHeading },
           curve: curvePoints,
+          metricCurve: effectiveCurveMetricPoints,
           pivot: { center: pivotCenter, radius: pivotRadius }
       }
   };
   const liveGuidanceMetrics = getGuidanceMetrics(liveGuide, { ...worldPos, heading });
   const liveGuidanceDirectionFactor = getGuidanceDirectionFactor(liveGuide, { ...worldPos, heading });
+  const liveGuidanceDisplayFactor = liveGuide.type === 'PIVOT' ? 1 : liveGuidanceDirectionFactor;
   const hasGuidanceToEngage = Boolean((guidanceLine || activeLineRecord || liveGuide.type) && liveGuidanceMetrics.validLine);
   const getAxisHeadingError = (lineHeading, vehicleHeading) => {
       let diff = normalizeAngle(lineHeading - vehicleHeading);
@@ -2030,6 +2507,10 @@ const App = () => {
   const liveEtaMin = liveWorkRate > 0.05 ? Math.round((liveAreaRemaining / liveWorkRate) * 60) : null;
   const activeAlarms = (alarms || []).filter(alarm => !alarm.acked);
   const criticalAlarm = activeAlarms.find(alarm => alarm.severity === 'critical');
+  const highestPriorityAlarm = activeAlarms.reduce((highest, alarm) => {
+      const rank = { critical: 3, warning: 2, info: 1 };
+      return !highest || (rank[alarm.severity] || 0) > (rank[highest.severity] || 0) ? alarm : highest;
+  }, null);
   const currentRunKpi = {
       ...(runKpi || {}),
       xteCm: crossTrackError,
@@ -2047,11 +2528,11 @@ const App = () => {
       if (steeringMode === 'AUTO' && !hasGuidanceToEngage) {
           return { steeringState: 'FAULT', steeringReason: 'Guidance geometry lost while engaged', overrideDetected: false, engageAllowed: false, recoveryAction: 'Return to manual' };
       }
-      if (steeringMode === 'AUTO' && rtkStatus !== 'FIX') {
-          return { steeringState: 'FAULT', steeringReason: 'RTK lost while engaged', overrideDetected: false, engageAllowed: false, recoveryAction: 'Return to manual' };
+      if (steeringMode === 'AUTO' && !rtkGuidanceReady) {
+          return { steeringState: 'FAULT', steeringReason: 'RTK quality lost while engaged', overrideDetected: false, engageAllowed: false, recoveryAction: 'Return to manual' };
       }
-      if (runStatus?.steeringReason === 'RTK lost while engaged' && rtkStatus !== 'FIX') {
-          return { steeringState: 'FAULT', steeringReason: 'RTK lost while engaged', overrideDetected: false, engageAllowed: false, recoveryAction: 'Restore RTK FIX' };
+      if (String(runStatus?.steeringReason || '').includes('RTK') && !rtkGuidanceReady) {
+          return { steeringState: 'FAULT', steeringReason: 'RTK quality lost while engaged', overrideDetected: false, engageAllowed: false, recoveryAction: 'Restore guidance-grade RTK' };
       }
       if (turnAssistActive) {
           return { steeringState: 'PAUSED', steeringReason: 'Turn assist active', overrideDetected: false, engageAllowed: false, recoveryAction: 'Complete turn' };
@@ -2065,14 +2546,14 @@ const App = () => {
       if (!hasGuidanceToEngage) {
           return { steeringState: 'MANUAL', steeringReason: 'Create or load a guidance line', overrideDetected: false, engageAllowed: false, recoveryAction: 'Load line' };
       }
-      if (rtkStatus !== 'FIX') {
-          return { steeringState: 'MANUAL', steeringReason: 'Waiting for RTK FIX', overrideDetected: false, engageAllowed: false, recoveryAction: 'Check RTK' };
+      if (!rtkGuidanceReady) {
+          return { steeringState: 'MANUAL', steeringReason: 'Waiting for stable RTK quality', overrideDetected: false, engageAllowed: false, recoveryAction: 'Check RTK' };
       }
       return { steeringState: 'READY', steeringReason: 'Ready to engage autosteer', overrideDetected: runStatus?.overrideDetected || false, engageAllowed: true, recoveryAction: 'Engage autosteer' };
   })();
   const currentRunStatus = { ...(runStatus || {}), ...liveRunStatus };
   const autosteerReady = hasGuidanceToEngage
-      && rtkStatus === 'FIX'
+      && rtkGuidanceReady
       && currentRunStatus.steeringState === 'READY'
       && !currentRunStatus.overrideDetected;
   const autosteerStateLabel = isRecordingBoundary || boundaryCaptureReady
@@ -2087,7 +2568,7 @@ const App = () => {
           ? 'ENGAGED'
           : !hasGuidanceToEngage
               ? 'NO LINE'
-              : currentRunStatus.overrideDetected || rtkStatus !== 'FIX' || currentRunStatus.engageAllowed === false
+              : currentRunStatus.overrideDetected || !rtkGuidanceReady || currentRunStatus.engageAllowed === false
                   ? 'BLOCKED'
                   : 'READY';
   const autosteerPrimaryLabel = isRecordingBoundary || boundaryCaptureReady
@@ -2102,7 +2583,7 @@ const App = () => {
           ? 'SELECT LINE'
           : currentRunStatus.overrideDetected
               ? 'CLEAR OVERRIDE'
-          : rtkStatus !== 'FIX'
+          : !rtkGuidanceReady
               ? 'CHECK RTK'
               : currentRunStatus.engageAllowed === false
                   ? 'VIEW ISSUE'
@@ -2184,7 +2665,7 @@ const App = () => {
           showNotification('Manual override cleared', 'info');
           return;
       }
-      if (currentRunStatus.engageAllowed === false && rtkStatus === 'FIX') {
+      if (currentRunStatus.engageAllowed === false && rtkGuidanceReady) {
           setEventHistoryOpen(true);
           setRtkQualityOpen(false);
           setProductivityOpen(false);
@@ -2194,28 +2675,590 @@ const App = () => {
       setRtkQualityOpen(true);
       setEventHistoryOpen(false);
       setProductivityOpen(false);
-      showNotification('RTK FIX required before autosteer', 'warning');
+      showNotification('Stable RTK FIX quality required before autosteer', 'warning');
   };
+
+  const getActiveBoundaryPoints = () => {
+      return activeBoundaryRunPoints.filter(point => Number.isFinite(point?.x) && Number.isFinite(point?.y));
+  };
+
+  const getNormalizedTurnConfig = (overrides = {}) => {
+      const merged = {
+          enabled: true,
+          mode: 'ONE_KEY',
+          pattern: 'AUTO',
+          direction: 'Auto',
+          nextPass: 'Adjacent',
+          skipPasses: 0,
+          trigger: 'Manual confirm',
+          startDistanceM: 18,
+          turnSpeedKmh: 5.5,
+          liftAction: true,
+          resumeAutosteer: true,
+          pauseCoverage: true,
+          requireBoundary: false,
+          ...uTurnSettings,
+          ...overrides
+      };
+      if (merged.mode === 'SMART') merged.mode = 'AUTO';
+      if (merged.pattern === 'Smart U-Turn') merged.pattern = 'AUTO';
+      if (merged.pattern === 'Basic Omega') merged.pattern = 'OMEGA';
+      if (merged.pattern === 'Fish Tail') merged.pattern = 'FISH_TAIL';
+      const skipPasses = Number(merged.skipPasses);
+      const turnSpeedKmh = Number(merged.turnSpeedKmh);
+      const startDistanceM = Number(merged.startDistanceM);
+      merged.skipPasses = Number.isFinite(skipPasses) ? Math.min(49, Math.max(0, Math.round(skipPasses))) : 0;
+      merged.turnSpeedKmh = Number.isFinite(turnSpeedKmh) ? Math.min(10, Math.max(1, turnSpeedKmh)) : 5.5;
+      merged.startDistanceM = Number.isFinite(startDistanceM) ? Math.min(100, Math.max(4, startDistanceM)) : 18;
+      return merged;
+  };
+
+  const getTurnPassTarget = (direction, config) => {
+      const currentLaneIndex = activeLaneRef.current ?? manualLaneRef.current ?? livePassIndex;
+      const laneDirection = direction * liveGuidanceDirectionFactor;
+      let passDelta = config.nextPass === 'Skip'
+          ? Math.min(50, Math.max(1, Number(config.skipPasses || 0) + 1))
+          : 1;
+
+      // F200 Basic U-turn preserves the repeating tramline class.
+      if (activeTramline.enabled && config.mode === 'ONE_KEY') {
+          if (isTramlinePass(currentLaneIndex)) {
+              passDelta = Math.max(2, Math.round(Number(activeTramline.intervalPasses) || 4));
+          } else {
+              passDelta = 1;
+              while (passDelta < 64 && isTramlinePass(currentLaneIndex + laneDirection * passDelta)) passDelta += 1;
+          }
+      }
+
+      return {
+          currentLaneIndex,
+          targetLaneIndex: currentLaneIndex + laneDirection * passDelta,
+          passDelta
+      };
+  };
+
+  const buildUTurnCandidate = (requestedDirection, overrides = {}) => {
+      const config = getNormalizedTurnConfig(overrides);
+      const direction = requestedDirection === 'left' || requestedDirection === -1 ? -1 : 1;
+      const activeType = guidanceLine || activeLineRecord?.type || lineType;
+      const target = getTurnPassTarget(direction, config);
+      const boundaryPoints = getActiveBoundaryPoints();
+      const validateBoundary = !overrides.ignoreBoundaryValidation;
+      const mountedImplement = /3-point|mounted/i.test(String(implementSettings.connectionType || ''));
+      const alignedStartHeading = normalizeHeadingValue(
+          liveGuidanceMetrics.lineHeading + (liveGuidanceDirectionFactor < 0 ? 180 : 0)
+      );
+      const currentLaneErrorPx = liveGuidanceMetrics.validLine
+          ? liveGuidanceMetrics.xte
+              - (target.currentLaneIndex * (liveGuide.width || activeTrackSpacingM * PIXELS_PER_METER))
+              - (Number(liveGuide.manualOffset) || 0)
+          : Infinity;
+      const baseResult = {
+          mode: config.mode,
+          direction,
+          config,
+          currentLaneIndex: target.currentLaneIndex,
+          targetLaneIndex: target.targetLaneIndex,
+          targetLaneDelta: target.targetLaneIndex - target.currentLaneIndex,
+          passDelta: target.passDelta,
+          boundaryPoints,
+          feasible: false,
+          points: []
+      };
+
+      if (!window.TurnGeometry) return { ...baseResult, failReason: 'Turn planner is not loaded' };
+      if (!config.enabled) return { ...baseResult, failReason: 'Turn assist is disabled' };
+      if (!hasGuidanceToEngage) return { ...baseResult, failReason: 'Load a valid guidance line first' };
+      if (steeringMode !== 'AUTO') return { ...baseResult, failReason: 'Engage autosteer before planning a turn' };
+      if (!overrides.ignoreSpeedValidation && physics.current.speed < -0.2) return { ...baseResult, failReason: 'Stop reversing before planning a turn' };
+      if (!overrides.ignoreSpeedValidation && Math.abs(physics.current.speed) > 10) return { ...baseResult, failReason: 'Slow below 10 km/h before planning a turn' };
+      if (Math.abs(normalizeAngle(alignedStartHeading - physics.current.heading)) > 20) {
+          return { ...baseResult, failReason: 'Align within 20° of the active pass first' };
+      }
+      if (Math.abs(currentLaneErrorPx) > Math.min(0.75, activeTrackSpacingM * 0.45) * PIXELS_PER_METER) {
+          return { ...baseResult, failReason: 'Move closer to the active pass before turning' };
+      }
+      if (activeType === 'PIVOT') return { ...baseResult, failReason: 'Pivot lines need a concentric turn planner' };
+      if (!['STRAIGHT_AB', 'A_PLUS'].includes(activeType)) {
+          return { ...baseResult, failReason: 'Safe U-turn currently supports saved AB and A+ lines' };
+      }
+      if (!rtkGuidanceReady) return { ...baseResult, failReason: 'Guidance-grade RTK FIX is required' };
+      if (config.requireBoundary && boundaryPoints.length < 3) {
+          return { ...baseResult, failReason: 'Boundary validation is enabled but no boundary is active' };
+      }
+      if (config.mode === 'AUTO' && boundaryPoints.length < 3) {
+          return { ...baseResult, failReason: 'Auto U-turn needs an active closed boundary' };
+      }
+      if (config.mode === 'AUTO' && activeTramline.enabled) {
+          return { ...baseResult, failReason: 'Auto U-turn is unavailable while Tramline is active' };
+      }
+      if (config.pattern === 'FISH_TAIL' && !mountedImplement) {
+          return { ...baseResult, failReason: 'Fish-tail is only safe with a mounted implement' };
+      }
+
+      const implementHalfWidthM = Math.max(0.5, Number(implementSettings.overallWidth || implementSettings.width || 3) / 2);
+      const implementRearReachM = Math.max(0, Number(implementSettings.hitchToRear || implementSettings.hitchToWorkPoint || 0));
+      const turnSafetyMarginPx = (Math.hypot(implementHalfWidthM, implementRearReachM) + 0.75) * PIXELS_PER_METER;
+      const wheelbaseM = Math.max(1.2, Number(vehicleSettings?.wheelbase) || 2.5);
+      const minimumTurnRadiusM = Math.max(2, wheelbaseM + 0.1, Number(vehicleSettings?.turnRadius) || 6.5);
+      const result = window.TurnGeometry.planBasicTurn({
+          position: { x: physics.current.x, y: physics.current.y },
+          headingDeg: alignedStartHeading,
+          direction,
+          laneSpacingPx: activeTrackSpacingM * PIXELS_PER_METER,
+          passDelta: target.passDelta,
+          minRadiusPx: minimumTurnRadiusM * PIXELS_PER_METER,
+          pattern: config.pattern,
+          boundaryPoints: validateBoundary && boundaryPoints.length >= 3 ? boundaryPoints : null,
+          safetyMarginPx: turnSafetyMarginPx
+      });
+      const targetHeading = normalizeHeadingValue(alignedStartHeading + 180);
+      const targetHeadingRad = targetHeading * Math.PI / 180;
+      const exitForward = { x: Math.sin(targetHeadingRad), y: -Math.cos(targetHeadingRad) };
+      const extensionLengthPx = Math.max(3.5, Number(vehicleSettings?.wheelbase || 2.5) * 1.5) * PIXELS_PER_METER;
+      const plannedPoints = result.points?.length ? [...result.points] : [];
+      const turnExitIndex = Math.max(0, plannedPoints.length - 1);
+      const turnExit = plannedPoints[turnExitIndex];
+      if (turnExit) {
+          const extensionSteps = Math.max(4, Math.ceil(extensionLengthPx / (0.5 * PIXELS_PER_METER)));
+          for (let step = 1; step <= extensionSteps; step += 1) {
+              const distancePx = extensionLengthPx * (step / extensionSteps);
+              plannedPoints.push({
+                  x: turnExit.x + exitForward.x * distancePx,
+                  y: turnExit.y + exitForward.y * distancePx
+              });
+          }
+      }
+      const plannedSegments = [...(result.segments || [])];
+      if (plannedPoints.length > turnExitIndex + 1) {
+          plannedSegments.push({
+              startIndex: turnExitIndex,
+              endIndex: plannedPoints.length - 1,
+              kind: 'LINE',
+              gear: 'FORWARD',
+              steer: 'STRAIGHT',
+              phase: 'ALIGN'
+          });
+      }
+      const extendedBoundaryValid = !validateBoundary || boundaryPoints.length < 3
+          || window.TurnGeometry.pathInsidePolygon(
+              plannedPoints,
+              boundaryPoints,
+              turnSafetyMarginPx
+          );
+
+      return {
+          ...baseResult,
+          ...result,
+          points: plannedPoints,
+          segments: plannedSegments,
+          feasible: Boolean(result.feasible && extendedBoundaryValid),
+          failReason: result.feasible && !extendedBoundaryValid ? 'BOUNDARY_CLEARANCE' : result.failReason,
+          mode: config.mode,
+          config,
+          targetLaneIndex: target.targetLaneIndex,
+          targetLaneDelta: target.targetLaneIndex - target.currentLaneIndex,
+          passDelta: target.passDelta,
+          openFieldPreview: boundaryPoints.length < 3,
+          safetyMarginPx: turnSafetyMarginPx,
+          minRadiusM: minimumTurnRadiusM,
+          targetHeading
+      };
+  };
+
+  const chooseUTurnCandidate = (requestedDirection, overrides = {}) => {
+      const config = getNormalizedTurnConfig(overrides);
+      if (requestedDirection === 'left' || requestedDirection === -1 || config.direction === 'Left') {
+          return buildUTurnCandidate('left', overrides);
+      }
+      if (requestedDirection === 'right' || requestedDirection === 1 || config.direction === 'Right') {
+          return buildUTurnCandidate('right', overrides);
+      }
+      const left = buildUTurnCandidate('left', overrides);
+      const right = buildUTurnCandidate('right', overrides);
+      if (left.feasible && !right.feasible) return left;
+      if (right.feasible && !left.feasible) return right;
+      if (left.feasible && right.feasible) {
+          const lastDirection = turnAssistRef.current?.direction || (physics.current.steeringAngle < -1 ? -1 : 1);
+          return lastDirection < 0 ? left : right;
+      }
+      return right.failReason ? right : left;
+  };
+
+  const refreshUTurnPreview = (overrides = {}, requestedDirection) => {
+      const candidate = chooseUTurnCandidate(requestedDirection, overrides);
+      setUTurnPreview(candidate);
+      return candidate;
+  };
+
+  const openUTurnPlanner = (requestedDirection) => {
+      setRtkQualityOpen(false);
+      setEventHistoryOpen(false);
+      setProductivityOpen(false);
+      setUTurnPanelTab('TURN');
+      refreshUTurnPreview({}, requestedDirection);
+      setUTurnPanelOpen(true);
+      setUTurnStage('PREVIEW');
+  };
+
+  const getTurnSafetySignature = () => {
+      const roundPoint = (point) => point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))
+          ? [Math.round(Number(point.x) * 10) / 10, Math.round(Number(point.y) * 10) / 10]
+          : null;
+      return JSON.stringify({
+          lineId: activeLineId,
+          lineType: guidanceLine || activeLineRecord?.type || lineType,
+          guidanceGeometry: {
+              a: roundPoint(pointA),
+              b: roundPoint(pointB),
+              aPlus: [roundPoint(aPlusPoint), Number.isFinite(Number(aPlusHeading)) ? Math.round(Number(aPlusHeading) * 10) / 10 : null],
+              curve: (curvePoints || []).map(roundPoint).filter(Boolean),
+              pivot: [roundPoint(pivotCenter), Number.isFinite(Number(pivotRadius)) ? Math.round(Number(pivotRadius) * 10) / 10 : null],
+              offsetPx: Math.round(effectiveGuidanceOffset * 10) / 10
+          },
+          boundaryIndex: activeBoundaryIdx,
+          boundary: getActiveBoundaryPoints().map(roundPoint).filter(Boolean),
+          trackSpacingM: Math.round(activeTrackSpacingM * 1000) / 1000,
+          vehicle: [vehicleSettings?.profileId, vehicleSettings?.wheelbase, vehicleSettings?.turnRadius],
+          implement: [implementSettings?.profileId, implementSettings?.connectionType, implementSettings?.overallWidth, implementSettings?.hitchToRear],
+          turn: [uTurnSettings?.mode, uTurnSettings?.pattern, uTurnSettings?.direction, uTurnSettings?.nextPass, uTurnSettings?.skipPasses, uTurnSettings?.startDistanceM, uTurnSettings?.turnSpeedKmh, uTurnSettings?.requireBoundary]
+      });
+  };
+
+  const executeUTurnPlan = (plan) => {
+      if (!plan?.feasible || !plan.points?.length) {
+          showNotification(plan?.failReason || 'No feasible turn path', 'warning');
+          return false;
+      }
+      const config = plan.config || getNormalizedTurnConfig();
+      const current = physics.current;
+      const previousTargetSpeed = Number(autoApproachPreviousSpeedRef.current ?? current.targetSpeed) || 0;
+      autoApproachPreviousSpeedRef.current = null;
+      const gearLegs = (plan.segments || [])
+        .filter(segment => Number(segment.endIndex) > Number(segment.startIndex))
+        .reduce((legs, segment) => {
+          const gear = segment.gear || 'FORWARD';
+          const previous = legs[legs.length - 1];
+          if (previous && previous.gear === gear) {
+              previous.endIndex = Math.max(previous.endIndex, Number(segment.endIndex) || previous.endIndex);
+              previous.phases.push(segment.phase || segment.kind || 'PATH');
+              return legs;
+          }
+          legs.push({
+              startIndex: Math.max(0, Number(segment.startIndex) || 0),
+              endIndex: Math.max(1, Number(segment.endIndex) || plan.points.length - 1),
+              gear,
+              phases: [segment.phase || segment.kind || 'PATH']
+          });
+          return legs;
+        }, []);
+      if (!gearLegs.length) {
+          gearLegs.push({ startIndex: 0, endIndex: plan.points.length - 1, gear: 'FORWARD', phases: ['PATH'] });
+      }
+      let totalPathLengthPx = 0;
+      gearLegs.forEach((leg) => {
+          let lengthPx = 0;
+          for (let index = leg.startIndex; index < leg.endIndex; index += 1) {
+              const from = plan.points[index];
+              const to = plan.points[index + 1];
+              if (from && to) lengthPx += Math.hypot(to.x - from.x, to.y - from.y);
+          }
+          leg.lengthPx = lengthPx;
+          totalPathLengthPx += lengthPx;
+      });
+      const turnSpeedKmh = Math.max(1, Number(config.turnSpeedKmh) || 5.5);
+      const expectedDriveSeconds = (totalPathLengthPx / PIXELS_PER_METER) / Math.max(0.28, turnSpeedKmh / 3.6);
+      turnAssistRef.current = {
+          ...plan,
+          points: plan.points.map(point => ({ ...point })),
+          progressIndex: 0,
+          gearLegs,
+          segmentCursor: 0,
+          currentGear: 'FORWARD',
+          awaitingGear: null,
+          driveElapsedSeconds: 0,
+          maxDriveSeconds: Math.max(24, expectedDriveSeconds * 2.4 + 10),
+          safetySignature: getTurnSafetySignature(),
+          stage: 'APPROACH',
+          previousMode: steeringMode,
+          previousTargetSpeed,
+          coverageWasRecording: isRecording,
+          coveragePaused: Boolean(config.pauseCoverage && isRecording),
+          resumeAutosteer: Boolean(config.resumeAutosteer),
+          repeatAuto: plan.mode === 'AUTO',
+          turnSpeedKmh,
+          wheelbaseM: Math.max(1.2, Number(vehicleSettings?.wheelbase) || 2.5),
+          minRadiusM: Math.max(2, Number(plan.minRadiusM) || 0, Number(vehicleSettings?.wheelbase || 2.5) + 0.1, Number(vehicleSettings?.turnRadius) || 6.5)
+      };
+      if (config.pauseCoverage && isRecording) setIsRecording(false);
+      setImplementRaised(Boolean(config.liftAction));
+      setSteeringMode('MANUAL');
+      setTurnAssistActive(true);
+      setUTurnPreview(null);
+      setUTurnStage('APPROACH');
+      setUTurnPanelOpen(false);
+      setAutoUTurnArmed(false);
+      current.targetSpeed = turnSpeedKmh;
+      setManualTargetSpeed(current.targetSpeed);
+      showNotification(`${plan.shape || 'U-turn'} path active / pass ${plan.targetLaneIndex >= 0 ? '+' : ''}${plan.targetLaneIndex}`, 'info');
+      return true;
+  };
+
+  const confirmTurnGear = (gear) => {
+      const activeTurn = turnAssistRef.current;
+      if (!activeTurn || activeTurn.awaitingGear !== gear) return;
+      if (Math.abs(physics.current.speed) > 0.25) {
+          showNotification('Wait until the vehicle is fully stopped', 'warning');
+          return;
+      }
+      activeTurn.currentGear = gear;
+      activeTurn.segmentCursor = activeTurn.pendingSegmentCursor ?? activeTurn.segmentCursor;
+      activeTurn.pendingSegmentCursor = null;
+      activeTurn.awaitingGear = null;
+      physics.current.speed = 0;
+      physics.current.targetSpeed = gear === 'REVERSE'
+          ? -Math.max(1, Number(activeTurn.turnSpeedKmh) || 4)
+          : Math.max(1, Number(activeTurn.turnSpeedKmh) || 4);
+      setManualTargetSpeed(physics.current.targetSpeed);
+      setTurnGearRequest(null);
+      setUTurnStage(gear === 'REVERSE' ? 'REVERSING' : 'TURNING');
+      showNotification(`${gear === 'REVERSE' ? 'Reverse' : 'Forward'} gear confirmed`, 'info');
+  };
+
+  const startPreviewedUTurn = () => {
+      // Rebuild from the live pose. The map continues updating while this panel
+      // is open, so a cached preview is never authoritative at execution time.
+      const plan = chooseUTurnCandidate(uTurnPreview?.direction);
+      setUTurnPreview(plan);
+      if (!plan?.feasible) {
+          showNotification(plan?.failReason || 'No feasible turn path', 'warning');
+          return;
+      }
+      if (plan.mode === 'AUTO') {
+          autoLaneStepRef.current = Math.sign(plan.targetLaneDelta) || 1;
+          autoArmSafetySignatureRef.current = getTurnSafetySignature();
+          autoApproachPreviousSpeedRef.current = null;
+          setAutoUTurnArmed(true);
+          setUTurnStage('ARMED');
+          setUTurnPanelOpen(false);
+          setUTurnPreview(null);
+          showNotification('Auto U-turn armed / approaching headland', 'success');
+          return;
+      }
+      executeUTurnPlan(plan);
+  };
+
+  useEffect(() => {
+      const safetySignature = getTurnSafetySignature();
+      if (autoUTurnArmed
+          && autoArmSafetySignatureRef.current
+          && autoArmSafetySignatureRef.current !== safetySignature) {
+          setAutoUTurnArmed(false);
+          autoLaneStepRef.current = null;
+          autoArmSafetySignatureRef.current = null;
+          if (autoApproachPreviousSpeedRef.current != null) {
+              physics.current.targetSpeed = autoApproachPreviousSpeedRef.current;
+              setManualTargetSpeed(autoApproachPreviousSpeedRef.current);
+          }
+          autoApproachPreviousSpeedRef.current = null;
+          setUTurnStage('IDLE');
+          showNotification('Auto U-turn disarmed / run setup changed', 'warning');
+          return;
+      }
+      const activeTurn = turnAssistRef.current;
+      if (!activeTurn?.safetySignature || activeTurn.safetySignature === safetySignature) return;
+      cancelTurnAssistRef.current?.();
+      physics.current.speed = 0;
+      physics.current.targetSpeed = 0;
+      physics.current.steeringAngle = 0;
+      setManualTargetSpeed(0);
+      setSteeringMode('MANUAL');
+      setAutoUTurnArmed(false);
+      setIsRecording(false);
+      showNotification('U-turn aborted / run setup changed', 'warning');
+  }, [autoUTurnArmed, activeLineId, activeBoundaryIdx, fields, loadedField, boundaryRunOverride, activeTrackSpacingM, effectiveGuidanceOffset, guidanceLine, lineType, pointA, pointB, aPlusPoint, aPlusHeading, curvePoints, pivotCenter, pivotRadius, vehicleSettings?.profileId, vehicleSettings?.wheelbase, vehicleSettings?.turnRadius, implementSettings?.profileId, implementSettings?.connectionType, implementSettings?.overallWidth, implementSettings?.hitchToRear, uTurnSettings]);
+
+  useEffect(() => {
+      if (!setupOverlayOpen || (!turnAssistRef.current && !autoUTurnArmed)) return;
+      if (turnAssistRef.current) cancelTurnAssistRef.current?.();
+      physics.current.speed = 0;
+      physics.current.targetSpeed = 0;
+      physics.current.steeringAngle = 0;
+      setManualTargetSpeed(0);
+      setSteeringMode('MANUAL');
+      setAutoUTurnArmed(false);
+      autoLaneStepRef.current = null;
+      autoArmSafetySignatureRef.current = null;
+      autoApproachPreviousSpeedRef.current = null;
+      setUTurnStage('IDLE');
+      setIsRecording(false);
+      showNotification('U-turn cancelled before opening setup', 'warning');
+  }, [setupOverlayOpen, autoUTurnArmed]);
+
+  const tramlineSupported = ['STRAIGHT_AB', 'A_PLUS', 'CURVE'].includes(guidanceLine || activeLineRecord?.type || lineType);
+  const updateActiveTramline = (patch) => {
+      if (!activeLineRecord) {
+          showNotification('Save and load a guidance line first', 'warning');
+          return;
+      }
+      if (turnAssistRef.current) {
+          showNotification('Finish or cancel the active turn before changing Tramline', 'warning');
+          return;
+      }
+      const enabling = patch.enabled === true && !activeTramline.enabled;
+      if (enabling && !isMultiLineMode) {
+          actions.setIsMultiLineMode(true);
+          showNotification('Parallel passes enabled for Tramline routing', 'info');
+      }
+      if (enabling && autoUTurnArmed) {
+          setAutoUTurnArmed(false);
+          autoLaneStepRef.current = null;
+          autoArmSafetySignatureRef.current = null;
+          if (autoApproachPreviousSpeedRef.current != null) {
+              physics.current.targetSpeed = autoApproachPreviousSpeedRef.current;
+              setManualTargetSpeed(autoApproachPreviousSpeedRef.current);
+          }
+          autoApproachPreviousSpeedRef.current = null;
+          setUTurnStage('IDLE');
+          showNotification('Auto U-turn disarmed because Tramline routing is active', 'info');
+      }
+      updateSelectedFieldLines(lines => lines.map(line => line.id === activeLineRecord.id
+          ? {
+              ...line,
+              isMulti: enabling ? true : line.isMulti,
+              trackSpacingM: Number(line.trackSpacingM) || activeTrackSpacingM,
+              sourceImplementProfileId: line.sourceImplementProfileId || implementSettings.profileId || null,
+              tramline: { ...activeTramline, ...patch },
+              updatedAt: new Date().toISOString()
+          }
+          : line));
+  };
+  const setCurrentPassAsTramline = () => {
+      if (!tramlineSupported || !activeLineRecord) {
+          showNotification('Tramline supports saved AB, A+ and Curve lines', 'warning');
+          return;
+      }
+      const passIndex = activeLaneRef.current ?? manualLaneRef.current ?? livePassIndex;
+      updateActiveTramline({ enabled: true, anchorPassIndex: passIndex });
+      showNotification(`Pass ${passIndex >= 0 ? '+' : ''}${passIndex} set as Tramline start`, 'success');
+  };
+  const openTramlinePanel = () => {
+      setUTurnPanelTab('TRAMLINE');
+      setUTurnPanelOpen(true);
+      setRtkQualityOpen(false);
+      setEventHistoryOpen(false);
+      setProductivityOpen(false);
+  };
+
+  useEffect(() => {
+      if (!autoUTurnArmed || turnAssistRef.current || !window.TurnGeometry) return;
+      const boundaryPoints = getActiveBoundaryPoints();
+      if (boundaryPoints.length < 3 || steeringMode !== 'AUTO' || !rtkGuidanceReady) return;
+
+      const forward = {
+          x: Math.sin(heading * Math.PI / 180),
+          y: -Math.cos(heading * Math.PI / 180)
+      };
+      const cross2d = (ax, ay, bx, by) => ax * by - ay * bx;
+      let forwardBoundaryDistancePx = Infinity;
+      for (let index = 0; index < boundaryPoints.length; index += 1) {
+          const a = boundaryPoints[index];
+          const b = boundaryPoints[(index + 1) % boundaryPoints.length];
+          const sx = b.x - a.x;
+          const sy = b.y - a.y;
+          const qx = a.x - worldPos.x;
+          const qy = a.y - worldPos.y;
+          const denominator = cross2d(forward.x, forward.y, sx, sy);
+          if (Math.abs(denominator) < 1e-6) continue;
+          const rayDistance = cross2d(qx, qy, sx, sy) / denominator;
+          const segmentRatio = cross2d(qx, qy, forward.x, forward.y) / denominator;
+          if (rayDistance >= 0 && segmentRatio >= 0 && segmentRatio <= 1) {
+              forwardBoundaryDistancePx = Math.min(forwardBoundaryDistancePx, rayDistance);
+          }
+      }
+      if (!Number.isFinite(forwardBoundaryDistancePx)) return;
+
+      // Keep advancing lane indices in one field-wide direction. Physical left /
+      // right must mirror at the opposite headland because travel heading flips.
+      const desiredLaneStep = Math.sign(autoLaneStepRef.current || 1) || 1;
+      const physicalDirection = desiredLaneStep * liveGuidanceDirectionFactor;
+      const requestedDirection = physicalDirection < 0 ? 'left' : 'right';
+      const clearancePlan = chooseUTurnCandidate(requestedDirection, {
+          mode: 'AUTO',
+          ignoreBoundaryValidation: true,
+          ignoreSpeedValidation: true
+      });
+      const normalizedTurnConfig = getNormalizedTurnConfig({ mode: 'AUTO' });
+      const configuredTriggerPx = normalizedTurnConfig.startDistanceM * PIXELS_PER_METER;
+      const triggerDistancePx = Math.max(
+          configuredTriggerPx,
+          (clearancePlan.feasible ? Number(clearancePlan.requiredDepthPx) || 0 : 0) + 0.75 * PIXELS_PER_METER
+      );
+      const approachDistancePx = triggerDistancePx + 6 * PIXELS_PER_METER;
+      if (forwardBoundaryDistancePx <= approachDistancePx) {
+          const safeApproachSpeed = Math.min(10, Math.max(2, normalizedTurnConfig.turnSpeedKmh));
+          if (physics.current.targetSpeed > safeApproachSpeed) {
+              if (autoApproachPreviousSpeedRef.current == null) {
+                  autoApproachPreviousSpeedRef.current = physics.current.targetSpeed;
+              }
+              physics.current.targetSpeed = safeApproachSpeed;
+              setManualTargetSpeed(safeApproachSpeed);
+          }
+      }
+      if (forwardBoundaryDistancePx > triggerDistancePx) return;
+
+      const stopFailedAutoTurn = (reason) => {
+          physics.current.speed = 0;
+          physics.current.targetSpeed = 0;
+          physics.current.steeringAngle = 0;
+          setSpeed(0);
+          setManualTargetSpeed(0);
+          setSteeringAngle(0);
+          setSteeringMode('MANUAL');
+          setAutoUTurnArmed(false);
+          autoLaneStepRef.current = null;
+          autoArmSafetySignatureRef.current = null;
+          autoApproachPreviousSpeedRef.current = null;
+          setUTurnStage('BLOCKED');
+          showNotification(`Auto U-turn stopped / ${reason}`, 'warning');
+      };
+      if (!clearancePlan.feasible) {
+          stopFailedAutoTurn(clearancePlan.failReason || 'no valid path');
+          return;
+      }
+      if (Math.abs(physics.current.speed) > 10) {
+          stopFailedAutoTurn('speed remained above 10 km/h');
+          return;
+      }
+
+      const candidate = chooseUTurnCandidate(requestedDirection, { mode: 'AUTO' });
+      if (!candidate.feasible) {
+          stopFailedAutoTurn(candidate.failReason || 'boundary clearance unavailable');
+          return;
+      }
+      executeUTurnPlan(candidate);
+  }, [autoUTurnArmed, worldPos.x, worldPos.y, heading, steeringMode, rtkGuidanceReady, activeBoundaryIdx, activeLineId, activeTrackSpacingM, liveGuidanceDirectionFactor]);
+
   const currentRtkTelemetry = {
       ...(rtkTelemetry || {}),
       fixType: rtkStatus,
-      ageSec: rtkStatus === 'FIX' ? 1.2 : 6.8,
-      latencyMs: rtkStatus === 'FIX' ? 48 : 180,
-      hdop: rtkStatus === 'FIX' ? 0.7 : 1.8,
-      pdop: rtkStatus === 'FIX' ? 1.1 : 2.7,
+      ageSec: toOptionalRtkMetric(rtkTelemetry?.ageSec),
+      latencyMs: toOptionalRtkMetric(rtkTelemetry?.latencyMs),
+      hdop: toOptionalRtkMetric(rtkTelemetry?.hdop),
+      pdop: toOptionalRtkMetric(rtkTelemetry?.pdop),
       baseSource: rtkSettings?.baseId || rtkTelemetry?.baseSource || 'BASE-01'
   };
   const currentGnssTelemetry = {
       ...(gnssTelemetry || {}),
-      roverVisibleSats: 38,
-      roverUsedSats: satelliteCount,
-      baseVisibleSats: 4,
+      roverVisibleSats: toOptionalRtkMetric(gnssTelemetry?.roverVisibleSats),
+      roverUsedSats: toOptionalRtkMetric(satelliteCount),
+      baseVisibleSats: toOptionalRtkMetric(gnssTelemetry?.baseVisibleSats),
       constellations: gnssTelemetry?.constellations || 'GPS / GLO / GAL / BDS',
       roverStatus: rtkStatus,
-      horizontalAccuracyCm: rtkStatus === 'FIX' ? 2.2 : 18.0,
-      verticalAccuracyCm: rtkStatus === 'FIX' ? 3.1 : 28.0,
+      horizontalAccuracyCm: toOptionalRtkMetric(gnssTelemetry?.horizontalAccuracyCm),
+      verticalAccuracyCm: toOptionalRtkMetric(gnssTelemetry?.verticalAccuracyCm),
       correctionAgeSec: currentRtkTelemetry.ageSec,
-      baselineKm: rtkSettings?.correctionSource === 'NTRIP' ? 12.4 : 0.8,
+      baselineKm: toOptionalRtkMetric(gnssTelemetry?.baselineKm),
       antenna: gnssTelemetry?.antenna || 'Rover roof'
   };
   const getGuidanceModeLabel = () => (activeLineRecord?.type || guidanceLine || lineType || 'NO_LINE').replace(/_/g, ' ');
@@ -2336,7 +3379,7 @@ const App = () => {
       const abs = Math.abs(crossTrackError);
       const direction = getXteDirection();
       const barTone = abs >= 10 ? 'bg-red-500' : abs >= 4 ? 'bg-yellow-500' : 'bg-blue-500';
-      const offsetCm = effectiveGuidanceOffset / PIXELS_PER_METER * 100 * liveGuidanceDirectionFactor;
+      const offsetCm = effectiveGuidanceOffset / PIXELS_PER_METER * 100 * liveGuidanceDisplayFactor;
       const offsetValue = `${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(0)}cm`;
       const passValue = `${currentRunKpi.passIndex >= 0 ? '+' : ''}${currentRunKpi.passIndex}`;
       const errorTextTone = abs >= 10 ? 'text-red-500' : abs >= 4 ? 'text-yellow-600 dark:text-yellow-400' : t.textMain;
@@ -2427,41 +3470,114 @@ const App = () => {
       return `${theme === 'dark' ? 'bg-slate-900 text-slate-200 border-slate-700' : 'bg-white text-slate-900 border-gray-300'}`;
   };
 
-  const getRtkQualityTone = () => {
-      if (currentRtkTelemetry.fixType === 'FIX' && currentRtkTelemetry.ageSec <= 2 && currentRtkTelemetry.hdop <= 1.2) return 'bg-green-600 text-white border-green-400';
-      if (currentRtkTelemetry.fixType === 'FIX' || currentRtkTelemetry.fixType === 'FLOAT') return 'bg-yellow-500 text-black border-yellow-300';
-      return 'bg-red-600 text-white border-red-400';
+  const getRtkOperationalState = () => {
+      const { solution, ageSec, hdop, accuracyCm, metricsKnown, stale, guidanceGrade, correctionLinkOk } = rtkSafetyState;
+      const latencyMs = toOptionalRtkMetric(currentRtkTelemetry.latencyMs);
+      const pdop = toOptionalRtkMetric(currentRtkTelemetry.pdop);
+      const sourceName = rtkSettings?.correctionSource === 'NTRIP'
+          ? 'NTRIP'
+          : rtkSettings?.correctionSource === 'Base Station'
+              ? 'RADIO BASE'
+              : String(rtkSettings?.correctionSource || currentRtkTelemetry.baseSource || 'CORRECTION').toUpperCase();
+      const tones = {
+          green: {
+              accent: 'border-l-green-500',
+              iconTone: theme === 'dark' ? 'bg-green-500/15 text-green-300' : 'bg-green-50 text-green-700',
+              text: theme === 'dark' ? 'text-green-300' : 'text-green-700'
+          },
+          amber: {
+              accent: 'border-l-amber-500',
+              iconTone: theme === 'dark' ? 'bg-amber-500/15 text-amber-300' : 'bg-amber-50 text-amber-700',
+              text: theme === 'dark' ? 'text-amber-300' : 'text-amber-700'
+          },
+          orange: {
+              accent: 'border-l-orange-500',
+              iconTone: theme === 'dark' ? 'bg-orange-500/15 text-orange-300' : 'bg-orange-50 text-orange-700',
+              text: theme === 'dark' ? 'text-orange-300' : 'text-orange-700'
+          },
+          red: {
+              accent: 'border-l-red-500',
+              iconTone: theme === 'dark' ? 'bg-red-500/15 text-red-300' : 'bg-red-50 text-red-700',
+              text: theme === 'dark' ? 'text-red-300' : 'text-red-700'
+          }
+      };
+
+      let presentation;
+      if (guidanceGrade) {
+          presentation = { label: 'RTK FIX', detail: 'Guidance-grade', badge: 'READY', tone: 'green', icon: CheckCircle2 };
+      } else if (solution === 'FIX') {
+          presentation = { label: 'RTK FIX', detail: !metricsKnown ? 'Telemetry unavailable' : stale ? 'Correction stale' : 'Accuracy degraded', badge: 'CHECK', tone: 'amber', icon: AlertTriangle };
+      } else if (solution === 'FLOAT') {
+          presentation = { label: 'RTK FLOAT', detail: stale ? 'Correction stale' : 'Solution converging', badge: 'WAIT', tone: 'amber', icon: Clock };
+      } else if (solution === 'DIFF') {
+          presentation = { label: 'DGPS', detail: 'Reduced precision', badge: 'LIMITED', tone: 'orange', icon: Radio };
+      } else {
+          presentation = { label: 'NO RTK', detail: 'No correction solution', badge: 'BLOCKED', tone: 'red', icon: AlertTriangle };
+      }
+
+      return {
+          ...presentation,
+          ...tones[presentation.tone],
+          solution,
+          sourceName,
+          ageSec,
+          hdop,
+          accuracyCm,
+          latencyMs,
+          pdop,
+          metricsKnown,
+          stale,
+          guidanceGrade,
+          correctionLinkOk,
+          accuracyLabel: formatOptionalRtkMetric(accuracyCm, 1, ' cm'),
+          ageLabel: formatOptionalRtkMetric(ageSec, 1, ' s'),
+          hdopLabel: formatOptionalRtkMetric(hdop, 1),
+          latencyLabel: formatOptionalRtkMetric(latencyMs, 0, ' ms'),
+          pdopLabel: formatOptionalRtkMetric(pdop, 1)
+      };
   };
 
-  const renderRunSafetyCluster = () => (
+  const renderRunSafetyCluster = () => {
+      const rtkState = getRtkOperationalState();
+      const RtkStateIcon = rtkState.icon;
+      const usedSatelliteLabel = currentGnssTelemetry.roverUsedSats === null ? '--' : Math.round(currentGnssTelemetry.roverUsedSats);
+      return (
       <div className="min-w-0 flex items-center justify-end gap-2">
           <button
               type="button"
-              aria-label={`Open RTK quality, ${currentRtkTelemetry.fixType}, rover ${currentGnssTelemetry.roverUsedSats} used of ${currentGnssTelemetry.roverVisibleSats} visible satellites`}
-              onClick={() => { setRtkQualityOpen(prev => !prev); setEventHistoryOpen(false); setProductivityOpen(false); }}
+              aria-label={`Open GNSS status, ${rtkState.label}, horizontal accuracy ${rtkState.accuracyCm === null ? 'unknown' : `${rtkState.accuracyCm.toFixed(1)} centimeters`}, correction age ${rtkState.ageSec === null ? 'unknown' : `${rtkState.ageSec.toFixed(1)} seconds`}`}
+              aria-expanded={rtkQualityOpen}
+              aria-controls="rtk-quality-panel"
+              onClick={() => { setRtkQualityOpen(prev => !prev); setUTurnPanelOpen(false); setEventHistoryOpen(false); setProductivityOpen(false); }}
               disabled={isRecordingBoundary}
-              className={`h-12 min-w-[148px] xl:min-w-[162px] px-3 rounded-xl border shadow-sm text-left ${getRtkQualityTone()} focus:outline-none focus:ring-2 focus:ring-blue-500 flex flex-col justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed`}
+              className={`h-12 min-w-[174px] xl:min-w-[188px] rounded-xl border border-l-4 px-2.5 shadow-sm text-left ${rtkState.accent} ${theme === 'dark' ? 'bg-slate-900 border-y-slate-700 border-r-slate-700 text-slate-100' : 'bg-white border-y-slate-300 border-r-slate-300 text-slate-900'} focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed`}
           >
-              <div className="text-[10px] uppercase font-black opacity-80 leading-none">GNSS / RTK</div>
-              <div className="flex items-center gap-1.5 min-w-0">
-                  <Globe className="w-3.5 h-3.5" />
-                  <span className="text-sm font-black">{currentRtkTelemetry.fixType}</span>
-                  <span className="text-sm font-black opacity-90">{currentGnssTelemetry.roverUsedSats}/{currentGnssTelemetry.roverVisibleSats} SAT</span>
+              <div className="flex min-w-0 items-center justify-between gap-2 leading-none">
+                  <span className="min-w-0 flex items-center gap-1.5">
+                      <RtkStateIcon className={`h-3.5 w-3.5 shrink-0 ${rtkState.text}`} />
+                      <span className={`truncate text-[11px] font-black ${rtkState.text}`}>{rtkState.label}</span>
+                  </span>
+                  <span className={`shrink-0 text-[11px] font-black tabular-nums ${t.textMain}`}>{rtkState.accuracyLabel}</span>
+              </div>
+              <div className={`mt-1 flex min-w-0 items-center justify-between gap-2 text-[8px] font-bold uppercase leading-none ${t.textSub}`}>
+                  <span className="truncate">{rtkState.sourceName} · age {rtkState.ageSec === null ? '--' : `${rtkState.ageSec.toFixed(1)}s`}</span>
+                  <span className="shrink-0">{usedSatelliteLabel} used</span>
               </div>
           </button>
 
           <button
               type="button"
-              aria-label={`${activeAlarms.length} active alarms, open event history`}
+              aria-label={`${activeAlarms.length} active alarms${highestPriorityAlarm ? `, highest severity ${highestPriorityAlarm.severity}` : ''}, open event history`}
               onClick={() => { setEventHistoryOpen(prev => !prev); setRtkQualityOpen(false); setProductivityOpen(false); }}
               disabled={isRecordingBoundary}
-              className={`h-12 min-w-[58px] px-3 rounded-xl border ${activeAlarms.length > 0 ? getSeverityTone(activeAlarms[0].severity) : `${theme === 'dark' ? 'bg-slate-900 border-slate-700 text-slate-300' : 'bg-white border-gray-300 text-slate-700'}`} flex flex-col items-center justify-center shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed`}
+              className={`h-12 min-w-[58px] px-3 rounded-xl border ${highestPriorityAlarm ? getSeverityTone(highestPriorityAlarm.severity) : `${theme === 'dark' ? 'bg-slate-900 border-slate-700 text-slate-300' : 'bg-white border-gray-300 text-slate-700'}`} flex flex-col items-center justify-center shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed`}
           >
               <AlertTriangle className="w-4 h-4" />
               <span className="text-xs font-black">{activeAlarms.length}</span>
           </button>
       </div>
-  );
+      );
+  };
 
   const renderCriticalAlarmBanner = () => {
       const recoveryNotice = !criticalAlarm && currentRunStatus.overrideDetected ? {
@@ -2492,38 +3608,68 @@ const App = () => {
 
   const renderRtkQualityPanel = () => {
       if (!rtkQualityOpen) return null;
-      const stale = currentRtkTelemetry.ageSec > 5;
+      const rtkState = getRtkOperationalState();
+      const RtkStateIcon = rtkState.icon;
+      const correctionOnline = rtkState.correctionLinkOk;
+      const usedSatellites = currentGnssTelemetry.roverUsedSats === null ? '--' : Math.round(currentGnssTelemetry.roverUsedSats);
+      const visibleSatellites = currentGnssTelemetry.roverVisibleSats === null ? '--' : Math.round(currentGnssTelemetry.roverVisibleSats);
       return (
-          <div className={`absolute right-4 top-[86px] z-[45] w-[320px] rounded-2xl border ${t.borderCard} ${t.bgCard} shadow-2xl p-4`}>
-              <div className="flex items-center justify-between gap-3 mb-3">
-                  <div>
-                      <div className={`text-xs uppercase font-black ${t.textSub}`}>RTK Quality</div>
-                      <div className={`text-xl font-black ${stale ? 'text-red-500' : currentRtkTelemetry.fixType === 'FIX' ? 'text-green-500' : 'text-yellow-500'}`}>{currentRtkTelemetry.fixType}</div>
+          <div id="rtk-quality-panel" role="dialog" aria-modal="false" aria-labelledby="rtk-quality-title" className={`absolute right-4 top-[82px] z-[45] w-[336px] rounded-2xl border ${t.borderCard} ${t.bgCard} shadow-2xl p-3`}>
+              <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 flex items-center gap-2.5">
+                      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${rtkState.iconTone}`}>
+                          <RtkStateIcon className="h-[18px] w-[18px]" />
+                      </span>
+                      <div className="min-w-0">
+                          <div id="rtk-quality-title" className={`text-[9px] uppercase font-black tracking-[0.08em] ${t.textSub}`}>GNSS position</div>
+                          <div className={`truncate text-base font-black leading-tight ${rtkState.text}`}>{rtkState.label}</div>
+                      </div>
                   </div>
-                  <button aria-label="Close RTK quality panel" onClick={() => setRtkQualityOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain}`}>
+                  <button aria-label="Close RTK quality panel" onClick={() => setRtkQualityOpen(false)} className={`h-11 w-11 rounded-lg border ${t.borderCard} ${t.textMain} flex items-center justify-center`}>
                       <X className="w-4 h-4" />
                   </button>
               </div>
-              <div className="grid grid-cols-2 gap-2">
+
+              <div className={`mt-3 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/80' : 'bg-slate-50'} p-2.5`}>
+                  <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                          <div className={`text-[9px] font-black uppercase ${t.textSub}`}>Operational state</div>
+                          <div className={`mt-0.5 truncate text-xs font-black ${t.textMain}`}>{rtkState.detail}</div>
+                      </div>
+                      <span className={`shrink-0 rounded-md px-2 py-1 text-[8px] font-black ${rtkState.iconTone}`}>{rtkState.badge}</span>
+                  </div>
+              </div>
+
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
                   {[
-                      ['Age', `${currentRtkTelemetry.ageSec.toFixed(1)} s`, stale ? 'text-red-500' : t.textMain],
-                      ['Latency', `${currentRtkTelemetry.latencyMs} ms`, currentRtkTelemetry.latencyMs > 150 ? 'text-yellow-500' : t.textMain],
-                      ['HDOP', currentRtkTelemetry.hdop.toFixed(1), currentRtkTelemetry.hdop > 1.5 ? 'text-yellow-500' : t.textMain],
-                      ['PDOP', currentRtkTelemetry.pdop.toFixed(1), currentRtkTelemetry.pdop > 2.5 ? 'text-yellow-500' : t.textMain],
-                      ['Rover', `${currentGnssTelemetry.roverUsedSats}/${currentGnssTelemetry.roverVisibleSats}`, t.textMain],
-                      ['Base Sats', currentGnssTelemetry.baseVisibleSats, t.textMain],
-                      ['H Acc', `${currentGnssTelemetry.horizontalAccuracyCm.toFixed(1)} cm`, currentGnssTelemetry.horizontalAccuracyCm > 5 ? 'text-yellow-500' : t.textMain],
-                      ['Base', currentRtkTelemetry.baseSource, t.textMain]
+                      ['H accuracy', rtkState.accuracyLabel, rtkState.accuracyCm !== null && rtkState.accuracyCm <= 5 ? 'text-green-500' : 'text-amber-500'],
+                      ['Correction age', rtkState.ageLabel, rtkState.stale ? 'text-red-500' : t.textMain],
+                      ['Satellites used', `${usedSatellites} / ${visibleSatellites}`, t.textMain],
+                      ['HDOP', rtkState.hdopLabel, rtkState.hdop !== null && rtkState.hdop > 1.5 ? 'text-amber-500' : t.textMain]
                   ].map(([label, value, tone]) => (
-                      <div key={label} className={`rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-slate-50'} p-3 min-w-0`}>
-                          <div className={`text-[10px] uppercase font-black ${t.textSub}`}>{label}</div>
-                          <div className={`text-sm font-black truncate ${tone}`}>{value}</div>
+                      <div key={label} className={`min-w-0 rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'} px-2.5 py-2`}>
+                          <div className={`text-[8px] uppercase font-black ${t.textSub}`}>{label}</div>
+                          <div className={`mt-0.5 truncate text-sm font-black tabular-nums ${tone}`}>{value}</div>
                       </div>
                   ))}
               </div>
-              {stale && (
-                  <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 text-red-500 px-3 py-2 text-sm font-bold">
-                      Correction data stale. Check base/NTRIP link.
+
+              <div className={`mt-2 rounded-xl border ${t.borderCard} px-2.5 py-2 ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-slate-50'}`}>
+                  <div className="flex items-center justify-between gap-3">
+                      <span className="min-w-0 flex items-center gap-2">
+                          <Radio className={`h-4 w-4 shrink-0 ${correctionOnline ? 'text-green-500' : 'text-red-500'}`} />
+                          <span className="min-w-0">
+                              <span className={`block truncate text-[10px] font-black ${t.textMain}`}>{rtkState.sourceName} · {currentRtkTelemetry.baseSource || '--'}</span>
+                              <span className={`block truncate text-[8px] font-bold ${t.textSub}`}>{rtkState.latencyLabel} latency · PDOP {rtkState.pdopLabel}</span>
+                          </span>
+                      </span>
+                      <span className={`shrink-0 text-[8px] font-black ${correctionOnline ? 'text-green-500' : 'text-red-500'}`}>{correctionOnline ? 'ONLINE' : 'CHECK LINK'}</span>
+                  </div>
+              </div>
+
+              {!rtkState.guidanceGrade && (
+                  <div className={`mt-2 rounded-lg border px-2.5 py-2 text-[10px] font-bold ${rtkState.tone === 'red' ? 'border-red-500/40 bg-red-500/10 text-red-500' : 'border-amber-500/40 bg-amber-500/10 text-amber-600'}`}>
+                      {rtkState.stale ? 'Correction data is stale. Check the base or NTRIP link.' : 'Wait for a stable RTK FIX before precision steering.'}
                   </div>
               )}
               <button
@@ -2532,7 +3678,7 @@ const App = () => {
                       setSettingsTab('rtk');
                       setSettingsOpen(true);
                   }}
-                  className="mt-3 w-full h-11 rounded-xl bg-blue-600 text-white font-black hover:bg-blue-500 active:scale-[0.99]"
+                  className="mt-2 w-full h-11 rounded-xl bg-blue-600 text-white text-[11px] font-black hover:bg-blue-500 active:scale-[0.99]"
               >
                   Open RTK / GNSS Setup
               </button>
@@ -2542,125 +3688,157 @@ const App = () => {
 
   const renderUTurnQuickPanel = () => {
       if (!uTurnPanelOpen || settingsOpen || fieldManagerOpen || linesPanelOpen) return null;
-      const turnConfig = {
-          pattern: 'Smart U-Turn',
-          direction: 'Auto',
-          nextPass: 'Adjacent',
-          skipPasses: 0,
-          turnSpeedKmh: 5.5,
-          liftAction: true,
-          resumeAutosteer: true,
-          ...uTurnSettings
+      const turnConfig = getNormalizedTurnConfig();
+      const plan = uTurnPreview || chooseUTurnCandidate();
+      const currentPass = activeLaneRef.current ?? manualLaneRef.current ?? livePassIndex;
+      const currentIsTramline = isTramlinePass(currentPass);
+      const requiredDistanceM = plan?.requiredDepthPx
+          ? plan.requiredDepthPx / PIXELS_PER_METER
+          : 0;
+      const panelButton = (active) => active
+          ? 'border-blue-500 bg-blue-600 text-white shadow-sm'
+          : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'} ${t.textMain} hover:bg-blue-500/5`;
+      const changeTurnSetting = (key, value, requestedDirection) => {
+          handleUTurnSettingChange(key, value);
+          refreshUTurnPreview({ [key]: value }, requestedDirection);
       };
-      const optionButton = (group, value, label = value) => {
-          const active = turnConfig[group] === value;
-          return (
-              <button
-                  key={`${group}-${value}`}
-                  onClick={() => handleUTurnSettingChange(group, value)}
-                  className={`h-10 rounded-lg border text-xs font-black ${active ? 'border-blue-500 bg-blue-600 text-white' : `${t.borderCard} ${t.textMain} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}`}
-              >
-                  {label}
-              </button>
-          );
-      };
-      const passButton = (value, skip, label) => {
-          const active = turnConfig.nextPass === value && Number(turnConfig.skipPasses || 0) === skip;
-          return (
-              <button
-                  key={`${value}-${skip}`}
-                  onClick={() => {
-                      handleUTurnSettingChange('nextPass', value);
-                      handleUTurnSettingChange('skipPasses', skip);
-                  }}
-                  className={`h-10 rounded-lg border text-xs font-black ${active ? 'border-blue-500 bg-blue-600 text-white' : `${t.borderCard} ${t.textMain} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}`}
-              >
-                  {label}
-              </button>
-          );
-      };
-      const togglePill = (key, label) => {
-          const active = Boolean(turnConfig[key]);
-          return (
-              <button
-                  key={key}
-                  onClick={() => handleUTurnSettingChange(key, !active)}
-                  className={`h-9 px-3 rounded-lg border text-xs font-black ${active ? 'border-green-500 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`}`}
-              >
-                  {label}
-              </button>
-          );
+      const closePanel = () => {
+          setUTurnPanelOpen(false);
+          setUTurnPreview(null);
+          if (!turnAssistActive && !autoUTurnArmed) setUTurnStage('IDLE');
       };
 
       return (
-          <div className={`absolute right-4 top-[86px] z-[45] w-[340px] rounded-2xl border ${t.borderCard} ${t.bgCard} shadow-2xl p-4`}>
-              <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex items-center gap-3">
-                      <div className={`shrink-0 w-10 h-10 rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-blue-50'} flex items-center justify-center`}>
-                          <CornerUpLeft className="w-5 h-5 text-blue-500" />
+          <div data-uturn-panel className={`absolute right-3 top-[96px] bottom-[102px] z-[45] w-[360px] max-w-[calc(100%-24px)] rounded-2xl border ${t.borderCard} ${t.bgCard} shadow-2xl overflow-hidden flex flex-col`}>
+              <div className={`shrink-0 h-[54px] px-3 border-b ${t.divider} flex items-center justify-between gap-3`}>
+                  <div className="min-w-0 flex items-center gap-2.5">
+                      <div className={`shrink-0 w-9 h-9 rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-blue-50'} flex items-center justify-center`}>
+                          {uTurnPanelTab === 'TRAMLINE'
+                              ? <AlignJustify className="w-[18px] h-[18px] text-yellow-500" />
+                              : <CornerUpLeft className="w-[18px] h-[18px] text-blue-500" />}
                       </div>
                       <div className="min-w-0">
-                          <div className={`text-xs uppercase font-black ${t.textSub}`}>Turn Plan</div>
-                          <div className={`text-lg font-black truncate ${t.textMain}`}>{turnConfig.pattern}</div>
+                          <div className={`text-[9px] uppercase tracking-[0.08em] font-black ${t.textSub}`}>Run assistant</div>
+                          <div className={`text-sm font-black truncate ${t.textMain}`}>{uTurnPanelTab === 'TRAMLINE' ? 'Tramline pattern' : 'Headland turn'}</div>
                       </div>
                   </div>
-                  <button aria-label="Close turn plan" onClick={() => setUTurnPanelOpen(false)} className={`p-2 rounded-lg border ${t.borderCard} ${t.textMain}`}>
+                  <button aria-label="Close run assistant" onClick={closePanel} className={`w-9 h-9 rounded-lg border ${t.borderCard} ${t.textMain} flex items-center justify-center`}>
                       <X className="w-4 h-4" />
                   </button>
               </div>
 
-              <div className="mt-4 space-y-3">
-                  <div>
-                      <div className={`mb-1.5 text-[10px] uppercase font-black ${t.textSub}`}>Pattern</div>
-                      <div className="grid grid-cols-3 gap-2">
-                          {optionButton('pattern', 'Smart U-Turn', 'Smart')}
-                          {optionButton('pattern', 'Basic Omega', 'Omega')}
-                          {optionButton('pattern', 'Fish Tail', 'Fish Tail')}
-                      </div>
-                  </div>
-                  <div>
-                      <div className={`mb-1.5 text-[10px] uppercase font-black ${t.textSub}`}>Direction</div>
-                      <div className="grid grid-cols-3 gap-2">
-                          {optionButton('direction', 'Auto')}
-                          {optionButton('direction', 'Left')}
-                          {optionButton('direction', 'Right')}
-                      </div>
-                  </div>
-                  <div>
-                      <div className={`mb-1.5 text-[10px] uppercase font-black ${t.textSub}`}>Next Pass</div>
-                      <div className="grid grid-cols-3 gap-2">
-                          {passButton('Adjacent', 0, '+1')}
-                          {passButton('Skip', 1, 'Skip 1')}
-                          {passButton('Skip', 2, 'Skip 2')}
-                      </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                      {togglePill('liftAction', 'Lift')}
-                      {togglePill('resumeAutosteer', 'Resume Auto')}
-                  </div>
+              <div className={`shrink-0 grid grid-cols-2 gap-1 p-1.5 border-b ${t.divider}`}>
+                  <button onClick={() => { setUTurnPanelTab('TURN'); refreshUTurnPreview(); }} className={`h-8 rounded-lg text-[10px] font-black ${uTurnPanelTab === 'TURN' ? 'bg-blue-600 text-white' : t.textSub}`}>U-TURN</button>
+                  <button onClick={() => setUTurnPanelTab('TRAMLINE')} className={`h-8 rounded-lg text-[10px] font-black ${uTurnPanelTab === 'TRAMLINE' ? 'bg-yellow-500 text-slate-950' : t.textSub}`}>TRAMLINE</button>
               </div>
 
-              <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
-                  <button
-                      onClick={() => {
-                          setUTurnPanelOpen(false);
-                          handleUTurn();
-                      }}
-                      className="h-11 rounded-xl bg-blue-600 text-white font-black hover:bg-blue-500 active:scale-[0.99]"
-                  >
-                      Run Turn
-                  </button>
-                  <button
-                      onClick={() => {
-                          setUTurnPanelOpen(false);
-                          setSettingsTab('uturn');
-                          setSettingsOpen(true);
-                      }}
-                      className={`h-11 px-3 rounded-xl border ${t.borderCard} ${t.textMain} font-black hover:brightness-95`}
-                  >
-                      Setup
-                  </button>
-              </div>
+              {uTurnPanelTab === 'TURN' ? (
+                  <div className="flex-1 min-h-0 p-3 flex flex-col gap-2.5">
+                      <div className="grid grid-cols-2 gap-2">
+                          <button onClick={() => changeTurnSetting('mode', 'ONE_KEY')} className={`h-11 rounded-xl border text-left px-3 ${panelButton(turnConfig.mode === 'ONE_KEY')}`}>
+                              <span className="block text-[10px] font-black">ONE-KEY</span>
+                              <span className="block text-[8px] font-bold opacity-75">Tap left or right</span>
+                          </button>
+                          <button onClick={() => changeTurnSetting('mode', 'AUTO')} className={`h-11 rounded-xl border text-left px-3 ${panelButton(turnConfig.mode === 'AUTO')}`}>
+                              <span className="block text-[10px] font-black">AUTO</span>
+                              <span className="block text-[8px] font-bold opacity-75">Trigger at boundary</span>
+                          </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                          <button onClick={() => changeTurnSetting('pattern', 'AUTO')} className={`h-12 rounded-xl border px-2 flex items-center gap-2 text-left ${panelButton(turnConfig.pattern !== 'FISH_TAIL')}`}>
+                              <CornerUpLeft className="w-4 h-4 shrink-0" />
+                              <span><span className="block text-[10px] font-black">Forward U / Ω</span><span className="block text-[8px] font-bold opacity-70">Shape chosen by radius</span></span>
+                          </button>
+                          <button onClick={() => changeTurnSetting('pattern', 'FISH_TAIL')} className={`h-12 rounded-xl border px-2 flex items-center gap-2 text-left ${panelButton(turnConfig.pattern === 'FISH_TAIL')}`}>
+                              <Spline className="w-4 h-4 shrink-0" />
+                              <span><span className="block text-[10px] font-black">Fish-tail</span><span className="block text-[8px] font-bold opacity-70">Mounted implement only</span></span>
+                          </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                          {[['Left', -1, CornerUpLeft], ['Right', 1, CornerUpRight]].map(([label, direction, Icon]) => {
+                              const active = plan?.direction === direction;
+                              const candidate = buildUTurnCandidate(direction);
+                              return (
+                                  <button key={label} disabled={!candidate.feasible} onClick={() => changeTurnSetting('direction', label, direction)} className={`h-10 rounded-xl border flex items-center justify-center gap-2 text-[10px] font-black disabled:opacity-35 ${panelButton(active)}`}>
+                                      <Icon className="w-4 h-4" /> {label.toUpperCase()}
+                                  </button>
+                              );
+                          })}
+                      </div>
+
+                      <div className={`rounded-xl border px-3 py-2.5 ${plan?.feasible ? 'border-green-500/35 bg-green-500/8' : 'border-red-500/35 bg-red-500/8'}`}>
+                          <div className="flex items-center justify-between gap-2">
+                              <span className={`text-[9px] font-black uppercase ${plan?.feasible ? 'text-green-500' : 'text-red-500'}`}>{plan?.feasible ? 'Path ready' : 'Unavailable'}</span>
+                              <span className={`text-[9px] font-black tabular-nums ${t.textSub}`}>{requiredDistanceM.toFixed(1)} m headland</span>
+                          </div>
+                          <div className={`mt-1 text-[11px] font-black truncate ${t.textMain}`}>
+                              {plan?.feasible
+                                  ? `${plan.shape || 'Turn'} · pass ${plan.targetLaneIndex >= 0 ? '+' : ''}${plan.targetLaneIndex}${activeTramline.enabled ? ` · ${isTramlinePass(plan.targetLaneIndex) ? 'TRAMLINE' : 'WORK'}` : ''}`
+                                  : plan?.failReason || 'No valid turn path'}
+                          </div>
+                          {plan?.openFieldPreview && <div className="mt-1 text-[8px] font-bold text-amber-500">Open-field simulation: add a boundary for automatic safety checks.</div>}
+                      </div>
+
+                      <div className="mt-auto grid grid-cols-[1fr_42px] gap-2">
+                          <button disabled={!plan?.feasible} onClick={startPreviewedUTurn} className="h-11 rounded-xl bg-blue-600 text-white text-[11px] font-black hover:bg-blue-500 disabled:bg-slate-400 disabled:opacity-55">
+                              {turnConfig.mode === 'AUTO' ? 'ARM AUTO U-TURN' : 'START ONE-KEY TURN'}
+                          </button>
+                          <button aria-label="Advanced U-turn settings" onClick={() => { closePanel(); setSettingsTab('uturn'); setSettingsOpen(true); }} className={`h-11 rounded-xl border ${t.borderCard} ${t.textMain} flex items-center justify-center`}>
+                              <Settings className="w-4 h-4" />
+                          </button>
+                      </div>
+                  </div>
+              ) : (
+                  <div className="flex-1 min-h-0 p-3 flex flex-col gap-2.5">
+                      {!tramlineSupported || !activeLineRecord ? (
+                          <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 p-3">
+                              <div className="text-[10px] font-black text-amber-500">SAVED AB, A+ OR CURVE REQUIRED</div>
+                              <div className={`mt-1 text-[9px] font-bold ${t.textSub}`}>F200 Tramline is not available on Pivot or Combination lines.</div>
+                          </div>
+                      ) : (
+                          <>
+                              <div className={`rounded-xl border ${activeTramline.enabled ? 'border-yellow-500/45 bg-yellow-500/10' : t.borderCard} px-3 py-2 flex items-center justify-between gap-3`}>
+                                  <div className="min-w-0">
+                                      <div className={`text-[10px] font-black ${t.textMain}`}>TRAMLINE ROUTING</div>
+                                      <div className={`text-[8px] font-bold ${t.textSub}`}>Blue work / yellow traffic / active pass bold</div>
+                                  </div>
+                                  <button aria-label="Enable Tramline routing" aria-pressed={activeTramline.enabled} onClick={() => updateActiveTramline({ enabled: !activeTramline.enabled })} className={`shrink-0 w-12 h-7 rounded-full p-1 ${activeTramline.enabled ? 'bg-yellow-500' : 'bg-slate-400'}`}>
+                                      <span className={`block w-5 h-5 rounded-full bg-white shadow transform transition-transform ${activeTramline.enabled ? 'translate-x-5' : ''}`} />
+                                  </button>
+                              </div>
+
+                              <div>
+                                  <div className={`mb-1.5 flex items-center justify-between text-[9px] font-black uppercase ${t.textSub}`}><span>Interval</span><span className="text-yellow-500">{activeTrackSpacingM.toFixed(2)} m × {Math.max(2, Number(activeTramline.intervalPasses) || 4)} = {(activeTrackSpacingM * Math.max(2, Number(activeTramline.intervalPasses) || 4)).toFixed(2)} m</span></div>
+                                  <div className="grid grid-cols-5 gap-1.5">
+                                      {[3, 4, 6, 8].map(interval => <button key={interval} onClick={() => updateActiveTramline({ intervalPasses: interval })} className={`h-9 rounded-lg border text-[10px] font-black ${activeTramline.intervalPasses === interval ? 'border-yellow-500 bg-yellow-500 text-slate-950' : `${t.borderCard} ${t.textMain}`}`}>{interval}</button>)}
+                                      <input aria-label="Custom Tramline interval" type="number" min="2" max="50" value={Math.max(2, Number(activeTramline.intervalPasses) || 4)} onChange={(event) => updateActiveTramline({ intervalPasses: Math.max(2, Math.min(50, Math.round(Number(event.target.value) || 2))) })} className={`h-9 min-w-0 rounded-lg border px-1 text-center text-[10px] font-black ${t.borderCard} ${t.bgInput} ${t.textMain}`} />
+                                  </div>
+                              </div>
+
+                              <div className={`h-12 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-slate-50'} flex items-end justify-center gap-4 px-4 pb-2`}>
+                                  {[-3, -2, -1, 0, 1, 2, 3].map(index => {
+                                      const pass = (Number(activeTramline.anchorPassIndex) || 0) + index;
+                                      const tram = isTramlinePass(pass);
+                                      return <span key={pass} className={`w-[2px] rounded-full ${tram ? 'h-8 bg-yellow-400' : 'h-6 bg-blue-400'} ${pass === currentPass ? 'ring-2 ring-white ring-offset-1 ring-offset-slate-700' : ''}`} />;
+                                  })}
+                              </div>
+
+                              <div className="grid grid-cols-3 gap-2">
+                                  <button onClick={() => updateActiveTramline({ anchorPassIndex: (Number(activeTramline.anchorPassIndex) || 0) - 1 })} className={`h-10 rounded-xl border ${t.borderCard} ${t.textMain} text-[9px] font-black`}>SHIFT −1</button>
+                                  <button onClick={setCurrentPassAsTramline} className="h-10 rounded-xl bg-yellow-500 text-slate-950 text-[9px] font-black">SET CURRENT</button>
+                                  <button onClick={() => updateActiveTramline({ anchorPassIndex: (Number(activeTramline.anchorPassIndex) || 0) + 1 })} className={`h-10 rounded-xl border ${t.borderCard} ${t.textMain} text-[9px] font-black`}>SHIFT +1</button>
+                              </div>
+
+                              <div className={`rounded-lg px-2.5 py-2 text-[9px] font-bold ${currentIsTramline ? 'bg-yellow-500/12 text-yellow-500' : theme === 'dark' ? 'bg-blue-500/10 text-blue-300' : 'bg-blue-50 text-blue-700'}`}>
+                                  Pass {currentPass >= 0 ? '+' : ''}{currentPass} · {currentIsTramline ? 'TRAMLINE' : 'WORK'} · routing only / no row shutoff
+                              </div>
+                          </>
+                      )}
+                      <div className={`mt-auto text-[8px] font-bold text-center ${t.textDim}`}>Automatic row shutoff requires live ISOBUS section control.</div>
+                  </div>
+              )}
           </div>
       );
   };
@@ -2805,7 +3983,7 @@ const App = () => {
               </div>
               <div className={`h-[68px] rounded-xl border ${t.borderCard} ${runCardBg} px-3 py-2 min-w-0`}>
                   <div className={`text-[9px] uppercase font-black tracking-wider ${t.textSub}`}>GNSS / Steer</div>
-                  <div className={`text-sm font-black truncate ${rtkStatus === 'FIX' ? 'text-green-500' : 'text-yellow-500'}`}>{rtkStatus} / {steeringMode}</div>
+                  <div className={`text-sm font-black truncate ${rtkGuidanceReady ? 'text-green-500' : 'text-yellow-500'}`}>{rtkStatus} / {steeringMode}</div>
                   <div className={`text-[10px] font-bold ${t.textSub}`}>{satelliteCount} sats / {getDisplayHeading()}&deg; {getCardinalShortDirection(heading)}</div>
               </div>
           </div>
@@ -3206,68 +4384,9 @@ const App = () => {
   );
 
   const getUTurnPathPoints = () => {
-      if (!turnAssistActive && !uTurnPanelOpen) return [];
-
-      const configuredDirection = uTurnSettings?.direction || 'Auto';
-      const direction = turnAssistRef.current?.direction
-          || (configuredDirection === 'Left' ? -1 : configuredDirection === 'Right' ? 1 : (steeringAngle < -1 ? -1 : 1));
-      const turnPattern = (turnAssistRef.current?.pattern || uTurnSettings?.pattern || 'Smart U-Turn').toLowerCase();
-      const radiusMeters = Math.max(4.5, Number(vehicleSettings?.turnRadius || 6.5));
-      const radius = Math.max(150, radiusMeters * PIXELS_PER_METER * 1.9);
-      const laneShift = Math.max(
-          implementSettings.width * PIXELS_PER_METER * Math.max(1, Number(turnAssistRef.current?.skipPasses || uTurnSettings?.skipPasses || 0) + 1),
-          radius * 1.25
-      );
-      const lead = Math.max(220, radius * 1.35);
-      const exitLead = Math.max(96, radius * 0.62);
-      const currentHeading = heading * Math.PI / 180;
-      const forward = { x: Math.sin(currentHeading), y: -Math.cos(currentHeading) };
-      const right = { x: Math.cos(currentHeading), y: Math.sin(currentHeading) };
-
-      const localToWorld = (forwardDistance, lateralDistance) => ({
-          x: worldPos.x + forward.x * forwardDistance + right.x * lateralDistance,
-          y: worldPos.y + forward.y * forwardDistance + right.y * lateralDistance
-      });
-      const cubic = (p0, c1, c2, p1, steps = 28) => Array.from({ length: steps + 1 }, (_, idx) => {
-          const tStep = idx / steps;
-          const inv = 1 - tStep;
-          return {
-              x: (inv ** 3 * p0.x) + (3 * inv ** 2 * tStep * c1.x) + (3 * inv * tStep ** 2 * c2.x) + (tStep ** 3 * p1.x),
-              y: (inv ** 3 * p0.y) + (3 * inv ** 2 * tStep * c1.y) + (3 * inv * tStep ** 2 * c2.y) + (tStep ** 3 * p1.y)
-          };
-      });
-      const append = (target, segment) => {
-          segment.forEach((point, idx) => {
-              if (idx === 0 && target.length) return;
-              target.push(point);
-          });
-      };
-
-      const start = localToWorld(0, 0);
-      const entry = localToWorld(lead, 0);
-      const exit = localToWorld(lead, direction * laneShift);
-      const out = localToWorld(Math.max(34, lead - exitLead), direction * laneShift);
-      const points = [start, entry];
-
-      if (turnPattern.includes('fish')) {
-          const kickOut = localToWorld(lead * 0.82, direction * laneShift * 1.28);
-          const neck = localToWorld(lead * 1.26, direction * laneShift * 0.56);
-          append(points, cubic(entry, localToWorld(lead * 1.02, direction * laneShift * 0.28), localToWorld(lead * 0.94, direction * laneShift * 1.14), kickOut, 20));
-          append(points, cubic(kickOut, localToWorld(lead * 0.48, direction * laneShift * 1.42), localToWorld(lead * 1.38, direction * laneShift * 1.02), neck, 24));
-          append(points, cubic(neck, localToWorld(lead * 1.38, direction * laneShift * 0.12), localToWorld(lead * 0.74, direction * laneShift), out, 24));
-          return points;
-      }
-
-      const crownForward = lead + Math.max(radius * 1.25, laneShift * 0.88);
-      append(points, cubic(
-          entry,
-          localToWorld(crownForward, 0),
-          localToWorld(crownForward, direction * laneShift),
-          exit,
-          42
-      ));
-      points.push(out);
-      return points;
+      if (turnAssistRef.current?.points?.length > 1) return turnAssistRef.current.points;
+      if (uTurnPanelOpen && uTurnPreview?.points?.length > 1) return uTurnPreview.points;
+      return [];
   };
 
   const renderProjected3DPath = (key, points, stroke, strokeWidth = 2, options = {}) => {
@@ -3810,7 +4929,15 @@ const App = () => {
       return <g key="coverage-layer-3d" data-coverage-layer="3d">{segmentNodes}</g>;
   };
 
-  const getGuidanceLaneVisual = (isActive, laneDistance = 0) => {
+  const getGuidanceLaneVisual = (isActive, laneDistance = 0, passIndex = null) => {
+      const tramline = passIndex !== null && isTramlinePass(passIndex);
+      if (tramline) {
+          return {
+              stroke: theme === 'dark' ? '#fde047' : '#eab308',
+              width: isActive ? 4.2 : 1.8,
+              opacity: isActive ? 1 : laneDistance <= 3 ? 0.88 : 0.68
+          };
+      }
       if (isActive) {
           return {
               stroke: theme === 'dark' ? '#a78bfa' : '#7c3aed',
@@ -3871,7 +4998,10 @@ const App = () => {
 
       const boundaries = (loadedField?.boundaries || []).concat(viewMode === 'CREATE_FIELD' ? currentFieldBoundaries : []);
       boundaries.forEach((bound, bIdx) => {
-          const pts = (bound.points || bound || []).filter(Boolean);
+          const sourcePoints = (bound.points || bound || []).filter(Boolean);
+          const pts = bIdx === activeBoundaryIndex && activeFieldRecord?.id === loadedField?.id
+              ? activeBoundaryRunPoints
+              : sourcePoints;
           if (pts.length > 1) {
               elements.push(renderProjected3DPath(
                   `boundary-${bIdx}`,
@@ -3895,6 +5025,21 @@ const App = () => {
               opacity: 0.9,
               projection: { screenMargin: 96 }
           }));
+      }
+
+      if (dockQuickPicker === 'boundary-shift' && boundaryShiftPreview.points.length > 1) {
+          elements.push(renderProjected3DPath(
+              'boundary-shift-preview',
+              [...boundaryShiftPreview.points, boundaryShiftPreview.points[0]],
+              boundaryShiftPreview.valid ? '#f97316' : '#ef4444',
+              3.2,
+              {
+                  anchoredDash: true,
+                  worldDash: [34, 22],
+                  opacity: 0.95,
+                  projection: { screenMargin: 96 }
+              }
+          ));
       }
 
       if (isRecordingBoundary && tempBoundary.length > 0) {
@@ -3932,7 +5077,12 @@ const App = () => {
 
       const uTurnPathPoints3D = getUTurnPathPoints();
       if (uTurnPathPoints3D.length > 1) {
-          const uTurnStroke = theme === 'dark' ? '#fbbf24' : '#f97316';
+          const activePlan = turnAssistRef.current || uTurnPreview;
+          const uTurnStroke = activePlan?.feasible === false
+              ? '#ef4444'
+              : activePlan?.mode === 'AUTO' && !turnAssistActive
+                  ? '#eab308'
+                  : theme === 'dark' ? '#c4b5fd' : '#7c3aed';
           elements.push(renderProjected3DPath(
               'uturn-3d-path-underlay',
               uTurnPathPoints3D,
@@ -3960,11 +5110,11 @@ const App = () => {
           const unit = { x: dx / length, y: dy / length };
 
           if (isMultiLineMode) {
-              const width = Math.max(1, implementSettings.width * PIXELS_PER_METER);
+              const width = Math.max(1, activeTrackSpacingM * PIXELS_PER_METER);
               const laneSpacingPx = width;
-              for (let i = highlightedLane - 4; i <= highlightedLane + 4; i++) {
+              for (let i = highlightedLane - guidanceLaneRenderRadius; i <= highlightedLane + guidanceLaneRenderRadius; i++) {
                   const active = i === highlightedLane;
-                  const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane));
+                  const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane), i);
                   elements.push(render3DProjectedLaneLine(
                       `straight-3d-${i}`,
                       pointA,
@@ -3996,11 +5146,11 @@ const App = () => {
           if (isPreview) {
               elements.push(renderProjected3DPath('aplus-preview', sampleGuidanceLinePoints(aPlusPoint, unit, 0), previewStroke, 3, { dash: '12 9', projection: guidanceProjection }));
           } else if (isMultiLineMode) {
-              const width = Math.max(1, implementSettings.width * PIXELS_PER_METER);
+              const width = Math.max(1, activeTrackSpacingM * PIXELS_PER_METER);
               const laneSpacingPx = width;
-              for (let i = highlightedLane - 4; i <= highlightedLane + 4; i++) {
+              for (let i = highlightedLane - guidanceLaneRenderRadius; i <= highlightedLane + guidanceLaneRenderRadius; i++) {
                   const active = i === highlightedLane;
-                  const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane));
+                  const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane), i);
                   elements.push(render3DProjectedLaneLine(
                       `aplus-3d-${i}`,
                       aPlusPoint,
@@ -4018,12 +5168,12 @@ const App = () => {
 
       if (guidanceLine === 'PIVOT' && pivotCenter && pivotRadius) {
           if (isMultiLineMode) {
-              const width = implementSettings.width * PIXELS_PER_METER;
+              const width = activeTrackSpacingM * PIXELS_PER_METER;
               for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
                   const radius = pivotRadius + (i * width) + effectiveGuidanceOffset;
                   if (radius <= 0) continue;
                   const active = i === highlightedLane;
-                  const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane));
+                  const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane), i);
                   elements.push(renderProjected3DPath(
                       `pivot-3d-${i}`,
                       sampleCirclePoints(pivotCenter, radius),
@@ -4042,10 +5192,11 @@ const App = () => {
 
       if ((guidanceLine === 'CURVE' || guidanceLine === 'COMBINATION') && curvePoints.length > 1) {
           if (isMultiLineMode) {
-              const width = implementSettings.width * PIXELS_PER_METER;
-              for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
+              const width = activeTrackSpacingM * PIXELS_PER_METER;
+              const curveLaneRadius = activeTramline.enabled ? guidanceLaneRenderRadius : 2;
+              for (let i = highlightedLane - curveLaneRadius; i <= highlightedLane + curveLaneRadius; i++) {
                   const active = i === highlightedLane;
-                  const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane));
+                  const visual = getGuidanceLaneVisual(active, Math.abs(i - highlightedLane), i);
                   const points = parsePolylinePoints(getOffsetPolyline(curvePoints, (i * width) + effectiveGuidanceOffset));
                   elements.push(renderProjected3DPath(
                       `curve-3d-${i}`,
@@ -4073,7 +5224,12 @@ const App = () => {
       if (isMap3D) return null;
       const points = getUTurnPathPoints();
       if (points.length < 2) return null;
-      const stroke = theme === 'dark' ? '#fbbf24' : '#f97316';
+      const activePlan = turnAssistRef.current || uTurnPreview;
+      const stroke = activePlan?.feasible === false
+          ? '#ef4444'
+          : activePlan?.mode === 'AUTO' && !turnAssistActive
+              ? '#eab308'
+              : theme === 'dark' ? '#c4b5fd' : '#7c3aed';
       const exitPoint = points[points.length - 1];
       const pointString = points.map((p) => `${p.x},${p.y}`).join(' ');
 
@@ -4105,6 +5261,12 @@ const App = () => {
                   stroke="white"
                   strokeWidth="3"
               />
+              {(activePlan?.markers || []).filter(marker => marker.type?.startsWith('CUSP')).map(marker => (
+                  <g key={marker.type} transform={`translate(${marker.point.x} ${marker.point.y})`}>
+                      <circle r="10" fill={marker.gear === 'REVERSE' ? '#ef4444' : '#22c55e'} stroke="white" strokeWidth="3" />
+                      <text x="0" y="3.2" textAnchor="middle" fontSize="8" fontWeight="900" fill="white">{marker.gear === 'REVERSE' ? 'R' : 'F'}</text>
+                  </g>
+              ))}
           </g>
       );
   };
@@ -4118,54 +5280,14 @@ const App = () => {
     let currentLaneIndex = 0;
     const activeGuidanceType = guidanceLine || guidanceRef.current?.type || activeLineRecord?.type || lineType;
 
-    // Calculate lane index based on physics/position (duplicated logic for render)
+    // Use the same metric path as steering so highlighted curve lanes cannot
+    // drift from the mitered line rendered on screen.
     if (guidanceRef.current && guidanceRef.current.type && guidanceRef.current.width > 0) {
-         // Re-calculate XTE roughly to find lane
          const guide = guidanceRef.current;
-         const p = worldPos; // Current pos
-         let xte = 0;
-
-         if (guide.type === 'STRAIGHT_AB' && guide.points.a && guide.points.b) {
-            const ax = guide.points.a.x; const ay = guide.points.a.y;
-            const bx = guide.points.b.x; const by = guide.points.b.y;
-            const dx = bx - ax; const dy = by - ay;
-            const len = Math.hypot(dx, dy);
-            xte = ((bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax)) / len;
+         const metrics = getGuidanceMetrics(guide, { ...worldPos, heading });
+         if (metrics.validLine) {
+             currentLaneIndex = Math.round((metrics.xte - (Number(guide.manualOffset) || 0)) / guide.width);
          }
-         else if (guide.type === 'A_PLUS' && guide.points.aplus && guide.points.aplus.point) {
-             const ax = guide.points.aplus.point.x;
-             const ay = guide.points.aplus.point.y;
-             const h = guide.points.aplus.heading;
-             const rad = h * Math.PI / 180;
-             const ux = Math.sin(rad);
-             const uy = -Math.cos(rad);
-             const vax = p.x - ax; const vay = p.y - ay;
-             xte = vax * (-uy) + vay * (ux);
-         }
-         else if (guide.type === 'PIVOT' && guide.points.pivot && guide.points.pivot.center && guide.points.pivot.radius) {
-             const cx = guide.points.pivot.center.x;
-             const cy = guide.points.pivot.center.y;
-             const r = guide.points.pivot.radius;
-             const dist = Math.hypot(p.x - cx, p.y - cy);
-             xte = dist - r;
-         }
-         else if ((guide.type === 'CURVE' || guide.type === 'COMBINATION') && guide.points.curve) {
-             let minDist = Infinity;
-             let bestCross = 0;
-             for(let i=0; i<guide.points.curve.length-1; i++) {
-                 const p1 = guide.points.curve[i];
-                 const p2 = guide.points.curve[i+1];
-                 const info = pointToSegmentDistance(p.x, p.y, p1.x, p1.y, p2.x, p2.y);
-                 if (info.distance < minDist) {
-                     minDist = info.distance;
-                     const segLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-                     bestCross = info.cross / segLen;
-                 }
-             }
-             xte = bestCross;
-         }
-
-         currentLaneIndex = Math.round((xte - (Number(guide.manualOffset) || 0)) / guide.width);
     }
 
 
@@ -4175,14 +5297,14 @@ const App = () => {
       const elements = [];
 
       if (isMultiLineMode) {
-          const w = implementSettings.width * PIXELS_PER_METER;
+          const w = activeTrackSpacingM * PIXELS_PER_METER;
           const highlightedLane = activeLaneRef.current ?? manualLaneRef.current ?? currentLaneIndex;
 
-          for (let i = highlightedLane - 4; i <= highlightedLane + 4; i++) {
+          for (let i = highlightedLane - guidanceLaneRenderRadius; i <= highlightedLane + guidanceLaneRenderRadius; i++) {
               const offset = (w * i) + effectiveGuidanceOffset;
               const isActive = i === highlightedLane;
               const laneDistance = Math.abs(i - highlightedLane);
-              const visual = getGuidanceLaneVisual(isActive, laneDistance);
+              const visual = getGuidanceLaneVisual(isActive, laneDistance, i);
               const segment = getGuidanceLineSegmentAroundVehicle(pointA, { x: ux, y: uy }, offset);
 
               elements.push(
@@ -4233,14 +5355,14 @@ const App = () => {
              elements.push(<line key="preview" x1={segment.start.x} y1={segment.start.y} x2={segment.end.x} y2={segment.end.y} stroke="red" strokeWidth="2" strokeDasharray="15, 10" strokeLinecap="round" />);
         } else {
              if (isMultiLineMode) {
-                const w = implementSettings.width * PIXELS_PER_METER;
+                const w = activeTrackSpacingM * PIXELS_PER_METER;
                 const highlightedLane = activeLaneRef.current ?? manualLaneRef.current ?? currentLaneIndex;
 
-                for (let i = highlightedLane - 4; i <= highlightedLane + 4; i++) {
+                for (let i = highlightedLane - guidanceLaneRenderRadius; i <= highlightedLane + guidanceLaneRenderRadius; i++) {
                     const offset = (w * i) + effectiveGuidanceOffset;
                     const isActive = i === highlightedLane;
                     const laneDistance = Math.abs(i - highlightedLane);
-                    const visual = getGuidanceLaneVisual(isActive, laneDistance);
+                    const visual = getGuidanceLaneVisual(isActive, laneDistance, i);
                     const segment = getGuidanceLineSegmentAroundVehicle(aPlusPoint, { x: ux, y: uy }, offset);
 
                     elements.push(
@@ -4280,16 +5402,15 @@ const App = () => {
     if (guidanceLine === 'PIVOT' && pivotCenter && pivotRadius) {
         const elements = [];
         if (isMultiLineMode) {
-            const w = implementSettings.width * PIXELS_PER_METER;
+            const w = activeTrackSpacingM * PIXELS_PER_METER;
             const highlightedLane = activeLaneRef.current ?? manualLaneRef.current ?? currentLaneIndex;
 
-            // Draw 5 lines (center + 2 each side)
             for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
                 const r = pivotRadius + (i * w) + effectiveGuidanceOffset;
                 if (r > 0) {
                     const isActive = i === highlightedLane;
                     const laneDistance = Math.abs(i - highlightedLane);
-                    const visual = getGuidanceLaneVisual(isActive, laneDistance);
+                    const visual = getGuidanceLaneVisual(isActive, laneDistance, i);
                     elements.push(
                         <circle
                             key={`pivot-${i}`}
@@ -4329,15 +5450,15 @@ const App = () => {
         const elements = [];
 
         if (isMultiLineMode) {
-            const w = implementSettings.width * PIXELS_PER_METER;
+            const w = activeTrackSpacingM * PIXELS_PER_METER;
             const highlightedLane = activeLaneRef.current ?? manualLaneRef.current ?? currentLaneIndex;
 
-            // Draw 5 lines (center + 2 each side)
-            for (let i = highlightedLane - 2; i <= highlightedLane + 2; i++) {
+            const curveLaneRadius = activeTramline.enabled ? guidanceLaneRenderRadius : 2;
+            for (let i = highlightedLane - curveLaneRadius; i <= highlightedLane + curveLaneRadius; i++) {
                 const offset = (i * w) + effectiveGuidanceOffset;
                 const isActive = i === highlightedLane;
                 const laneDistance = Math.abs(i - highlightedLane);
-                const visual = getGuidanceLaneVisual(isActive, laneDistance);
+                const visual = getGuidanceLaneVisual(isActive, laneDistance, i);
                 const curvePointsText = getOffsetPolyline(curvePoints, offset);
 
                 elements.push(
@@ -4481,7 +5602,10 @@ const App = () => {
           </div>
       );
       const compactStatus = (value) => String(value || '').replace(/_/g, ' ');
-      const offsetCm = manualOffset / PIXELS_PER_METER * 100 * liveGuidanceDirectionFactor;
+      const activeShiftType = guidanceLine || activeLineRecord?.type || lineType;
+      const isPivotShift = activeShiftType === 'PIVOT';
+      const shiftDisplayFactor = isPivotShift ? 1 : liveGuidanceDirectionFactor;
+      const offsetCm = manualOffset / PIXELS_PER_METER * 100 * shiftDisplayFactor;
       const railDivider = isDarkDock ? 'border-slate-800' : 'border-slate-200';
       const zoomPercent = Math.round(zoomLevel / DEFAULT_MAP_ZOOM * 100);
       const runtimeSection = isDarkDock
@@ -4495,11 +5619,7 @@ const App = () => {
            Math.max((activeFieldRecord?.boundaries || []).length - 1, 0)
        );
        const activeDockBoundary = (activeFieldRecord?.boundaries || [])[activeDockBoundaryIndex] || null;
-       const activeDockBoundaryPointCount = Array.isArray(activeDockBoundary?.points)
-           ? activeDockBoundary.points.length
-           : Array.isArray(activeDockBoundary)
-               ? activeDockBoundary.length
-               : 0;
+       const activeDockBoundaryPointCount = activeBoundaryRunPoints.length;
        const autoTrimEnabled = steeringMode === 'AUTO'
            && currentRunStatus.steeringState === 'ENGAGED'
            && hasGuidanceToEngage;
@@ -4507,16 +5627,20 @@ const App = () => {
        const activeDockLineLabel = unsavedGuidance
            ? `${compactStatus(lineType)} draft`
            : activeLineRecord?.name || 'No line selected';
-       const activeDockBoundaryLabel = activeDockBoundary?.name || (activeDockBoundary ? `Boundary ${activeDockBoundaryIndex + 1}` : 'No boundary selected');
+       const activeDockBoundaryLabel = `${activeDockBoundary?.name || (activeDockBoundary ? `Boundary ${activeDockBoundaryIndex + 1}` : 'No boundary selected')}${boundaryOverrideMatchesActive ? ' / shifted' : ''}`;
        const dockLines = (activeFieldRecord?.lines || []).filter(line => line && !line.archived && line.points);
        const dockBoundaries = (activeFieldRecord?.boundaries || []).filter(Boolean);
-       const lineShiftMeters = (Number(lineShiftOffset) || 0) / PIXELS_PER_METER * liveGuidanceDirectionFactor;
-       const totalOffsetMeters = effectiveGuidanceOffset / PIXELS_PER_METER * liveGuidanceDirectionFactor;
+       const lineShiftMeters = (Number(lineShiftOffset) || 0) / PIXELS_PER_METER * shiftDisplayFactor;
+       const totalOffsetMeters = effectiveGuidanceOffset / PIXELS_PER_METER * shiftDisplayFactor;
        const clampShiftMeters = (value) => Math.min(99.99, Math.max(0, Number(value) || 0));
        const draftShiftDistanceMeters = clampShiftMeters(dockShiftDistanceM);
        const draftShiftDisplayMeters = (dockShiftDirection === 'left' ? -1 : 1) * draftShiftDistanceMeters;
-       const draftShiftMeters = draftShiftDisplayMeters * liveGuidanceDirectionFactor;
+       const draftShiftMeters = draftShiftDisplayMeters * shiftDisplayFactor;
        const formatSignedMeters = (value) => `${value > 0 ? '+' : ''}${value.toFixed(2)} m`;
+       const shiftDirectionLabel = (value, { short = false } = {}) => {
+           if (isPivotShift) return value < 0 ? (short ? 'IN' : 'inward') : (short ? 'OUT' : 'outward');
+           return value < 0 ? (short ? 'L' : 'left') : (short ? 'R' : 'right');
+       };
        const ensureDockFieldContext = () => {
            if (!activeFieldRecord?.id) {
                showNotification('Load a field first', 'warning');
@@ -4554,7 +5678,7 @@ const App = () => {
                ? Math.round((metrics.xte - effectiveGuidanceOffset) / guide.width)
                : 0;
            const centeredOffsetPixels = metrics.xte - (laneIndex * (guide.width || 0));
-           setDockShiftDraftFromSignedMeters(centeredOffsetPixels / PIXELS_PER_METER * liveGuidanceDirectionFactor);
+           setDockShiftDraftFromSignedMeters(centeredOffsetPixels / PIXELS_PER_METER * shiftDisplayFactor);
        };
        const resetGuidanceResponseAfterShift = () => {
            manualLaneRef.current = null;
@@ -4576,7 +5700,6 @@ const App = () => {
 
            const nextShiftMeters = Math.round(draftShiftMeters * 1000) / 1000;
            const nextShiftPixels = nextShiftMeters * PIXELS_PER_METER;
-           const activeShiftType = guidanceLine || activeLineRecord.type;
            if (activeShiftType === 'PIVOT' && Number(pivotRadius) + nextShiftPixels <= 1) {
                showNotification('Shift would collapse the pivot radius', 'warning');
                return;
@@ -4589,7 +5712,7 @@ const App = () => {
                }
                const createdAt = new Date();
                const sourceName = activeLineRecord.shiftedFromLineName || activeLineRecord.name || 'Guidance line';
-               const directionLabel = draftShiftDisplayMeters < 0 ? 'L' : 'R';
+               const directionLabel = shiftDirectionLabel(draftShiftDisplayMeters, { short: true });
                const shiftedLine = {
                    ...activeLineRecord,
                    id: Date.now(),
@@ -4622,7 +5745,7 @@ const App = () => {
 
            const shiftLabel = Math.abs(nextShiftMeters) < 0.005
                ? 'Line shift reset to original'
-               : `Line shifted ${draftShiftDisplayMeters < 0 ? 'left' : 'right'} ${Math.abs(draftShiftDisplayMeters).toFixed(2)} m`;
+               : `Line shifted ${shiftDirectionLabel(draftShiftDisplayMeters)} ${Math.abs(draftShiftDisplayMeters).toFixed(2)} m`;
            showNotification(saveCopy ? `${shiftLabel} / copy saved` : shiftLabel, 'success');
        };
        const openDockLineCreator = () => {
@@ -4642,8 +5765,75 @@ const App = () => {
        };
        const selectDockBoundary = (boundary, index) => {
            actions.setActiveBoundaryIdx(index);
+           setBoundaryRunOverride(null);
            setDockQuickPicker(null);
            showNotification(`Active boundary: ${boundary?.name || `Boundary ${index + 1}`}`, 'success');
+       };
+       const openDockBoundaryShift = () => {
+           if (!ensureDockFieldContext()) return;
+           if (!activeDockBoundary || activeBoundarySourcePoints.length < 3) {
+               showNotification('Select a closed boundary before shifting', 'warning');
+               return;
+           }
+           setBoundaryShiftMode('MOVE');
+           setBoundaryShiftDirection('north');
+           setBoundaryShiftDistanceM('0.50');
+           setDockQuickPicker('boundary-shift');
+       };
+       const applyDockBoundaryShift = ({ saveCopy = false } = {}) => {
+           if (!activeDockBoundary || !boundaryShiftPreview.valid || boundaryShiftPreview.points.length < 3) {
+               showNotification(boundaryShiftPreview.reason || 'Boundary preview is invalid', 'warning');
+               return;
+           }
+           const distanceM = Number(boundaryShiftPreview.distanceM) || 0;
+           if (saveCopy && distanceM < 0.005) {
+               showNotification('Set a non-zero boundary adjustment before saving a copy', 'warning');
+               return;
+           }
+           const points = boundaryShiftPreview.points.map(point => ({ x: point.x, y: point.y }));
+           if (saveCopy) {
+               const createdAt = new Date();
+               const sourceMeta = Array.isArray(activeDockBoundary) ? {} : activeDockBoundary;
+               const sourceName = sourceMeta.name || `Boundary ${activeDockBoundaryIndex + 1}`;
+               const adjustedBoundary = {
+                   ...sourceMeta,
+                   id: Date.now(),
+                   name: `${sourceName} - ${boundaryShiftPreview.label}`,
+                   points,
+                   createdAt: createdAt.toISOString(),
+                   updatedAt: createdAt.toISOString(),
+                   createdLocation: activeFieldRecord?.name || sourceMeta.createdLocation || 'Location unavailable',
+                   createdPosition: { x: worldPos.x, y: worldPos.y },
+                   shiftedFromBoundaryId: sourceMeta.id || null,
+                   shiftedFromBoundaryName: sourceName,
+                   adjustment: {
+                       mode: boundaryShiftMode,
+                       direction: boundaryShiftDirection,
+                       distanceM
+                   }
+               };
+               const nextIndex = (activeFieldRecord?.boundaries || []).length;
+               updateSelectedFieldBoundaries(boundaries => [...boundaries, adjustedBoundary]);
+               actions.setActiveBoundaryIdx(nextIndex);
+               setSelectedBoundaryIndex(nextIndex);
+               setBoundaryRunOverride(null);
+               showNotification(`Boundary copy saved / ${boundaryShiftPreview.label}`, 'success');
+           } else if (distanceM < 0.005) {
+               setBoundaryRunOverride(null);
+               showNotification('Run boundary reset to original', 'success');
+           } else {
+               setBoundaryRunOverride({
+                   fieldId: activeFieldRecord?.id,
+                   boundaryIndex: activeDockBoundaryIndex,
+                   points,
+                   label: boundaryShiftPreview.label,
+                   mode: boundaryShiftMode,
+                   direction: boundaryShiftDirection,
+                   distanceM
+               });
+               showNotification(`Run boundary adjusted / ${boundaryShiftPreview.label}`, 'success');
+           }
+           setDockQuickPicker(null);
        };
        const renderDockMiniAction = ({ icon: Icon, label, ariaLabel = label, onClick, tone = 'gray', primary = false, disabled = false, compact = false }) => {
            const primaryClass = tone === 'orange'
@@ -4655,7 +5845,7 @@ const App = () => {
                    aria-label={ariaLabel}
                    disabled={disabled}
                    onClick={disabled ? undefined : runDockAction(onClick)}
-                   className={`w-full min-w-0 rounded-lg border flex items-center justify-center font-black transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35 ${compact ? 'h-12 flex-col gap-0.5 px-0.5 text-[9px]' : 'min-h-11 gap-1 px-1.5 text-[10px]'} ${primary ? `${primaryClass} border-transparent` : `${runtimeButton}`}`}
+                   className={`w-full min-w-0 rounded-lg border flex items-center justify-center font-black transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35 ${compact ? 'h-11 flex-col gap-0.5 px-0.5 text-[9px]' : 'min-h-11 gap-1 px-1.5 text-[10px]'} ${primary ? `${primaryClass} border-transparent` : `${runtimeButton}`}`}
                >
                     <Icon className="w-3.5 h-3.5 shrink-0" />
                     <span className="max-w-full truncate leading-none">{label}</span>
@@ -4667,18 +5857,18 @@ const App = () => {
                ? (isDarkDock ? 'border-orange-500/30 bg-orange-500/10 text-orange-300' : 'border-orange-300 bg-orange-50 text-orange-700')
                : (isDarkDock ? 'border-blue-500/30 bg-blue-500/10 text-blue-300' : 'border-blue-300 bg-blue-50 text-blue-700');
            return (
-               <div className={`w-full rounded-xl border p-2.5 text-left ${toneClasses}`}>
+               <div className={`w-full rounded-xl border p-2 text-left ${toneClasses}`}>
                    <span className="flex items-center gap-2">
-                       <span className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${tone === 'orange' ? 'bg-orange-500 text-white' : 'bg-blue-600 text-white'}`}>
+                       <span className={`shrink-0 w-7 h-7 rounded-lg flex items-center justify-center ${tone === 'orange' ? 'bg-orange-500 text-white' : 'bg-blue-600 text-white'}`}>
                            <Icon className="w-4 h-4" />
                        </span>
                        <span className="min-w-0 flex-1">
-                           <span className="block text-[9px] font-black uppercase tracking-[0.08em] opacity-75">{label}</span>
-                           <span className={`block mt-0.5 text-[11px] font-black truncate ${t.textMain}`}>{value}</span>
+                           <span className="block text-[8px] font-black uppercase tracking-[0.08em] opacity-75">{label}</span>
+                           <span className={`block text-[11px] font-black leading-tight truncate ${t.textMain}`}>{value}</span>
+                           <span className={`block text-[8px] font-bold leading-tight truncate ${t.textSub}`}>{detail}</span>
                        </span>
                    </span>
-                   <span className={`mt-1.5 block min-w-0 text-[9px] font-bold truncate ${t.textSub}`}>{detail}</span>
-                   <span className={`mt-2 grid gap-1.5 ${cardActions.length >= 3 ? 'grid-cols-3' : cardActions.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                   <span className={`mt-1.5 grid gap-1.5 ${cardActions.length >= 3 ? 'grid-cols-3' : cardActions.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
                         {cardActions.map((action, index) => (
                             <React.Fragment key={`${label}-${action.label}`}>
                                 {renderDockMiniAction({ ...action, tone, primary: index === 0, compact: cardActions.length >= 3 })}
@@ -4692,7 +5882,7 @@ const App = () => {
            const selectingLines = dockQuickPicker === 'lines';
            const items = selectingLines ? dockLines : dockBoundaries;
            const pickerTone = selectingLines ? 'blue' : 'orange';
-           const PickerIcon = selectingLines ? Route : MapPin;
+           const PickerIcon = selectingLines ? getLineTypeIcon(activeShiftType) : MapPin;
            const pickerTitle = selectingLines ? 'Switch line' : 'Switch boundary';
            return (
                <section
@@ -4725,6 +5915,7 @@ const App = () => {
                    <div className="min-h-0 flex-1 overflow-y-auto p-2 space-y-1.5">
                        {items.length > 0 ? items.map((item, index) => {
                            const active = selectingLines ? item.id === activeLineId : index === activeDockBoundaryIndex;
+                           const ItemIcon = selectingLines ? getLineTypeIcon(item.type) : MapPin;
                            const itemLabel = selectingLines ? item.name : (item.name || `Boundary ${index + 1}`);
                            const itemDetail = selectingLines
                                ? compactStatus(item.type || 'LINE')
@@ -4739,7 +5930,7 @@ const App = () => {
                                    className={`w-full min-h-[54px] rounded-xl border px-2 py-2 flex items-center gap-2 text-left transition-all active:scale-[0.98] ${active ? (selectingLines ? 'border-blue-500 bg-blue-500/12' : 'border-orange-500 bg-orange-500/12') : `${runtimeButton}`}`}
                                >
                                    <span className={`w-7 h-7 shrink-0 rounded-lg flex items-center justify-center ${active ? (selectingLines ? 'bg-blue-600 text-white' : 'bg-orange-500 text-white') : (selectingLines ? 'bg-blue-500/10 text-blue-500' : 'bg-orange-500/10 text-orange-500')}`}>
-                                       <PickerIcon className="w-4 h-4" />
+                                       <ItemIcon className="w-4 h-4" />
                                    </span>
                                    <span className="min-w-0 flex-1">
                                        <span className={`block text-[11px] font-black truncate ${t.textMain}`}>{itemLabel}</span>
@@ -4773,6 +5964,18 @@ const App = () => {
            const previewScale = Math.max(0.5, Math.abs(lineShiftMeters), Math.abs(draftShiftDisplayMeters));
            const previewPosition = 50 + Math.max(-35, Math.min(35, (draftShiftDisplayMeters / previewScale) * 35));
            const targetChanged = Math.abs(draftShiftDisplayMeters - lineShiftMeters) >= 0.005 || Math.abs(manualOffset) >= PIXELS_PER_METER * 0.005;
+           const ShiftLineIcon = getLineTypeIcon(activeShiftType);
+           const directionOptions = isPivotShift
+               ? [
+                   { id: 'left', label: 'Inward', icon: Minus },
+                   { id: 'right', label: 'Outward', icon: Plus }
+               ]
+               : [
+                   { id: 'left', label: 'Left', icon: Minus },
+                   { id: 'right', label: 'Right', icon: Plus }
+               ];
+           const axisStart = isPivotShift ? 'IN' : 'L';
+           const axisEnd = isPivotShift ? 'OUT' : 'R';
 
            return (
                <section
@@ -4798,39 +6001,34 @@ const App = () => {
                            <span className={`block text-[11px] font-black truncate ${t.textMain}`}>Shift line</span>
                        </span>
                        <span className="h-7 w-7 shrink-0 rounded-lg bg-blue-500/12 text-blue-500 flex items-center justify-center">
-                           <Ruler className="w-4 h-4" />
+                           <ShiftLineIcon className="w-4 h-4" />
                        </span>
                    </div>
 
-                    <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2 space-y-2">
-                       <div className={`rounded-xl border ${runtimeSection} p-2.5`}>
-                           <div className="flex items-start justify-between gap-2">
+                    <div className="min-h-0 flex-1 overflow-hidden p-1.5 space-y-1.5">
+                       <div className={`rounded-xl border ${runtimeSection} p-2`}>
+                           <div className="grid grid-cols-2 gap-2">
                                <span className="min-w-0">
-                                   <span className={`block text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Current shift</span>
-                                   <span className={`block mt-1 text-sm font-black tabular-nums ${Math.abs(lineShiftMeters) >= 0.005 ? 'text-blue-500' : t.textMain}`}>{formatSignedMeters(lineShiftMeters)}</span>
+                                   <span className={`block text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Current</span>
+                                   <span className={`block text-[11px] font-black tabular-nums ${Math.abs(lineShiftMeters) >= 0.005 ? 'text-blue-500' : t.textMain}`}>{formatSignedMeters(lineShiftMeters)}</span>
                                </span>
-                               {Math.abs(offsetCm) >= 0.05 && (
-                                   <span className="shrink-0 rounded-md bg-orange-500/12 px-1.5 py-1 text-[8px] font-black text-orange-500">Trim {offsetCm > 0 ? '+' : ''}{offsetCm.toFixed(1)}cm</span>
-                               )}
+                               <span className="min-w-0 text-right">
+                                   <span className={`block text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Preview</span>
+                                   <span aria-live="polite" className="block text-[11px] font-black tabular-nums text-blue-500">{formatSignedMeters(draftShiftDisplayMeters)}</span>
+                               </span>
                            </div>
-                           <div className={`relative mt-2 h-8 overflow-hidden rounded-lg ${isDarkDock ? 'bg-slate-950' : 'bg-white'} border ${t.borderCard}`}>
-                               <span className={`absolute left-1/2 top-1 bottom-1 border-l border-dashed ${isDarkDock ? 'border-slate-600' : 'border-slate-300'}`} />
-                               <span className="absolute top-1 bottom-1 w-0.5 rounded bg-blue-500 transition-all" style={{ left: `${previewPosition}%` }} />
-                               <span className={`absolute left-1 bottom-0.5 text-[7px] font-black ${t.textDim}`}>L</span>
-                               <span className={`absolute right-1 bottom-0.5 text-[7px] font-black ${t.textDim}`}>R</span>
+                           <div className={`relative mt-1.5 h-4 overflow-hidden rounded-md ${isDarkDock ? 'bg-slate-950' : 'bg-white'} border ${t.borderCard}`}>
+                               <span className={`absolute left-1/2 top-0.5 bottom-0.5 border-l border-dashed ${isDarkDock ? 'border-slate-600' : 'border-slate-300'}`} />
+                               <span className="absolute top-0.5 bottom-0.5 w-0.5 rounded bg-blue-500 transition-all" style={{ left: `${previewPosition}%` }} />
+                               <span className={`absolute left-1 top-0.5 text-[6px] font-black ${t.textDim}`}>{axisStart}</span>
+                               <span className={`absolute right-1 top-0.5 text-[6px] font-black ${t.textDim}`}>{axisEnd}</span>
                            </div>
-                           <div className="mt-1.5 flex items-center justify-between gap-2">
-                               <span className={`text-[8px] font-bold ${t.textSub}`}>New offset</span>
-                               <span aria-live="polite" className="text-[10px] font-black tabular-nums text-blue-500">{formatSignedMeters(draftShiftDisplayMeters)}</span>
-                           </div>
+                           {Math.abs(offsetCm) >= 0.05 && <span className="sr-only">Fine trim {offsetCm > 0 ? '+' : ''}{offsetCm.toFixed(1)} centimeters</span>}
                        </div>
 
-                       <div className={`rounded-xl border ${runtimeSection} p-2`}>
+                       <div className={`rounded-xl border ${runtimeSection} p-1.5`}>
                            <div className="grid grid-cols-2 gap-1.5">
-                               {[
-                                   { id: 'left', label: 'Left', icon: Minus },
-                                   { id: 'right', label: 'Right', icon: Plus }
-                               ].map(({ id, label, icon: Icon }) => {
+                               {directionOptions.map(({ id, label, icon: Icon }) => {
                                    const active = dockShiftDirection === id;
                                    return (
                                        <button
@@ -4848,7 +6046,10 @@ const App = () => {
                                })}
                            </div>
 
-                           <label className={`mt-2 block text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`} htmlFor="dock-shift-distance">Distance from original</label>
+                           <label className={`mt-1.5 flex items-center justify-between text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`} htmlFor="dock-shift-distance">
+                               <span>{isPivotShift ? 'Radius offset' : 'Distance'}</span>
+                               <span>From original</span>
+                           </label>
                            <div className={`mt-1 flex h-11 items-center overflow-hidden rounded-lg border ${t.borderCard} ${isDarkDock ? 'bg-slate-950' : 'bg-white'}`}>
                                <input
                                    id="dock-shift-distance"
@@ -4860,7 +6061,7 @@ const App = () => {
                                    value={dockShiftDistanceM}
                                    onChange={(event) => setDockShiftDistanceM(event.target.value)}
                                    onBlur={() => setDockShiftDistanceM(draftShiftDistanceMeters.toFixed(2))}
-                                   className={`min-w-0 flex-1 bg-transparent px-2 text-right text-sm font-black tabular-nums outline-none ${t.textMain}`}
+                                   className={`h-full min-w-0 flex-1 bg-transparent px-2 text-right text-sm font-black tabular-nums outline-none ${t.textMain}`}
                                />
                                <span className={`pr-2 text-[9px] font-black ${t.textSub}`}>m</span>
                            </div>
@@ -4886,50 +6087,228 @@ const App = () => {
                                type="button"
                                aria-label="Center shift preview on vehicle"
                                onClick={runDockAction(setDockShiftToVehicle)}
-                               className={`h-11 min-w-0 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 px-1 text-[8px] font-black`}
+                               className={`h-11 min-w-0 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 px-1 text-[9px] font-black`}
                            >
                                <LocateFixed className="w-3.5 h-3.5 shrink-0 text-blue-500" />
-                               <span className="w-full truncate text-center text-[9px] leading-none">Center here</span>
+                               <span className="min-w-0 truncate text-[9px]">Center here</span>
                            </button>
                            <button
                                type="button"
                                aria-label="Reset shift preview to original position"
                                onClick={runDockAction(() => setDockShiftDraftFromSignedMeters(0))}
-                               className={`h-11 min-w-0 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 px-1 text-[8px] font-black`}
+                               className={`h-11 min-w-0 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 px-1 text-[9px] font-black`}
                            >
                                <RotateCcw className="w-3.5 h-3.5 shrink-0" />
-                               <span className="w-full truncate text-center text-[9px] leading-none">Original</span>
+                               <span className="min-w-0 truncate text-[9px]">Original</span>
                            </button>
                        </div>
                    </div>
 
-                   <div className={`shrink-0 border-t ${railDivider} p-2 space-y-1.5`}>
+                   <div className={`shrink-0 border-t ${railDivider} p-1.5 grid grid-cols-2 gap-1.5`}>
                        <button
                            type="button"
+                           aria-label="Apply shifted line to this run"
                            disabled={!targetChanged}
                            onClick={runDockAction(() => applyDockLineShift())}
-                           className="w-full min-h-11 rounded-lg bg-blue-600 text-white flex items-center justify-center gap-1.5 text-[10px] font-black hover:bg-blue-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35"
+                           className="h-11 min-w-0 rounded-lg bg-blue-600 text-white flex items-center justify-center gap-1 text-[9px] font-black hover:bg-blue-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35"
                        >
-                           <Check className="w-4 h-4" />
-                           Apply this run
+                           <Check className="w-3.5 h-3.5 shrink-0" />
+                           <span className="truncate">Apply</span>
                        </button>
                        <button
                            type="button"
+                           title="Save a shifted copy; the source line stays unchanged"
+                           aria-label="Save shifted copy as a new line; source line stays unchanged"
                            disabled={Math.abs(draftShiftDisplayMeters) < 0.005}
                            onClick={runDockAction(() => applyDockLineShift({ saveCopy: true }))}
-                           className={`w-full min-h-11 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1.5 text-[9px] font-black disabled:cursor-not-allowed disabled:opacity-35`}
+                           className={`h-11 min-w-0 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 text-[9px] font-black disabled:cursor-not-allowed disabled:opacity-35`}
                        >
-                           <Copy className="w-3.5 h-3.5" />
-                           Save as new line
+                           <Copy className="w-3.5 h-3.5 shrink-0" />
+                           <span className="truncate">Save copy</span>
                        </button>
-                       <div className={`text-center text-[7px] font-bold leading-tight ${t.textDim}`}>The source line is never overwritten.</div>
+                   </div>
+               </section>
+           );
+       };
+       const renderManualBoundaryShift = () => {
+           const distanceM = Number.isFinite(Number(boundaryShiftDistanceM))
+               ? Math.min(50, Math.max(0, Number(boundaryShiftDistanceM)))
+               : 0;
+           const currentAdjustment = boundaryOverrideMatchesActive ? boundaryRunOverride.label : 'Original';
+           const moveDirections = [
+               { id: 'north', label: 'North', glyph: '↑' },
+               { id: 'east', label: 'East', glyph: '→' },
+               { id: 'south', label: 'South', glyph: '↓' },
+               { id: 'west', label: 'West', glyph: '←' }
+           ];
+           const bufferDirections = [
+               { id: 'inward', label: 'Inward', glyph: '−' },
+               { id: 'outward', label: 'Outward', glyph: '+' }
+           ];
+           const directionOptions = boundaryShiftMode === 'BUFFER' ? bufferDirections : moveDirections;
+           const canApply = boundaryShiftPreview.valid && (distanceM >= 0.005 || boundaryOverrideMatchesActive);
+
+           return (
+               <section
+                   data-dock-mode="boundary-shift"
+                   aria-label="Shift active boundary"
+                   className={`pointer-events-auto ${dockWidth} max-h-full overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none flex flex-col`}
+                   onPointerDown={stopDockPointer}
+                   onPointerMove={stopDockPointer}
+                   onPointerUp={stopDockPointer}
+                   onClick={stopDockPointer}
+               >
+                   <div className={`min-h-12 shrink-0 border-b ${railDivider} px-2 flex items-center gap-2`}>
+                       <button
+                           type="button"
+                           aria-label="Back to run setup"
+                           onClick={runDockAction(() => setDockQuickPicker(null))}
+                           className={`w-11 h-11 shrink-0 rounded-lg border ${runtimeButton} flex items-center justify-center`}
+                       >
+                           <CornerUpLeft className="w-4 h-4" />
+                       </button>
+                       <span className="min-w-0 flex-1">
+                           <span className={`block text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Manual</span>
+                           <span className={`block text-[11px] font-black truncate ${t.textMain}`}>Shift boundary</span>
+                       </span>
+                       <span className="h-7 w-7 shrink-0 rounded-lg bg-orange-500/12 text-orange-500 flex items-center justify-center">
+                           <MapPin className="w-4 h-4" />
+                       </span>
+                   </div>
+
+                   <div className="min-h-0 flex-1 overflow-hidden p-1.5 space-y-1.5">
+                       <div className={`rounded-xl border ${runtimeSection} p-2`}>
+                           <div className="grid grid-cols-2 gap-2">
+                               <span className="min-w-0">
+                                   <span className={`block text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Current run</span>
+                                   <span className={`block text-[10px] font-black truncate ${boundaryOverrideMatchesActive ? 'text-orange-500' : t.textMain}`}>{currentAdjustment}</span>
+                               </span>
+                               <span className="min-w-0 text-right">
+                                   <span className={`block text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Preview</span>
+                                   <span className={`block text-[10px] font-black truncate ${boundaryShiftPreview.valid ? 'text-orange-500' : 'text-red-500'}`}>
+                                       {boundaryShiftPreview.valid ? boundaryShiftPreview.label : 'Invalid shape'}
+                                   </span>
+                               </span>
+                           </div>
+                       </div>
+
+                       <div className={`rounded-xl border ${runtimeSection} p-1.5`}>
+                           <div className="grid grid-cols-2 gap-1.5">
+                               {[
+                                   { id: 'MOVE', label: 'Move', icon: ArrowLeftRight },
+                                   { id: 'BUFFER', label: 'In / Out', icon: Layers }
+                               ].map(({ id, label, icon: Icon }) => {
+                                   const active = boundaryShiftMode === id;
+                                   return (
+                                       <button
+                                           key={id}
+                                           type="button"
+                                           aria-pressed={active}
+                                           onClick={runDockAction(() => {
+                                               setBoundaryShiftMode(id);
+                                               setBoundaryShiftDirection(id === 'BUFFER' ? 'inward' : 'north');
+                                           })}
+                                           className={`h-11 rounded-lg border flex items-center justify-center gap-1 text-[9px] font-black ${active ? 'border-orange-500 bg-orange-500/12 text-orange-500' : runtimeButton}`}
+                                       >
+                                           <Icon className="w-3.5 h-3.5" />
+                                           {label}
+                                       </button>
+                                   );
+                               })}
+                           </div>
+
+                           <div className={`mt-1.5 grid ${boundaryShiftMode === 'BUFFER' ? 'grid-cols-2' : 'grid-cols-4'} gap-1`}>
+                               {directionOptions.map(({ id, label, glyph }) => {
+                                   const active = boundaryShiftDirection === id;
+                                   return (
+                                       <button
+                                           key={id}
+                                           type="button"
+                                           title={label}
+                                           aria-label={`Shift boundary ${label.toLowerCase()}`}
+                                           aria-pressed={active}
+                                           onClick={runDockAction(() => setBoundaryShiftDirection(id))}
+                                           className={`h-11 rounded-lg border flex items-center justify-center gap-1 text-[9px] font-black ${active ? 'border-orange-500 bg-orange-500/12 text-orange-500' : runtimeButton}`}
+                                       >
+                                           <span className="text-sm leading-none">{glyph}</span>
+                                           <span className={boundaryShiftMode === 'BUFFER' ? '' : 'sr-only'}>{label}</span>
+                                       </button>
+                                   );
+                               })}
+                           </div>
+
+                           <label className={`mt-1.5 flex items-center justify-between text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`} htmlFor="dock-boundary-shift-distance">
+                               <span>Distance</span>
+                               <span>Source stays safe</span>
+                           </label>
+                           <div className={`mt-1 flex h-11 items-center overflow-hidden rounded-lg border ${t.borderCard} ${isDarkDock ? 'bg-slate-950' : 'bg-white'}`}>
+                               <input
+                                   id="dock-boundary-shift-distance"
+                                   type="number"
+                                   inputMode="decimal"
+                                   min="0"
+                                   max="50"
+                                   step="0.01"
+                                   value={boundaryShiftDistanceM}
+                                   onChange={(event) => setBoundaryShiftDistanceM(event.target.value)}
+                                   onBlur={() => setBoundaryShiftDistanceM(distanceM.toFixed(2))}
+                                   className={`h-full min-w-0 flex-1 bg-transparent px-2 text-right text-sm font-black tabular-nums outline-none ${t.textMain}`}
+                               />
+                               <span className={`pr-2 text-[9px] font-black ${t.textSub}`}>m</span>
+                           </div>
+
+                           <div className="mt-1.5 grid grid-cols-3 gap-1">
+                               {[0.10, 0.50, 1.00].map((value) => (
+                                   <button
+                                       key={value}
+                                       type="button"
+                                       aria-label={`Set boundary adjustment to ${value.toFixed(2)} meters`}
+                                       aria-pressed={Math.abs(distanceM - value) < 0.005}
+                                       onClick={runDockAction(() => setBoundaryShiftDistanceM(value.toFixed(2)))}
+                                       className={`h-10 rounded-md border text-[9px] font-black ${Math.abs(distanceM - value) < 0.005 ? 'border-orange-500 bg-orange-500/12 text-orange-500' : runtimeButton}`}
+                                   >
+                                       {value.toFixed(2)}
+                                   </button>
+                               ))}
+                           </div>
+                       </div>
+
+                       <div className={`rounded-lg px-2 py-1.5 text-[8px] font-bold leading-snug ${boundaryShiftPreview.valid ? (isDarkDock ? 'bg-orange-500/10 text-orange-300' : 'bg-orange-50 text-orange-700') : 'bg-red-500/10 text-red-500'}`}>
+                           {boundaryShiftPreview.reason || (boundaryShiftMode === 'MOVE'
+                               ? 'Move translates the entire boundary without changing its shape.'
+                               : 'In / Out creates a constant safety or headland buffer.')}
+                       </div>
+                   </div>
+
+                   <div className={`shrink-0 border-t ${railDivider} p-1.5 grid grid-cols-2 gap-1.5`}>
+                       <button
+                           type="button"
+                           aria-label="Apply adjusted boundary to this run"
+                           disabled={!canApply}
+                           onClick={runDockAction(() => applyDockBoundaryShift())}
+                           className="h-11 min-w-0 rounded-lg bg-orange-500 text-white flex items-center justify-center gap-1 text-[9px] font-black hover:bg-orange-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35"
+                       >
+                           <Check className="w-3.5 h-3.5 shrink-0" />
+                           <span className="truncate">Apply run</span>
+                       </button>
+                       <button
+                           type="button"
+                           title="Save an adjusted copy; the source boundary stays unchanged"
+                           aria-label="Save adjusted copy as a new boundary; source boundary stays unchanged"
+                           disabled={!boundaryShiftPreview.valid || distanceM < 0.005}
+                           onClick={runDockAction(() => applyDockBoundaryShift({ saveCopy: true }))}
+                           className={`h-11 min-w-0 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 text-[9px] font-black disabled:cursor-not-allowed disabled:opacity-35`}
+                       >
+                           <Copy className="w-3.5 h-3.5 shrink-0" />
+                           <span className="truncate">Save copy</span>
+                       </button>
                    </div>
                </section>
            );
        };
        const renderDockViewControls = () => (
            <div className={`rounded-xl border ${runtimeSection} p-2`}>
-               <div className="mb-2 flex h-8 items-center justify-between gap-2 px-1">
+               <div className="mb-1.5 flex h-5 items-center justify-between gap-2 px-1">
                    <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>View</span>
                    <span aria-live="polite" className={`text-xs font-black tabular-nums ${t.textMain}`}>{zoomPercent}%</span>
                </div>
@@ -4939,7 +6318,7 @@ const App = () => {
                        aria-label="Zoom out"
                        disabled={zoomLevel <= MIN_MAP_ZOOM}
                        onClick={runDockAction(() => handleZoom('out'))}
-                       className={`h-12 rounded-lg border ${runtimeButton} flex items-center justify-center active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
+                       className={`h-11 rounded-lg border ${runtimeButton} flex items-center justify-center active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
                    >
                        <Minus className="h-5 w-5" />
                    </button>
@@ -4948,7 +6327,7 @@ const App = () => {
                        aria-label="Reset map zoom"
                        disabled={Math.abs(zoomLevel - DEFAULT_MAP_ZOOM) < 0.01}
                        onClick={runDockAction(() => handleZoom('reset'))}
-                       className={`h-12 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-default disabled:opacity-45`}
+                       className={`h-11 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-default disabled:opacity-45`}
                    >
                        <RotateCcw className="h-4 w-4" />
                        <span className="text-[9px] font-black">100%</span>
@@ -4958,7 +6337,7 @@ const App = () => {
                        aria-label="Zoom in"
                        disabled={zoomLevel >= MAX_MAP_ZOOM}
                        onClick={runDockAction(() => handleZoom('in'))}
-                       className={`h-12 rounded-lg border ${runtimeButton} flex items-center justify-center active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
+                       className={`h-11 rounded-lg border ${runtimeButton} flex items-center justify-center active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
                    >
                        <Plus className="h-5 w-5" />
                    </button>
@@ -4969,13 +6348,13 @@ const App = () => {
            <section
                data-dock-mode="manual"
                aria-label="Manual line and boundary controls"
-               className={`pointer-events-auto ${dockWidth} overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none`}
+               className={`pointer-events-auto ${dockWidth} max-h-full overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none flex flex-col`}
                onPointerDown={stopDockPointer}
                onPointerMove={stopDockPointer}
                onPointerUp={stopDockPointer}
                onClick={stopDockPointer}
            >
-               <div className={`h-10 border-b ${railDivider} px-3 flex items-center justify-between gap-2`}>
+               <div className={`h-9 shrink-0 border-b ${railDivider} px-3 flex items-center justify-between gap-2`}>
                    <span className="min-w-0 flex items-center gap-2">
                        <span className="h-4 w-1 rounded-full bg-orange-500" />
                        <span className={`truncate text-[10px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Run setup</span>
@@ -4983,15 +6362,15 @@ const App = () => {
                    <span className="shrink-0 rounded-md bg-orange-500/12 px-1.5 py-1 text-[8px] font-black uppercase text-orange-500">Manual</span>
                </div>
 
-               <div className="space-y-2 p-2">
+               <div className="run-dock-body min-h-0 flex-1 space-y-1.5 overflow-hidden p-2">
                    {renderManualAssetCard({
-                       icon: Route,
+                       icon: getLineTypeIcon(activeShiftType),
                         label: 'Guidance line',
                         value: activeDockLineLabel,
                         detail: unsavedGuidance
                              ? 'Geometry ready / not saved'
                              : activeLineRecord
-                                  ? `${compactStatus(activeLineRecord.type || guidanceLine)}${Math.abs(lineShiftMeters) >= 0.005 ? ` / Shift ${lineShiftMeters < 0 ? 'L' : 'R'} ${Math.abs(lineShiftMeters).toFixed(2)}m` : ''}`
+                                  ? `${compactStatus(activeLineRecord.type || guidanceLine)}${Math.abs(lineShiftMeters) >= 0.005 ? ` / Shift ${shiftDirectionLabel(lineShiftMeters, { short: true })} ${Math.abs(lineShiftMeters).toFixed(2)}m` : ''}`
                                   : `${(activeFieldRecord?.lines || []).filter(line => !line.archived).length} saved`,
                         tone: 'blue',
                         actions: unsavedGuidance
@@ -5007,22 +6386,39 @@ const App = () => {
                                     { icon: Plus, label: 'Other', onClick: openDockLineCreator }
                                 ]
                     })}
+                   {activeLineRecord && tramlineSupported && (
+                       <button
+                           type="button"
+                           onClick={runDockAction(openTramlinePanel)}
+                           className={`w-full h-11 rounded-xl border px-2.5 flex items-center gap-2 text-left ${activeTramline.enabled ? 'border-yellow-500/45 bg-yellow-500/10 text-yellow-500' : runtimeButton}`}
+                       >
+                           <AlignJustify className="w-4 h-4 shrink-0" />
+                           <span className="min-w-0 flex-1">
+                               <span className="block text-[9px] font-black uppercase">Tramline</span>
+                               <span className={`block text-[8px] font-bold truncate ${activeTramline.enabled ? 'text-yellow-500/80' : t.textSub}`}>{activeTramline.enabled ? `Every ${activeTramline.intervalPasses} passes · set current / shift` : 'Configure repeating traffic passes'}</span>
+                           </span>
+                           <ChevronRight className="w-3.5 h-3.5 shrink-0" />
+                       </button>
+                   )}
                    {renderManualAssetCard({
                        icon: MapPin,
                        label: 'Boundary',
                        value: activeDockBoundaryLabel,
-                       detail: activeDockBoundary ? `${activeDockBoundaryPointCount} recorded points` : `${(activeFieldRecord?.boundaries || []).length} saved`,
+                       detail: activeDockBoundary
+                           ? `${activeDockBoundaryPointCount} points${boundaryOverrideMatchesActive ? ` / ${boundaryRunOverride.label}` : ''}`
+                           : `${(activeFieldRecord?.boundaries || []).length} saved`,
                        tone: 'orange',
                        actions: dockBoundaries.length > 0
                            ? [
+                               { icon: Ruler, label: 'Shift', ariaLabel: 'Shift active boundary', onClick: openDockBoundaryShift, disabled: !activeDockBoundary },
                                { icon: ArrowLeftRight, label: 'Switch', onClick: () => openDockPicker('boundaries') },
                                { icon: Radio, label: 'Record', onClick: startDockBoundaryCapture }
                            ]
                            : [{ icon: Radio, label: 'Record', onClick: startDockBoundaryCapture }]
                    })}
                    {renderDockViewControls()}
-                   <div className={`rounded-lg px-2.5 py-2 text-[9px] font-bold leading-snug ${isDarkDock ? 'bg-slate-900/70 text-slate-400' : 'bg-slate-100 text-slate-500'}`}>
-                       Quick actions change the active Run setup. Use the left rail to manage saved data.
+                   <div title="Run-only edits. Manage saved data from the left rail." className={`h-7 rounded-lg px-2 text-[8px] font-bold flex items-center truncate ${isDarkDock ? 'bg-slate-900/70 text-slate-400' : 'bg-slate-100 text-slate-500'}`}>
+                       Run-only edits · Saved data on left
                    </div>
                </div>
            </section>
@@ -5031,13 +6427,13 @@ const App = () => {
            <section
                data-dock-mode="auto"
                aria-label="Auto quick adjustments"
-               className={`pointer-events-auto ${dockWidth} overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none`}
+               className={`pointer-events-auto ${dockWidth} max-h-full overflow-hidden rounded-l-2xl border-y border-l ${dockSurface} shadow-xl select-none flex flex-col`}
               onPointerDown={stopDockPointer}
               onPointerMove={stopDockPointer}
               onPointerUp={stopDockPointer}
               onClick={stopDockPointer}
           >
-               <div className={`h-10 border-b ${railDivider} px-3 flex items-center justify-between gap-2`}>
+               <div className={`h-9 shrink-0 border-b ${railDivider} px-3 flex items-center justify-between gap-2`}>
                    <span className="min-w-0 flex items-center gap-2">
                        <span className="h-4 w-1 rounded-full bg-blue-500" />
                        <span className={`truncate text-[10px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Quick adjust</span>
@@ -5045,7 +6441,7 @@ const App = () => {
                    <span className="shrink-0 rounded-md bg-blue-500/12 px-1.5 py-1 text-[8px] font-black uppercase text-blue-500">Auto</span>
                </div>
 
-              <div className="space-y-2 p-2">
+              <div className="run-dock-body min-h-0 flex-1 space-y-1.5 overflow-hidden p-2">
                   <div className={`rounded-xl border ${runtimeSection} p-2.5`}>
                       <div className="flex items-center justify-between gap-2">
                           <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Run assets</span>
@@ -5053,10 +6449,25 @@ const App = () => {
                       </div>
                       <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
                           <span className={`min-w-0 flex-1 text-[11px] font-black truncate ${t.textMain}`}>{activeDockLineLabel}</span>
-                          {Math.abs(lineShiftMeters) >= 0.005 && <span className="shrink-0 rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black text-blue-500">{lineShiftMeters < 0 ? 'L' : 'R'} {Math.abs(lineShiftMeters).toFixed(2)}m</span>}
+                          {Math.abs(lineShiftMeters) >= 0.005 && <span className="shrink-0 rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black text-blue-500">{shiftDirectionLabel(lineShiftMeters, { short: true })} {Math.abs(lineShiftMeters).toFixed(2)}m</span>}
                       </div>
                       <div className={`mt-0.5 text-[9px] font-bold truncate ${t.textSub}`}>{activeDockBoundaryLabel}</div>
                   </div>
+                  {activeLineRecord && tramlineSupported && (
+                      <button
+                          type="button"
+                          onClick={runDockAction(openTramlinePanel)}
+                          className={`w-full h-11 rounded-xl border px-2.5 flex items-center gap-2 text-left ${activeTramline.enabled ? 'border-yellow-500/45 bg-yellow-500/10 text-yellow-500' : runtimeButton}`}
+                      >
+                          <AlignJustify className="w-4 h-4 shrink-0" />
+                          <span className="min-w-0 flex-1 text-[9px] font-black truncate">
+                              {activeTramline.enabled
+                                  ? `Pass ${currentRunKpi.passIndex >= 0 ? '+' : ''}${currentRunKpi.passIndex} · ${isTramlinePass(currentRunKpi.passIndex) ? 'TRAMLINE' : 'WORK'}`
+                                  : 'Set Tramline pattern'}
+                          </span>
+                          <ChevronRight className="w-3.5 h-3.5 shrink-0" />
+                      </button>
+                  )}
                   <div className={`rounded-xl border ${runtimeSection} p-2`}>
                       <div className="mb-2 flex h-10 items-center justify-between gap-2 px-1">
                           <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Nudge</span>
@@ -5067,13 +6478,13 @@ const App = () => {
                       <div className="grid grid-cols-3 gap-1.5">
                           <button
                               type="button"
-                              aria-label="Nudge guidance left 1 centimeter"
+                              aria-label={`Nudge guidance ${isPivotShift ? 'inward' : 'left'} 1 centimeter`}
                               disabled={!autoTrimEnabled}
                               onClick={runDockAction(() => handleTrim('left'))}
                               className={`h-12 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
                           >
                               <Minus className="h-4 w-4 text-blue-500" />
-                              <span className="text-[9px] font-black">1 CM</span>
+                              <span className="text-[9px] font-black">{isPivotShift ? 'IN 1CM' : '1 CM'}</span>
                           </button>
                           <button
                               type="button"
@@ -5087,13 +6498,13 @@ const App = () => {
                           </button>
                           <button
                               type="button"
-                              aria-label="Nudge guidance right 1 centimeter"
+                              aria-label={`Nudge guidance ${isPivotShift ? 'outward' : 'right'} 1 centimeter`}
                               disabled={!autoTrimEnabled}
                               onClick={runDockAction(() => handleTrim('right'))}
                               className={`h-12 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
                           >
                               <Plus className="h-4 w-4 text-blue-500" />
-                              <span className="text-[9px] font-black">1 CM</span>
+                              <span className="text-[9px] font-black">{isPivotShift ? 'OUT 1CM' : '1 CM'}</span>
                           </button>
                       </div>
                   </div>
@@ -5103,7 +6514,7 @@ const App = () => {
           </section>
       );
       const renderDockLayout = (dock, centered = false) => (
-          <div className={`h-full max-h-full flex ${centered ? 'items-center' : 'items-start'} pointer-events-none`}>
+          <div className={`run-dock-layout h-full max-h-full overflow-hidden flex ${centered ? 'items-center' : 'items-start'} pointer-events-none`}>
               {dock}
           </div>
       );
@@ -5347,6 +6758,10 @@ const App = () => {
            return renderDockLayout(renderManualLineShift(), true);
        }
 
+       if (steeringMode === 'MANUAL' && dockQuickPicker === 'boundary-shift') {
+           return renderDockLayout(renderManualBoundaryShift(), true);
+       }
+
        if (steeringMode === 'MANUAL' && dockQuickPicker) {
            return renderDockLayout(renderManualQuickPicker(), true);
        }
@@ -5403,6 +6818,8 @@ const App = () => {
   };
   const vehicleInformationReady = Boolean(String(vehicleSettings.label || '').trim()) && Boolean(vehicleSettings.type);
   const vehicleGeometryReady = Number(vehicleSettings.wheelbase) > 0
+      && Number.isFinite(Number(vehicleSettings.turnRadius))
+      && Number(vehicleSettings.turnRadius) >= Number(vehicleSettings.wheelbase) + 0.1
       && Number(vehicleSettings.frontAxleWidth) > 0
       && Number(vehicleSettings.rearAxleWidth) > 0
       && Number(vehicleSettings.antennaHeight) > 0
@@ -5835,13 +7252,14 @@ const App = () => {
       </section>
   );
 
-  const SettingSelect = ({ label, value, onChange, options }) => (
-      <div className="flex flex-col gap-1.5">
+  const SettingSelect = ({ label, value, onChange, options, disabled = false }) => (
+      <div className={`flex flex-col gap-1.5 ${disabled ? 'opacity-55' : ''}`}>
           <label className={`ui-label ${t.textSub}`}>{label}</label>
           <select
               value={value}
               onChange={(e) => onChange(e.target.value)}
-              className={`ui-body ${t.bgInput} border ${t.borderCard} rounded-lg px-4 py-2.5 ${t.textMain} outline-none`}
+              disabled={disabled}
+              className={`ui-body ${t.bgInput} border ${t.borderCard} rounded-lg px-4 py-2.5 ${t.textMain} outline-none disabled:cursor-not-allowed`}
           >
               {options.map((option) => (
                   <option key={option} value={option}>{option}</option>
@@ -8249,7 +9667,7 @@ const App = () => {
                                                     </div>
                                                     <div className={`overflow-hidden rounded-xl border ${t.borderCard}`}>
                                                         <VehicleParameterInput field="wheelbase" label="Wheelbase" value={vehicleSettings.wheelbase} hint="Front axle to rear axle." />
-                                                        <VehicleParameterInput field="turnRadius" label="Min. turn radius" value={vehicleSettings.turnRadius} hint="Guidance and U-turn limit." />
+                                                        <VehicleParameterInput field="turnRadius" label="Min. turn radius" value={vehicleSettings.turnRadius} hint="Must be at least wheelbase + 0.10 m." />
                                                         <VehicleParameterInput field="frontAxleWidth" label="Front wheel track" value={vehicleSettings.frontAxleWidth} hint="Tire center to tire center." />
                                                         <VehicleParameterInput field="rearAxleWidth" label="Rear wheel track" value={vehicleSettings.rearAxleWidth} hint="Tire center to tire center." />
                                                         <VehicleParameterInput field="frontOverhang" label="Front overhang" value={vehicleSettings.frontOverhang || 0} hint="Front axle to nose." />
@@ -8738,10 +10156,10 @@ const App = () => {
                     actions={<><SettingsActionButton onClick={() => setLinesPanelOpen(true)}>Open Lines</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => setLineModeModalOpen(true)}>Create Line</SettingsActionButton></>}
                 >
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                        <ConfigTile icon={Route} label="Active Line" value={activeLineRecord?.name || getGuidanceModeLabel()} />
+                        <ConfigTile icon={getLineTypeIcon(activeLineRecord?.type || guidanceLine || lineType)} label="Active Line" value={activeLineRecord?.name || getGuidanceModeLabel()} />
                         <ConfigTile icon={Ruler} label="Implement Width" value={`${implementSettings.width.toFixed(1)} m`} />
-                        <ConfigTile icon={ArrowLeftRight} label="Line Shift" value={`${((lineShiftOffset / PIXELS_PER_METER) * liveGuidanceDirectionFactor) > 0 ? '+' : ''}${((lineShiftOffset / PIXELS_PER_METER) * liveGuidanceDirectionFactor).toFixed(2)} m`} />
-                        <ConfigTile icon={ArrowLeftRight} label="Trim Offset" value={`${((manualOffset / PIXELS_PER_METER * 100) * liveGuidanceDirectionFactor) > 0 ? '+' : ''}${((manualOffset / PIXELS_PER_METER * 100) * liveGuidanceDirectionFactor).toFixed(1)} cm`} />
+                        <ConfigTile icon={ArrowLeftRight} label="Line Shift" value={`${((lineShiftOffset / PIXELS_PER_METER) * liveGuidanceDisplayFactor) > 0 ? '+' : ''}${((lineShiftOffset / PIXELS_PER_METER) * liveGuidanceDisplayFactor).toFixed(2)} m`} />
+                        <ConfigTile icon={ArrowLeftRight} label="Trim Offset" value={`${((manualOffset / PIXELS_PER_METER * 100) * liveGuidanceDisplayFactor) > 0 ? '+' : ''}${((manualOffset / PIXELS_PER_METER * 100) * liveGuidanceDisplayFactor).toFixed(1)} cm`} />
                     </div>
                     <button onClick={handleToggleMultiLine} className={`w-full flex items-center justify-between p-4 ${t.bgInput} border ${t.borderCard} rounded-xl text-left`}>
                         <div>
@@ -8782,28 +10200,10 @@ const App = () => {
             </div>
         );
         case 'uturn': {
-            const turnConfig = {
-              enabled: true,
-              headlandMode: 'Auto from boundary',
-              pattern: 'Smart U-Turn',
-              direction: 'Auto',
-              nextPass: 'Adjacent',
-              skipPasses: 0,
-              trigger: 'Manual confirm',
-              startDistanceM: 18,
-              turnSpeedKmh: 5.5,
-              aggressiveness: 70,
-              liftAction: true,
-              resumeAutosteer: true,
-              pauseCoverage: true,
-              requireBoundary: false,
-              ...uTurnSettings
-            };
+            const turnConfig = getNormalizedTurnConfig();
             const turnPatternOptions = [
-                { id: 'Smart U-Turn', title: 'Smart U-Turn', detail: 'Boundary-aware path to the selected next pass.', icon: CornerUpLeft },
-                { id: 'Basic Omega', title: 'Basic Omega', detail: 'Wide single sweep when headland space is limited.', icon: CornerUpRight },
-                { id: 'Fish Tail', title: 'Fish Tail', detail: 'Two-stage turn to line up trailing implements.', icon: Spline },
-                { id: 'Manual Assist', title: 'Manual Assist', detail: 'Operator steers, system keeps target pass ready.', icon: SteeringWheelIcon }
+                { id: 'AUTO', title: 'Forward U / Ω', detail: 'Forward-only turn. The planner uses U when spacing is wide enough and Ω when it is narrow.', icon: CornerUpLeft },
+                { id: 'FISH_TAIL', title: 'Fish-tail', detail: 'Restricted headland path with forward/reverse gear prompts. Mounted implements only.', icon: Spline }
             ];
             const renderTurnToggle = ({ label, detail, settingKey, icon: Icon = CheckCircle2 }) => (
                 <button
@@ -8828,26 +10228,26 @@ const App = () => {
             return (
               <div className="space-y-3">
                 <SettingsSection
-                    title="Headland Turn Assist"
-                    detail="Configure how the controller leaves one pass, turns at the headland and enters the next pass."
+                    title="One-Key & Auto U-Turn"
+                    detail="One-Key runs a selected turn now. Auto arms the same validated planner at the active boundary."
                     icon={CornerUpLeft}
-                    actions={<><SettingsActionButton onClick={() => cancelTurnAssist()}>Cancel Turn</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => handleUTurn()}>Test Turn</SettingsActionButton></>}
+                    actions={<><SettingsActionButton onClick={() => cancelTurnAssist({ resumePreviousMode: false })}>Cancel Turn</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => { setSettingsOpen(false); openUTurnPlanner(); }}>Preview on Map</SettingsActionButton></>}
                 >
                     <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-                        <SettingsMetric label="State" value={turnAssistActive ? 'Turning' : turnConfig.enabled ? 'Ready' : 'Off'} tone={turnAssistActive ? 'text-blue-500' : turnConfig.enabled ? 'text-green-500' : 'text-slate-500'} />
-                        <SettingsMetric label="Pattern" value={turnConfig.pattern} />
+                        <SettingsMetric label="State" value={turnAssistActive ? uTurnStage : autoUTurnArmed ? 'Armed' : turnConfig.enabled ? 'Ready' : 'Off'} tone={turnAssistActive || autoUTurnArmed ? 'text-blue-500' : turnConfig.enabled ? 'text-green-500' : 'text-slate-500'} />
+                        <SettingsMetric label="Mode" value={turnConfig.mode === 'AUTO' ? 'Auto boundary' : 'One-Key'} />
                         <SettingsMetric label="Next Pass" value={turnConfig.nextPass === 'Skip' ? `Skip ${turnConfig.skipPasses}` : turnConfig.nextPass} />
                         <SettingsMetric label="Turn Speed" value={`${Number(turnConfig.turnSpeedKmh || 0).toFixed(1)} km/h`} />
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {renderTurnToggle({ label: 'Enable Turn Assist', detail: 'Allow one-tap or headland-triggered U-turn workflow.', settingKey: 'enabled', icon: CornerUpLeft })}
-                        {renderTurnToggle({ label: 'Use Headland Path', detail: 'Use boundary/headland geometry to keep the turn inside the field.', settingKey: 'requireBoundary', icon: MapPin })}
+                        {renderTurnToggle({ label: 'Require Boundary', detail: 'Block One-Key without a boundary; any active boundary is always checked.', settingKey: 'requireBoundary', icon: MapPin })}
                     </div>
                 </SettingsSection>
 
-                <SettingsSection title="Turn Pattern" detail="Choose the path shape before running automatic or assisted turns." icon={Route}>
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                <SettingsSection title="Turn Path" detail="F200-style forward and restricted-space paths use the calibrated minimum radius." icon={Route}>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {turnPatternOptions.map((option) => {
                             const active = turnConfig.pattern === option.id;
                             const Icon = option.icon;
@@ -8873,20 +10273,19 @@ const App = () => {
 
                 <SettingsSection title="Turn Rules" detail="These values define when the turn starts and which pass it targets." icon={Settings}>
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                        <SettingSelect label="Mode" value={turnConfig.mode} onChange={(value) => handleUTurnSettingChange('mode', value)} options={['ONE_KEY', 'AUTO']} />
                         <SettingSelect label="Direction" value={turnConfig.direction} onChange={(value) => handleUTurnSettingChange('direction', value)} options={['Auto', 'Left', 'Right']} />
-                        <SettingSelect label="Next Pass" value={turnConfig.nextPass} onChange={(value) => handleUTurnSettingChange('nextPass', value)} options={['Adjacent', 'Skip', 'Same Track', 'Manual Select']} />
-                        <SettingInput theme={t} label="Skip Passes" value={turnConfig.skipPasses} type="number" onChange={(e) => handleUTurnSettingChange('skipPasses', Math.max(0, parseInt(e.target.value, 10) || 0))} />
-                        <SettingSelect label="Trigger" value={turnConfig.trigger} onChange={(value) => handleUTurnSettingChange('trigger', value)} options={['Manual confirm', 'Headland prompt', 'Auto at boundary']} />
-                        <SettingInput theme={t} label="Start Distance (m)" value={turnConfig.startDistanceM} type="number" onChange={(e) => handleUTurnSettingChange('startDistanceM', Math.max(0, parseFloat(e.target.value) || 0))} />
-                        <SettingInput theme={t} label="Turn Speed (km/h)" value={turnConfig.turnSpeedKmh} type="number" onChange={(e) => handleUTurnSettingChange('turnSpeedKmh', Math.max(1, parseFloat(e.target.value) || 1))} />
-                        <SettingInput theme={t} label="Aggressiveness (%)" value={turnConfig.aggressiveness} type="number" onChange={(e) => handleUTurnSettingChange('aggressiveness', Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)))} />
-                        <SettingSelect label="Headland Mode" value={turnConfig.headlandMode} onChange={(value) => handleUTurnSettingChange('headlandMode', value)} options={['Auto from boundary', 'Manual headland', 'No headland']} />
+                        <SettingSelect label={activeTramline.enabled ? 'Next Pass (Tramline)' : 'Next Pass'} value={turnConfig.nextPass} disabled={activeTramline.enabled} onChange={(value) => handleUTurnSettingChange('nextPass', value)} options={['Adjacent', 'Skip']} />
+                        <SettingInput theme={t} label={activeTramline.enabled ? 'Skip Passes (Tramline owns routing)' : 'Skip Passes (0–49)'} value={turnConfig.skipPasses} disabled={activeTramline.enabled} type="number" onChange={(e) => handleUTurnSettingChange('skipPasses', Math.min(49, Math.max(0, parseInt(e.target.value, 10) || 0)))} />
+                        <SettingInput theme={t} label="Start Distance (4–100 m)" value={turnConfig.startDistanceM} type="number" onChange={(e) => handleUTurnSettingChange('startDistanceM', Math.min(100, Math.max(4, parseFloat(e.target.value) || 4)))} />
+                        <SettingInput theme={t} label="Turn Speed (1–10 km/h)" value={turnConfig.turnSpeedKmh} type="number" onChange={(e) => handleUTurnSettingChange('turnSpeedKmh', Math.min(10, Math.max(1, parseFloat(e.target.value) || 1)))} />
+                        <SettingsMetric label="Trigger source" value={turnConfig.mode === 'AUTO' ? 'Active boundary' : 'One-Key confirm'} />
                     </div>
                 </SettingsSection>
 
-                <SettingsSection title="Implement Actions" detail="Actions applied around the turn so coverage and implement state stay clean." icon={ArrowUpFromDot}>
+                <SettingsSection title="Implement Actions" detail="Simulation requests shown during the turn; live actuation requires implement feedback." icon={ArrowUpFromDot}>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        {renderTurnToggle({ label: 'Lift Implement', detail: 'Raise at start, lower when aligned to next pass.', settingKey: 'liftAction', icon: ArrowUpFromDot })}
+                        {renderTurnToggle({ label: 'Lift Request', detail: 'Show raise/lower timing; connect ISOBUS or I/O for physical lift.', settingKey: 'liftAction', icon: ArrowUpFromDot })}
                         {renderTurnToggle({ label: 'Pause Coverage', detail: 'Do not paint coverage while turning on headland.', settingKey: 'pauseCoverage', icon: Pause })}
                         {renderTurnToggle({ label: 'Resume Autosteer', detail: 'Re-engage guidance when heading error is acceptable.', settingKey: 'resumeAutosteer', icon: CheckCircle2 })}
                     </div>
@@ -9066,7 +10465,7 @@ const App = () => {
                 value: correctionSource === 'Base Station' ? 'Local Base' : correctionSource,
                 detail: `${rtkStatus} correction / ${correctionSource === 'Base Station' ? 'radio link' : 'internet caster'}`,
                 icon: LocateFixed,
-                ready: rtkStatus === 'FIX',
+                ready: rtkGuidanceReady,
                 status: rtkStatus
               },
               {
@@ -9074,7 +10473,7 @@ const App = () => {
                 title: 'Guidance line',
                 value: activeLineRecord?.name || getGuidanceModeLabel(),
                 detail: isMultiLineMode ? 'Parallel lanes enabled' : 'Single active line',
-                icon: Route,
+                icon: getLineTypeIcon(activeLineRecord?.type || guidanceLine || lineType),
                 ready: hasGuidanceToEngage,
                 status: hasGuidanceToEngage ? 'Ready' : 'Select'
               },
@@ -9306,7 +10705,7 @@ const App = () => {
             const implementCalibrationReady = calibrationStatus.implement === 'OK'
                 && implementCalibrationMatchesPair;
             const readyCalibrationCount = Number(vehicleCalibrationReady) + Number(implementCalibrationReady);
-            const calibrationStartReady = Math.abs(speed) < 0.1 && rtkStatus === 'FIX';
+            const calibrationStartReady = Math.abs(speed) < 0.1 && rtkGuidanceReady;
             const vehicleSteps = [
                 {
                     id: 'steering-sensor',
@@ -9362,7 +10761,7 @@ const App = () => {
                     id: 'tracking-validation',
                     title: 'Tracking validation',
                     summary: 'Outbound and return pass on one AB line',
-                    icon: Route,
+                    icon: GitCommitHorizontal,
                     instruction: 'Drive one straight pass, turn 180°, then drive back on the same line at a steady working speed.',
                     note: 'Pass only when mean error, peak error and oscillation stay inside the steering target.',
                     checks: ['Straight AB line selected', 'RTK remains FIX through both passes', 'Use the same speed in both directions'],
@@ -9481,8 +10880,8 @@ const App = () => {
                     showNotification('Stop the vehicle before starting calibration', 'warning');
                     return;
                 }
-                if (rtkStatus !== 'FIX') {
-                    showNotification('Wait for RTK FIX before starting calibration', 'warning');
+                if (!rtkGuidanceReady) {
+                    showNotification('Wait for stable RTK FIX quality before starting calibration', 'warning');
                     return;
                 }
                 if (scope === 'implement' && !vehicleCalibrationReady) {
@@ -9701,8 +11100,8 @@ const App = () => {
                             >
                                 {Math.abs(speed) >= 0.1
                                     ? 'Stop vehicle'
-                                    : rtkStatus !== 'FIX'
-                                        ? 'Wait for RTK FIX'
+                                    : !rtkGuidanceReady
+                                        ? 'Wait for stable RTK'
                                         : readyCalibrationCount === calibrationModules.length
                                             ? 'Recalibrate vehicle'
                                             : 'Continue calibration'}
@@ -9715,7 +11114,7 @@ const App = () => {
                         {[
                             ['Equipment pair', `${activeVehicleSettings.type} + ${activeImplementSettings.name}`, Tractor, true],
                             ['Machine state', Math.abs(speed) < 0.1 ? 'Stopped / safe to start' : `${Math.abs(speed).toFixed(1)} km/h / stop first`, AlertCircle, Math.abs(speed) < 0.1],
-                            ['Position quality', `${rtkStatus} / ${currentGnssTelemetry.roverUsedSats || satelliteCount} sats`, LocateFixed, rtkStatus === 'FIX']
+                            ['Position quality', `${rtkStatus} / ${currentGnssTelemetry.roverUsedSats || satelliteCount} sats`, LocateFixed, rtkGuidanceReady]
                         ].map(([label, value, Icon, ready]) => (
                             <div key={label} className={`flex h-[52px] min-w-0 items-center gap-2.5 px-3 ${theme === 'dark' ? 'bg-slate-900/75' : 'bg-gray-50'}`}>
                                 <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${ready ? 'bg-green-500/10 text-green-500' : 'bg-amber-500/10 text-amber-500'}`}>
@@ -9823,7 +11222,7 @@ const App = () => {
               radioFrequency: '464.500',
               ...rtkSettings
             };
-            const rtkQuality = rtkStatus === 'FIX' ? 95 : rtkStatus === 'FLOAT' ? 75 : rtkStatus === 'DIFF' ? 55 : 20;
+            const rtkQuality = rtkGuidanceReady ? 95 : rtkStatus === 'FIX' ? 68 : rtkStatus === 'FLOAT' ? 60 : rtkStatus === 'DIFF' ? 45 : 20;
             const rtkStatusMap = {
                 FIX: {
                     detail: 'Correction locked',
@@ -9867,31 +11266,31 @@ const App = () => {
             const rtkSummaryMetrics = [
                 {
                     label: 'H accuracy',
-                    value: `${currentGnssTelemetry.horizontalAccuracyCm.toFixed(1)} cm`,
-                    tone: currentGnssTelemetry.horizontalAccuracyCm <= 5 ? 'text-green-500' : 'text-yellow-500'
+                    value: formatOptionalRtkMetric(currentGnssTelemetry.horizontalAccuracyCm, 1, ' cm'),
+                    tone: currentGnssTelemetry.horizontalAccuracyCm !== null && currentGnssTelemetry.horizontalAccuracyCm <= 5 ? 'text-green-500' : 'text-yellow-500'
                 },
                 {
                     label: 'V accuracy',
-                    value: `${currentGnssTelemetry.verticalAccuracyCm.toFixed(1)} cm`,
-                    tone: currentGnssTelemetry.verticalAccuracyCm <= 8 ? 'text-green-500' : 'text-yellow-500'
+                    value: formatOptionalRtkMetric(currentGnssTelemetry.verticalAccuracyCm, 1, ' cm'),
+                    tone: currentGnssTelemetry.verticalAccuracyCm !== null && currentGnssTelemetry.verticalAccuracyCm <= 8 ? 'text-green-500' : 'text-yellow-500'
                 },
-                { label: 'Correction age', value: `${currentGnssTelemetry.correctionAgeSec.toFixed(1)} s` },
+                { label: 'Correction age', value: formatOptionalRtkMetric(currentGnssTelemetry.correctionAgeSec, 1, ' s') },
                 {
                     label: 'Latency',
-                    value: `${currentRtkTelemetry.latencyMs} ms`,
-                    tone: currentRtkTelemetry.latencyMs <= 100 ? 'text-green-500' : 'text-yellow-500'
+                    value: formatOptionalRtkMetric(currentRtkTelemetry.latencyMs, 0, ' ms'),
+                    tone: currentRtkTelemetry.latencyMs !== null && currentRtkTelemetry.latencyMs <= 100 ? 'text-green-500' : 'text-yellow-500'
                 },
                 {
                     label: 'HDOP',
-                    value: currentRtkTelemetry.hdop.toFixed(1),
-                    tone: currentRtkTelemetry.hdop <= 1.2 ? 'text-green-500' : 'text-yellow-500'
+                    value: formatOptionalRtkMetric(currentRtkTelemetry.hdop, 1),
+                    tone: currentRtkTelemetry.hdop !== null && currentRtkTelemetry.hdop <= 1.2 ? 'text-green-500' : 'text-yellow-500'
                 },
                 {
                     label: 'PDOP',
-                    value: currentRtkTelemetry.pdop.toFixed(1),
-                    tone: currentRtkTelemetry.pdop <= 2 ? 'text-green-500' : 'text-yellow-500'
+                    value: formatOptionalRtkMetric(currentRtkTelemetry.pdop, 1),
+                    tone: currentRtkTelemetry.pdop !== null && currentRtkTelemetry.pdop <= 2 ? 'text-green-500' : 'text-yellow-500'
                 },
-                { label: 'Baseline', value: `${currentGnssTelemetry.baselineKm.toFixed(1)} km` },
+                { label: 'Baseline', value: formatOptionalRtkMetric(currentGnssTelemetry.baselineKm, 1, ' km') },
                 {
                     label: 'Antenna',
                     value: currentGnssTelemetry.antenna === 'Rover roof' ? 'Roof' : currentGnssTelemetry.antenna
@@ -10317,7 +11716,7 @@ const App = () => {
                   <div className="shrink-0 flex items-center gap-2">
                       <div className={`hidden md:flex rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/75' : 'bg-gray-50'} overflow-hidden`}>
                           {[
-                              { label: 'RTK', value: rtkStatus, tone: rtkStatus === 'FIX' ? 'text-green-500' : 'text-yellow-500' },
+                              { label: 'RTK', value: rtkStatus, tone: rtkGuidanceReady ? 'text-green-500' : 'text-yellow-500' },
                               { label: 'GNSS', value: `${currentGnssTelemetry.roverVisibleSats}/${currentGnssTelemetry.baseVisibleSats}`, tone: t.textMain },
                               { label: 'DB', value: localDatabase?.status || 'Ready', tone: (localDatabase?.status || '').toLowerCase().includes('fail') ? 'text-red-500' : 'text-green-500' }
                           ].map((item, idx) => (
@@ -10585,7 +11984,7 @@ const renderLinesPanel = () => {
     const selectedLineLocation = selectedLine ? getCreatedLocation(selectedLine, activeField) : '--';
     const workingWidthMeters = Math.max(0, Number(implementSettings.width) || 0);
     const overlapMeters = Math.max(0, Number(implementSettings.overlap) || 0);
-    const passSpacingMeters = Math.max(0, workingWidthMeters - overlapMeters);
+    const passSpacingMeters = Math.max(0.1, Number(selectedLine?.trackSpacingM) || (workingWidthMeters - overlapMeters));
 
     const getLineHeadingDegrees = (line) => {
         const storedHeading = Number(line?.heading ?? line?.points?.aplus?.heading);
@@ -10611,27 +12010,10 @@ const renderLinesPanel = () => {
     const selectedLineHeadingLabel = selectedLineHeading === null
         ? 'Not available'
         : `${selectedLineHeading.toFixed(1)}° ${getCardinalShortDirection(selectedLineHeading)}`;
-
-    const getLineIconFor = (line) => {
-        if (line?.type === 'CURVE') return Spline;
-        if (line?.type === 'COMBINATION') return AlignJustify;
-        if (line?.type === 'PIVOT') return CircleDashed;
-        if (line?.type === 'A_PLUS') return ArrowUpFromDot;
-        return GitCommitHorizontal;
-    };
-
-    const getLinePointList = (line) => {
-        const pts = [];
-        if (line?.points?.a) pts.push(line.points.a);
-        if (line?.points?.b) pts.push(line.points.b);
-        if (line?.points?.aplus?.point) pts.push(line.points.aplus.point);
-        if (Array.isArray(line?.points?.curve)) pts.push(...line.points.curve);
-        if (line?.points?.pivot?.center) pts.push(line.points.pivot.center);
-        return pts.filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
-    };
+    const LoadedLineIcon = getLineTypeIcon(loadedLine?.type || guidanceLine || lineType);
 
     const renderLinePreview = (line) => {
-        const points = getLinePointList(line);
+        const points = getLineDisplayPoints(line);
         const source = points.length > 1 ? points : [{ x: -140, y: -80 }, { x: 140, y: 80 }];
         const xs = source.map(p => p.x);
         const ys = source.map(p => p.y);
@@ -10650,6 +12032,7 @@ const renderLinesPanel = () => {
             y: height / 2 + (pt.y - midY) * scale
         });
         const preview = source.map(mapPoint);
+        const previewMarkers = getLineSemanticMarkerPoints(line, points).map(mapPoint);
         const gridStroke = theme === 'dark' ? '#334155' : '#cbd5e1';
 
         return (
@@ -10669,8 +12052,17 @@ const renderLinesPanel = () => {
                         strokeWidth="4"
                         strokeLinecap="round"
                     />
-                    {preview[0] && <circle cx={preview[0].x} cy={preview[0].y} r="6" fill="#2563eb" stroke="white" strokeWidth="2" />}
-                    {preview[preview.length - 1] && <circle cx={preview[preview.length - 1].x} cy={preview[preview.length - 1].y} r="6" fill="#f97316" stroke="white" strokeWidth="2" />}
+                    {previewMarkers.map((point, index) => (
+                        <circle
+                            key={`line-preview-marker-${index}`}
+                            cx={point.x}
+                            cy={point.y}
+                            r="6"
+                            fill={index === 0 ? '#2563eb' : '#f97316'}
+                            stroke="white"
+                            strokeWidth="2"
+                        />
+                    ))}
                 </svg>
             </div>
         );
@@ -10704,7 +12096,7 @@ const renderLinesPanel = () => {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="min-w-0 flex items-center gap-2.5">
                         <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${loadedLine ? 'bg-blue-600 text-white' : `${surfaceBg} ${t.textSub} border ${t.borderCard}`}`}>
-                            <Route className="w-4 h-4" />
+                            <LoadedLineIcon className="w-4 h-4" />
                         </div>
                         <div className="min-w-0">
                             <div className={`ui-eyebrow ${t.textSub}`}>Active line</div>
@@ -10777,7 +12169,7 @@ const renderLinesPanel = () => {
                                 </div>
                             ) : (
                                 lines.map((line, index) => {
-                                    const Icon = getLineIconFor(line);
+                                    const Icon = getLineTypeIcon(line);
                                     const lengthMeters = getLineLengthMeters(line);
                                     const active = activeLineId === line.id;
                                     const selected = selectedLine?.id === line.id;
@@ -10816,7 +12208,7 @@ const renderLinesPanel = () => {
                                                     </div>
                                                     <div className={`ui-caption mt-0.5 ${t.textSub}`}>
                                                         {(line.type || 'LINE').replace(/_/g, ' ')} / {lengthMeters !== null ? `${lengthMeters.toFixed(1)} m` : '--'}
-                                                        {Math.abs(Number(line.translationOffsetM) || 0) >= 0.005 ? ` / Shift ${line.translationDisplaySide || ((Number(line.translationOffsetM) || 0) < 0 ? 'L' : 'R')} ${Math.abs(Number(line.translationOffsetM) || 0).toFixed(2)} m` : ''}
+                                                        {Math.abs(Number(line.translationOffsetM) || 0) >= 0.005 ? ` / Shift ${getLineShiftSide(line)} ${Math.abs(Number(line.translationOffsetM) || 0).toFixed(2)} m` : ''}
                                                     </div>
                                                 </div>
                                             </div>
@@ -10856,7 +12248,7 @@ const renderLinesPanel = () => {
                                         <h3 className={`ui-detail-title ${t.textMain} truncate`}>{selectedLine.name}</h3>
                                         <div className={`ui-caption mt-0.5 ${t.textSub}`}>
                                             {(selectedLine.type || 'LINE').replace(/_/g, ' ')} / {selectedLine.isMulti ? 'Parallel lines enabled' : 'Single path'}
-                                            {Math.abs(Number(selectedLine.translationOffsetM) || 0) >= 0.005 ? ` / Shift ${selectedLine.translationDisplaySide || ((Number(selectedLine.translationOffsetM) || 0) < 0 ? 'L' : 'R')} ${Math.abs(Number(selectedLine.translationOffsetM) || 0).toFixed(2)} m` : ''}
+                                            {Math.abs(Number(selectedLine.translationOffsetM) || 0) >= 0.005 ? ` / Shift ${getLineShiftSide(selectedLine)} ${Math.abs(Number(selectedLine.translationOffsetM) || 0).toFixed(2)} m` : ''}
                                         </div>
                                     </div>
                                     <div className="shrink-0 flex items-center gap-2">
@@ -10891,7 +12283,7 @@ const renderLinesPanel = () => {
                                             </div>
                                             <div className="min-w-0">
                                                 <h4 className={`ui-list-title ${t.textMain}`}>Guidance setup</h4>
-                                                <div className={`ui-caption mt-0.5 ${t.textSub}`}>Spacing generated from the active implement.</div>
+                                                <div className={`ui-caption mt-0.5 ${t.textSub}`}>Pass spacing is frozen with this saved line.</div>
                                             </div>
                                         </div>
 
@@ -10899,14 +12291,14 @@ const renderLinesPanel = () => {
                                             <div className={`ui-label ${t.textSub}`}>Pass spacing</div>
                                             <div className="mt-1 flex items-end justify-between gap-3">
                                                 <div className="ui-metric text-blue-600">{passSpacingMeters.toFixed(2)} <span className="ui-caption">m</span></div>
-                                                <div className={`ui-meta text-right ${t.textSub}`}>Width − overlap</div>
+                                                <div className={`ui-meta text-right ${t.textSub}`}>Saved track spacing</div>
                                             </div>
                                         </div>
 
                                         <div className="mt-2 grid grid-cols-2 gap-2">
                                             {[
-                                                ['Working width', `${workingWidthMeters.toFixed(2)} m`],
-                                                ['Overlap', `${overlapMeters.toFixed(2)} m`],
+                                                ['Current width', `${workingWidthMeters.toFixed(2)} m`],
+                                                ['Current overlap', `${overlapMeters.toFixed(2)} m`],
                                                 ['Heading', selectedLineHeadingLabel],
                                                 ['Pass layout', selectedLine.isMulti ? 'Parallel' : 'Single']
                                             ].map(([label, value]) => (
@@ -10978,29 +12370,11 @@ const renderLinesPanel = () => {
       const softPanelBg = theme === 'dark' ? 'bg-slate-900/70' : 'bg-white';
       const mutedPanelBg = theme === 'dark' ? 'bg-slate-900/45' : 'bg-slate-50';
 
-      const getLineIcon = (line) => {
-          if (line?.type === 'CURVE') return Spline;
-          if (line?.type === 'COMBINATION') return AlignJustify;
-          if (line?.type === 'PIVOT') return CircleDashed;
-          if (line?.type === 'A_PLUS') return ArrowUpFromDot;
-          return GitCommitHorizontal;
-      };
-
       const getTaskIcon = (task) => {
           if (task?.type === 'Planting') return Sprout;
           if (task?.type === 'Spraying') return Droplets;
           if (task?.type === 'Harvesting') return Scissors;
           return Tractor;
-      };
-
-      const getLinePoints = (line) => {
-          const pts = [];
-          if (line?.points?.a) pts.push(line.points.a);
-          if (line?.points?.b) pts.push(line.points.b);
-          if (line?.points?.aplus?.point) pts.push(line.points.aplus.point);
-          if (Array.isArray(line?.points?.curve)) pts.push(...line.points.curve);
-          if (line?.points?.pivot?.center) pts.push(line.points.pivot.center);
-          return pts.filter(Boolean);
       };
 
       const getBoundaryPoints = (boundary) => {
@@ -11162,7 +12536,7 @@ const renderLinesPanel = () => {
                               <div className="space-y-3">
                                   {quickLines.length > 0 ? quickLines.map(line => {
                                       const active = activeLineId === line.id;
-                                      const LineIcon = getLineIcon(line);
+                                      const LineIcon = getLineTypeIcon(line);
                                       return (
                                           <button
                                               type="button"
@@ -11253,7 +12627,7 @@ const renderLinesPanel = () => {
 
       const createPreviewMapper = (field, draftBoundaries = []) => {
           const boundaries = draftBoundaries.length > 0 ? draftBoundaries : (field?.boundaries || []);
-          const linePoints = (field?.lines || []).flatMap(getLinePoints);
+          const linePoints = (field?.lines || []).flatMap(line => getLineDisplayPoints(line));
           const boundaryPoints = boundaries.flatMap(getBoundaryPoints).filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
           const finiteLinePoints = linePoints.filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
           const getSpan = (points) => {
@@ -11348,10 +12722,11 @@ const renderLinesPanel = () => {
                           <polygon points={defaultBoundary} fill={boundaryFill} stroke={boundaryStroke} strokeWidth="2.5" strokeDasharray="9 7" />
                       )}
                       {lines.slice(0, 5).map((line, index) => {
-                          const points = getLinePoints(line);
+                          const points = getLineDisplayPoints(line);
                           if (points.length < 2) return null;
                           const previewPoints = points.map(mapPoint);
-                          const Icon = getLineIcon(line);
+                          const markerPoints = getLineSemanticMarkerPoints(line, points).map(mapPoint);
+                          const Icon = getLineTypeIcon(line);
                           return (
                               <g key={line.id || index}>
                                   <polyline
@@ -11362,7 +12737,7 @@ const renderLinesPanel = () => {
                                       strokeLinecap="round"
                                       strokeOpacity={activeLineId === line.id ? 0.95 : 0.62}
                                   />
-                                  {index === 0 && previewPoints.map((point, pointIndex) => (
+                                  {index === 0 && markerPoints.map((point, pointIndex) => (
                                       <circle
                                           key={`${line.id || index}-point-${pointIndex}`}
                                           cx={point.x}
@@ -12336,7 +13711,7 @@ const renderLinesPanel = () => {
                               />
                               <OverviewSetupButton
                                   id="lines"
-                                  icon={Route}
+                                  icon={getLineTypeIcon(activeLine)}
                                   label="Guidance line"
                                   value={activeLine?.name || 'No guidance line'}
                                   detail={activeLine ? (activeLine.type || 'LINE').replaceAll('_', ' ') : 'Create or load a saved line'}
@@ -12796,21 +14171,27 @@ const renderLinesPanel = () => {
                                             </text>
                                         </g>
                                     )}
-                                    {(loadedField?.boundaries || []).concat(viewMode === 'CREATE_FIELD' ? currentFieldBoundaries : []).map((bound, bIdx) => (
-                                        <polygon
-                                            key={bIdx}
-                                            data-boundary-2d={bIdx}
-                                            points={(bound.points || bound).map(p => `${p.x},${p.y}`).join(' ')}
-                                            fill="none"
-                                            stroke={bIdx === activeBoundaryIdx ? "#eab308" : "#64748b"}
-                                            strokeWidth={bIdx === activeBoundaryIdx ? 2.8 : 2}
-                                            strokeOpacity={bIdx === activeBoundaryIdx ? 0.9 : 0.55}
-                                            strokeDasharray="5,5"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                            vectorEffect="non-scaling-stroke"
-                                        />
-                                    ))}
+                                    {(loadedField?.boundaries || []).concat(viewMode === 'CREATE_FIELD' ? currentFieldBoundaries : []).map((bound, bIdx) => {
+                                        const sourcePoints = bound.points || bound;
+                                        const points = bIdx === activeBoundaryIndex && activeFieldRecord?.id === loadedField?.id
+                                            ? activeBoundaryRunPoints
+                                            : sourcePoints;
+                                        return (
+                                            <polygon
+                                                key={bIdx}
+                                                data-boundary-2d={bIdx}
+                                                points={points.map(p => `${p.x},${p.y}`).join(' ')}
+                                                fill="none"
+                                                stroke={bIdx === activeBoundaryIdx ? "#eab308" : "#64748b"}
+                                                strokeWidth={bIdx === activeBoundaryIdx ? 2.8 : 2}
+                                                strokeOpacity={bIdx === activeBoundaryIdx ? 0.9 : 0.55}
+                                                strokeDasharray="5,5"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                                vectorEffect="non-scaling-stroke"
+                                            />
+                                        );
+                                    })}
                                     {previewBoundary && (
                                         <polygon
                                             data-boundary-preview-2d="true"
@@ -12820,6 +14201,20 @@ const renderLinesPanel = () => {
                                             strokeWidth="3"
                                             strokeOpacity="0.9"
                                             strokeDasharray="5,5"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            vectorEffect="non-scaling-stroke"
+                                        />
+                                    )}
+                                    {dockQuickPicker === 'boundary-shift' && boundaryShiftPreview.points.length > 2 && (
+                                        <polygon
+                                            data-boundary-shift-preview-2d="true"
+                                            points={boundaryShiftPreview.points.map(p => `${p.x},${p.y}`).join(' ')}
+                                            fill="none"
+                                            stroke={boundaryShiftPreview.valid ? '#f97316' : '#ef4444'}
+                                            strokeWidth="3.2"
+                                            strokeOpacity="0.95"
+                                            strokeDasharray="7,4"
                                             strokeLinecap="round"
                                             strokeLinejoin="round"
                                             vectorEffect="non-scaling-stroke"
@@ -12963,17 +14358,33 @@ const renderLinesPanel = () => {
                 {renderUTurnQuickPanel()}
                 {renderEventHistoryDrawer()}
                 {renderProductivityPanel()}
+                {(turnAssistActive || autoUTurnArmed) && (
+                    <div data-uturn-status className="absolute left-1/2 top-[98px] z-[42] -translate-x-1/2 max-w-[calc(100%-420px)] rounded-xl bg-slate-950/92 px-4 py-2.5 text-white shadow-xl border border-slate-700 flex items-center gap-3">
+                        <span className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center ${turnAssistActive ? 'bg-green-500' : 'bg-blue-600'}`}>
+                            {turnAssistActive ? <Check className="w-4 h-4" /> : <Clock className="w-4 h-4" />}
+                        </span>
+                        <span className="min-w-0">
+                            <span className="block text-[10px] font-black uppercase tracking-[0.06em]">{autoUTurnArmed ? 'Auto U-turn armed' : `U-turn ${uTurnStage.toLowerCase()}`}</span>
+                            <span className="block text-[9px] font-bold text-slate-300 truncate">{autoUTurnArmed ? 'Keep autosteer engaged / planner starts at the boundary' : turnGearRequest ? (Math.abs(speed) <= 0.25 ? `Stopped · select ${turnGearRequest.toLowerCase()} gear` : 'Stopping before gear change') : `${implementRaised ? 'Lift request active' : 'Monitor implement'} · hold a low, constant speed`}</span>
+                        </span>
+                        {turnGearRequest && (
+                            <button disabled={Math.abs(speed) > 0.25} onClick={() => confirmTurnGear(turnGearRequest)} className="shrink-0 h-8 rounded-lg bg-white px-3 text-[9px] font-black text-slate-950 disabled:opacity-45">
+                                {Math.abs(speed) <= 0.25 ? `CONFIRM ${turnGearRequest}` : 'STOPPING'}
+                            </button>
+                        )}
+                    </div>
+                )}
 
                 {/* BOTTOM BAR */}
                 <div data-bottom-bar className={`absolute bottom-0 left-0 right-0 h-[88px] min-h-[88px] ${t.bgBottom} backdrop-blur-xl border-t ${t.border} grid grid-cols-[minmax(170px,1fr)_minmax(300px,480px)_minmax(170px,1fr)] xl:grid-cols-[minmax(280px,1fr)_480px_minmax(280px,1fr)] items-stretch gap-0 px-0 z-30`}>
                     <div className="min-w-0 h-full grid grid-cols-2 gap-0">
-                        <button data-bottom-action="uturn" onClick={handleUTurn} className={`h-full w-full px-4 border-0 border-r ${t.borderCard} ${turnAssistActive ? 'bg-blue-500/8' : 'bg-transparent'} flex items-center justify-center gap-2.5 text-left active:bg-blue-500/10 hover:bg-blue-500/5 transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/35`}>
-                            <span className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${turnAssistActive ? 'bg-blue-500/15 text-blue-500' : `${theme === 'dark' ? 'bg-slate-800/80' : 'bg-slate-100'} ${t.textDim}`}`}>
+                        <button data-bottom-action="uturn" onClick={handleUTurn} className={`h-full w-full px-2 xl:px-4 border-0 border-r ${t.borderCard} ${turnAssistActive || autoUTurnArmed ? 'bg-blue-500/8' : 'bg-transparent'} flex items-center justify-center gap-1.5 xl:gap-2.5 text-left active:bg-blue-500/10 hover:bg-blue-500/5 transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/35`}>
+                            <span className={`shrink-0 w-8 h-8 xl:w-9 xl:h-9 rounded-lg flex items-center justify-center ${turnAssistActive || autoUTurnArmed ? 'bg-blue-500/15 text-blue-500' : `${theme === 'dark' ? 'bg-slate-800/80' : 'bg-slate-100'} ${t.textDim}`}`}>
                                 <CornerUpLeft className="w-5 h-5"/>
                             </span>
                             <span className="min-w-0">
-                                <span className={`block text-[10px] font-bold tracking-[0.06em] ${turnAssistActive ? 'text-blue-500' : t.textMain}`}>U-TURN</span>
-                                <span className={`mt-0.5 block text-[9px] font-bold leading-none ${turnAssistActive ? 'text-blue-500' : t.textSub}`}>{turnAssistActive ? 'ACTIVE' : 'TURN SETUP'}</span>
+                                <span className={`block whitespace-nowrap text-[10px] font-bold tracking-[0.06em] ${turnAssistActive || autoUTurnArmed ? 'text-blue-500' : t.textMain}`}>U-TURN</span>
+                                <span className={`mt-0.5 hidden xl:block max-w-[108px] truncate text-[9px] font-bold leading-none ${turnAssistActive || autoUTurnArmed ? 'text-blue-500' : t.textSub}`}>{turnAssistActive ? uTurnStage : autoUTurnArmed ? 'ARMED / TAP TO CANCEL' : 'ONE-KEY / AUTO'}</span>
                             </span>
                         </button>
                         <button
@@ -12983,14 +14394,14 @@ const renderLinesPanel = () => {
                             aria-label={isRecording ? 'Pause coverage recording' : 'Start coverage recording'}
                             disabled={isRecordingBoundary}
                             onClick={handleCoverageRecordingToggle}
-                            className={`h-full w-full px-4 border-0 border-r ${t.borderCard} flex items-center justify-center gap-2.5 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-inset ${isRecording ? 'bg-red-500/8 text-red-500 focus:ring-red-500/35' : `bg-transparent ${t.textMain} hover:bg-blue-500/5 focus:ring-blue-500/35`}`}
+                            className={`h-full w-full px-2 xl:px-4 border-0 border-r ${t.borderCard} flex items-center justify-center gap-1.5 xl:gap-2.5 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-inset ${isRecording ? 'bg-red-500/8 text-red-500 focus:ring-red-500/35' : `bg-transparent ${t.textMain} hover:bg-blue-500/5 focus:ring-blue-500/35`}`}
                         >
-                            <span className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${isRecording ? 'bg-red-500/15 text-red-500' : theme === 'dark' ? 'bg-slate-800/80 text-slate-400' : 'bg-slate-100 text-slate-500'}`}>
+                            <span className={`shrink-0 w-8 h-8 xl:w-9 xl:h-9 rounded-lg flex items-center justify-center ${isRecording ? 'bg-red-500/15 text-red-500' : theme === 'dark' ? 'bg-slate-800/80 text-slate-400' : 'bg-slate-100 text-slate-500'}`}>
                                 <Disc className={`w-5 h-5 ${isRecording ? 'motion-safe:animate-pulse' : ''}`}/>
                             </span>
                             <span className="min-w-0">
-                                <span className="block text-[10px] font-bold tracking-[0.06em]">COVERAGE</span>
-                                <span className={`mt-0.5 block text-[9px] font-bold leading-none ${isRecording ? 'text-red-500' : t.textSub}`}>{isRecording ? 'RECORDING' : 'READY'}</span>
+                                <span className="block whitespace-nowrap text-[10px] font-bold tracking-[0.06em]">COVERAGE</span>
+                                <span className={`mt-0.5 hidden xl:block text-[9px] font-bold leading-none ${isRecording ? 'text-red-500' : t.textSub}`}>{isRecording ? 'RECORDING' : 'READY'}</span>
                             </span>
                         </button>
                     </div>
@@ -13252,7 +14663,7 @@ const renderLinesPanel = () => {
                     <aside
                         data-run-dock
                         aria-label="Contextual run controls"
-                        className="absolute right-0 top-[104px] bottom-[112px] z-[35] pointer-events-none"
+                        className="absolute right-0 top-[104px] bottom-[112px] z-[35] overflow-hidden pointer-events-none"
                     >
                         {renderActionDock()}
                     </aside>

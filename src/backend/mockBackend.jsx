@@ -176,8 +176,9 @@ const MockBackend = (() => {
     },
     uTurnSettings: {
       enabled: true,
+      mode: 'ONE_KEY',
       headlandMode: 'Auto from boundary',
-      pattern: 'Smart U-Turn',
+      pattern: 'AUTO',
       direction: 'Auto',
       nextPass: 'Adjacent',
       skipPasses: 0,
@@ -269,6 +270,15 @@ const MockBackend = (() => {
             name: 'Main AB',
             type: 'STRAIGHT_AB',
             isMulti: true,
+            // 3.00 m working width minus the saved 0.10 m overlap.
+            trackSpacingM: 2.9,
+            sourceImplementProfileId: 'planter-6r',
+            tramline: {
+              enabled: false,
+              intervalPasses: 4,
+              anchorPassIndex: 0,
+              visualOnly: true
+            },
             date: '2023-10-01',
             points: { a: { x: 0, y: -200 }, b: { x: 0, y: 200 } }
           }
@@ -371,9 +381,49 @@ const MockBackend = (() => {
       ...profile,
       profileId: undefined
     }));
+    // Freeze the swath spacing on legacy saved lines at migration time. Before
+    // trackSpacingM existed, changing the active implement silently resized every
+    // historical pass; that would make a Tramline pattern move between sessions.
+    const migratedTrackSpacingM = Math.max(
+      0.1,
+      (Number(next.implementSettings.width) || 3) - (Number(next.implementSettings.overlap) || 0)
+    );
+    const migrateLine = (line) => ({
+      ...line,
+      trackSpacingM: Number(line.trackSpacingM) > 0 ? Number(line.trackSpacingM) : migratedTrackSpacingM,
+      sourceImplementProfileId: line.sourceImplementProfileId || next.implementSettings.profileId || null,
+      tramline: {
+        enabled: false,
+        intervalPasses: 4,
+        anchorPassIndex: 0,
+        visualOnly: true,
+        ...(line.tramline || {})
+      }
+    });
+    next.fields = (next.fields || []).map((field) => ({
+      ...field,
+      lines: (field.lines || []).map(migrateLine)
+    }));
+    if (next.loadedField) {
+      next.loadedField = next.fields.find((field) => field.id === next.loadedField.id) || {
+        ...next.loadedField,
+        lines: (next.loadedField.lines || []).map(migrateLine)
+      };
+    }
     next.rtkSettings = { ...base.rtkSettings, ...(persisted.data.rtkSettings || {}) };
     next.wifiSettings = { ...base.wifiSettings, ...(persisted.data.wifiSettings || {}) };
     next.uTurnSettings = { ...base.uTurnSettings, ...(persisted.data.uTurnSettings || {}) };
+    // Migrate the earlier demo-only pattern labels into the real two-mode model.
+    if (!persisted.data.uTurnSettings?.mode) {
+      const legacyPattern = persisted.data.uTurnSettings?.pattern;
+      next.uTurnSettings.mode = legacyPattern === 'Smart U-Turn' ? 'AUTO' : 'ONE_KEY';
+      next.uTurnSettings.pattern = legacyPattern === 'Fish Tail'
+        ? 'FISH_TAIL'
+        : legacyPattern === 'Basic Omega'
+          ? 'OMEGA'
+          : 'AUTO';
+    }
+    if (next.uTurnSettings.mode === 'SMART') next.uTurnSettings.mode = 'AUTO';
     next.systemHealth = { ...base.systemHealth, ...(persisted.data.systemHealth || {}) };
     next.gnssTelemetry = { ...base.gnssTelemetry, ...(persisted.data.gnssTelemetry || {}) };
     next.localDatabase = {

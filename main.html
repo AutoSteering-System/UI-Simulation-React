@@ -85,19 +85,30 @@
       .ui-metric-large { font-size: 30px !important; line-height: 32px !important; font-weight: 760 !important; letter-spacing: -0.025em !important; font-variant-numeric: tabular-nums; }
       .ui-metric-small { font-size: 13px !important; line-height: 18px !important; font-weight: 650 !important; font-variant-numeric: tabular-nums; }
       .ui-action-bar button { font-size: 14px !important; line-height: 20px !important; font-weight: 700 !important; }
+
+      /* 1280×800 remains scroll-free; unusually short windows keep every dock action reachable. */
+      @media (max-height: 670px) {
+        .run-dock-layout {
+          align-items: flex-start !important;
+          overflow-y: auto !important;
+          scrollbar-width: thin;
+        }
+        .run-dock-body { overflow-y: auto !important; }
+      }
     </style>
   </head>
   <body class="bg-white">
     <div id="root"></div>
     
-    <script src="src/utils/geometry.js"></script>
+    <script src="src/utils/geometry.js?v=20260801-boundary1"></script>
+    <script src="src/utils/turnGeometry.js?v=20260801-f200-turn2"></script>
     <script type="text/babel" src="src/iconLibrary.jsx?v=20260730-icon-fit1"></script>
     <script type="text/babel" src="src/icons.jsx?v=20260730-clock1"></script>
-    <script type="text/babel" src="src/backend/mockBackend.jsx"></script>
+    <script type="text/babel" src="src/backend/mockBackend.jsx?v=20260801-f200-turn1"></script>
     <script type="text/babel" src="src/components/SteeringWheelIcon.jsx"></script>
     <script type="text/babel" src="src/components/TractorVehicle.jsx"></script>
-    <script type="text/babel" src="src/components/ui.jsx?v=20260801-action-dock2"></script>
-    <script type="text/babel" src="src/app.jsx?v=20260801-action-dock2"></script>
+    <script type="text/babel" src="src/components/ui.jsx?v=20260801-f200-turn1"></script>
+    <script type="text/babel" src="src/app.jsx?v=20260801-dock-rtk2"></script>
     <script type="text/babel" src="src/bootstrap.jsx"></script>
 
   </body>
