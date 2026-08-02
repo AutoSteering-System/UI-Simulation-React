@@ -31,6 +31,7 @@ const MockBackend = (() => {
     'curvePoints',
     'pivotCenter',
     'pivotRadius',
+    'coverageTrail',
     'currentFieldBoundaries',
     'localDatabase'
   ];
@@ -177,6 +178,7 @@ const MockBackend = (() => {
     uTurnSettings: {
       enabled: true,
       mode: 'ONE_KEY',
+      sequence: 'SINGLE',
       headlandMode: 'Auto from boundary',
       pattern: 'AUTO',
       direction: 'Auto',
@@ -189,7 +191,9 @@ const MockBackend = (() => {
       liftAction: true,
       resumeAutosteer: true,
       pauseCoverage: true,
-      requireBoundary: false
+      requireBoundary: false,
+      workedPassThreshold: 0.98,
+      smartHeadlandPasses: 1
     },
     systemHealth: {
       gnss: 'OK',
@@ -318,8 +322,62 @@ const MockBackend = (() => {
     currentFieldBoundaries: []
   });
 
+  const encodeCoverageTrail = (trail) => {
+    const scopes = [];
+    const scopeIndices = new Map();
+    const segments = [];
+    const segmentIndices = new Map();
+    const points = [];
+    (Array.isArray(trail) ? trail : []).forEach((point) => {
+      if (!Number.isFinite(Number(point?.x)) || !Number.isFinite(Number(point?.y))) return;
+      const scope = [point.fieldId ?? null, point.taskId ?? null, point.lineId ?? null];
+      const scopeKey = JSON.stringify(scope);
+      let scopeIndex = scopeIndices.get(scopeKey);
+      if (scopeIndex === undefined) {
+        scopeIndex = scopes.length;
+        scopes.push(scope);
+        scopeIndices.set(scopeKey, scopeIndex);
+      }
+      const segmentId = point.segmentId ?? `SEGMENT:${scopeIndex}`;
+      const segmentKey = JSON.stringify([scopeIndex, segmentId]);
+      let segmentIndex = segmentIndices.get(segmentKey);
+      if (segmentIndex === undefined) {
+        segmentIndex = segments.length;
+        segments.push([segmentId, scopeIndex]);
+        segmentIndices.set(segmentKey, segmentIndex);
+      }
+      points.push([
+        segmentIndex,
+        Math.round(Number(point.x) * 10),
+        Math.round(Number(point.y) * 10),
+        Math.round((Number(point.h) || 0) * 10)
+      ]);
+    });
+    return { format: 'SCOPED_XYH_V1', scopes, segments, points };
+  };
+
+  const decodeCoverageTrail = (payload) => {
+    if (Array.isArray(payload)) return payload;
+    if (payload?.format !== 'SCOPED_XYH_V1' || !Array.isArray(payload.points)) return [];
+    return payload.points.map((row) => {
+      const segment = payload.segments?.[row?.[0]] || [null, 0];
+      const scope = payload.scopes?.[segment[1]] || [null, null, null];
+      return {
+        x: Number(row?.[1]) / 10,
+        y: Number(row?.[2]) / 10,
+        h: Number(row?.[3]) / 10,
+        segmentId: segment[0],
+        fieldId: scope[0],
+        taskId: scope[1],
+        lineId: scope[2]
+      };
+    }).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+  };
+
   const pickPersistedState = (source) => PERSISTED_KEYS.reduce((acc, key) => {
-    if (source[key] !== undefined) acc[key] = source[key];
+    if (source[key] !== undefined) {
+      acc[key] = key === 'coverageTrail' ? encodeCoverageTrail(source[key]) : source[key];
+    }
     return acc;
   }, {});
 
@@ -341,7 +399,11 @@ const MockBackend = (() => {
     const persisted = readPersistedState();
     if (!persisted) return base;
 
-    const next = { ...base, ...persisted.data };
+    const next = {
+      ...base,
+      ...persisted.data,
+      coverageTrail: decodeCoverageTrail(persisted.data.coverageTrail)
+    };
     // A run-only line shift must never leak into the next session. Saved line
     // copies restore their own translation from the line asset instead.
     next.lineShiftOffset = 0;
@@ -410,20 +472,38 @@ const MockBackend = (() => {
         lines: (next.loadedField.lines || []).map(migrateLine)
       };
     }
+    // Coverage was historically cleared whenever another field was loaded, so
+    // any legacy unscoped trail belongs to the persisted active run. Attach that
+    // scope once during hydration instead of silently orphaning the old work.
+    const legacyCoverageScope = {
+      fieldId: next.loadedField?.id || next.selectedFieldId || null,
+      taskId: next.activeTaskId || null,
+      lineId: next.activeLineId || null
+    };
+    next.coverageTrail = (next.coverageTrail || []).map((point, index) => {
+      const hasScope = Object.prototype.hasOwnProperty.call(point || {}, 'fieldId')
+        || Object.prototype.hasOwnProperty.call(point || {}, 'lineId');
+      if (hasScope) return point;
+      return {
+        ...point,
+        ...legacyCoverageScope,
+        segmentId: `LEGACY:${legacyCoverageScope.fieldId || 'NO_FIELD'}:${legacyCoverageScope.lineId || 'NO_LINE'}:${point?.segmentId ?? index}`
+      };
+    });
     next.rtkSettings = { ...base.rtkSettings, ...(persisted.data.rtkSettings || {}) };
     next.wifiSettings = { ...base.wifiSettings, ...(persisted.data.wifiSettings || {}) };
     next.uTurnSettings = { ...base.uTurnSettings, ...(persisted.data.uTurnSettings || {}) };
-    // Migrate the earlier demo-only pattern labels into the real two-mode model.
+    // Migrate the earlier demo-only labels into the three distinct workflows:
+    // one turn now, boundary-triggered end-row turns, and full-field Smart planning.
     if (!persisted.data.uTurnSettings?.mode) {
       const legacyPattern = persisted.data.uTurnSettings?.pattern;
-      next.uTurnSettings.mode = legacyPattern === 'Smart U-Turn' ? 'AUTO' : 'ONE_KEY';
+      next.uTurnSettings.mode = legacyPattern === 'Smart U-Turn' ? 'SMART' : 'ONE_KEY';
       next.uTurnSettings.pattern = legacyPattern === 'Fish Tail'
         ? 'FISH_TAIL'
         : legacyPattern === 'Basic Omega'
           ? 'OMEGA'
           : 'AUTO';
     }
-    if (next.uTurnSettings.mode === 'SMART') next.uTurnSettings.mode = 'AUTO';
     next.systemHealth = { ...base.systemHealth, ...(persisted.data.systemHealth || {}) };
     next.gnssTelemetry = { ...base.gnssTelemetry, ...(persisted.data.gnssTelemetry || {}) };
     next.localDatabase = {
@@ -439,6 +519,7 @@ const MockBackend = (() => {
   };
 
   let state = hydrateState();
+  let coveragePersistTimer = null;
 
   const listeners = new Set();
 
@@ -477,12 +558,38 @@ const MockBackend = (() => {
     }
   };
 
+  const scheduleCoveragePersist = () => {
+    if (coveragePersistTimer !== null) return;
+    coveragePersistTimer = window.setTimeout(() => {
+      coveragePersistTimer = null;
+      persistState();
+      emit();
+    }, 60000);
+  };
+
   const setState = (patch) => {
     state = { ...state, ...patch };
-    const shouldPersist = Object.keys(patch).some((key) => PERSISTED_KEYS.includes(key));
-    if (shouldPersist) persistState();
+    const persistedPatchKeys = Object.keys(patch).filter((key) => PERSISTED_KEYS.includes(key));
+    if (persistedPatchKeys.length) {
+      const coverageOnly = persistedPatchKeys.every(key => key === 'coverageTrail');
+      if (coverageOnly) scheduleCoveragePersist();
+      else {
+        if (coveragePersistTimer !== null) {
+          window.clearTimeout(coveragePersistTimer);
+          coveragePersistTimer = null;
+        }
+        persistState();
+      }
+    }
     emit();
   };
+
+  window.addEventListener('beforeunload', () => {
+    if (coveragePersistTimer === null) return;
+    window.clearTimeout(coveragePersistTimer);
+    coveragePersistTimer = null;
+    persistState();
+  });
 
   const useStore = () => {
     const [snapshot, setSnapshot] = useState(state);
