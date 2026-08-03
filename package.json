@@ -1,0 +1,7 @@
+{
+  "name": "ui-simulation-react",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build-browser.cjs"
+  }
+}

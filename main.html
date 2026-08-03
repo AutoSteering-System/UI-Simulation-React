@@ -8,9 +8,35 @@
     <script src="libs/tailwindcss.js"></script>
     <script src="libs/react.js"></script>
     <script src="libs/react-dom.js"></script>
-    <script src="libs/babel.js"></script>
     <script src="libs/lucide.js"></script>
     <style>
+      html, body, #root {
+        min-width: 100%;
+        min-height: 100%;
+        margin: 0;
+        background: #070b12;
+      }
+      .app-loading {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        color: #cbd5e1;
+        font: 600 12px/1.4 "Segoe UI", Arial, sans-serif;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .app-loading::before {
+        width: 18px;
+        height: 18px;
+        content: "";
+        border: 2px solid rgba(148, 163, 184, 0.25);
+        border-top-color: #38bdf8;
+        border-radius: 50%;
+        animation: app-loading-spin 0.8s linear infinite;
+      }
+      @keyframes app-loading-spin { to { transform: rotate(360deg); } }
       .icon {
         display: inline-flex;
         align-items: center;
@@ -97,19 +123,14 @@
       }
     </style>
   </head>
-  <body class="bg-white">
-    <div id="root"></div>
+  <body>
+    <div id="root">
+      <div class="app-loading" role="status" aria-label="Loading interface">Loading interface</div>
+    </div>
     
     <script src="src/utils/geometry.js?v=20260801-boundary1"></script>
-    <script src="src/utils/turnGeometry.js?v=20260802-smart-field8"></script>
-    <script type="text/babel" src="src/iconLibrary.jsx?v=20260730-icon-fit1"></script>
-    <script type="text/babel" src="src/icons.jsx?v=20260730-clock1"></script>
-    <script type="text/babel" src="src/backend/mockBackend.jsx?v=20260802-smart-field8"></script>
-    <script type="text/babel" src="src/components/SteeringWheelIcon.jsx"></script>
-    <script type="text/babel" src="src/components/TractorVehicle.jsx"></script>
-    <script type="text/babel" src="src/components/ui.jsx?v=20260801-f200-turn1"></script>
-    <script type="text/babel" src="src/app.jsx?v=20260802-smart-field8"></script>
-    <script type="text/babel" src="src/bootstrap.jsx"></script>
+    <script src="src/utils/turnGeometry.js?v=20260803-keyhole2"></script>
+    <script src="dist/browser/app.bundle.js?v=20260803-precompiled34"></script>
 
   </body>
 </html>

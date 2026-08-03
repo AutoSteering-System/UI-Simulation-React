@@ -6,6 +6,90 @@ const MIN_MAP_ZOOM = 0.6;
 const MAX_MAP_ZOOM = 2.4;
 const MAP_ZOOM_STEP = 0.2;
 
+const EXCLUSION_BOUNDARY_ROLES = new Set(['EXCLUSION', 'OBSTACLE', 'INNER', 'NO_GO']);
+const isExclusionBoundaryRecord = (record) => EXCLUSION_BOUNDARY_ROLES.has(
+    String(record?.role || record?.boundaryRole || '')
+        .trim()
+        .toUpperCase()
+        .replace(/[-\s]+/g, '_')
+);
+
+const normalizeBoundaryRing = (source, tolerance = 0.01) => {
+    if (!Array.isArray(source)) return [];
+    const points = [];
+    source.forEach((point) => {
+        const x = Number(point?.x);
+        const y = Number(point?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        const previous = points[points.length - 1];
+        if (!previous || Math.hypot(previous.x - x, previous.y - y) > tolerance) {
+            points.push({ x, y });
+        }
+    });
+    if (points.length > 1) {
+        const first = points[0];
+        const last = points[points.length - 1];
+        if (Math.hypot(first.x - last.x, first.y - last.y) <= tolerance) points.pop();
+    }
+    return points;
+};
+
+const calculateBoundaryRingLength = (source) => {
+    const points = normalizeBoundaryRing(source);
+    if (points.length < 2) return 0;
+    return points.reduce((total, point, index) => {
+        const next = points[(index + 1) % points.length];
+        return total + Math.hypot(next.x - point.x, next.y - point.y);
+    }, 0);
+};
+
+const getImplementWorkOffsets = (vehicle = {}, implement = {}) => ({
+    rearwardM: Math.max(0,
+        (Number(vehicle?.antennaToRearAxle) || 0)
+        + (Number(vehicle?.rearHitch) || 0)
+        + Math.max(0, Number(implement?.hitchToWorkPoint) || 0)
+    ),
+    lateralM: -(Number(vehicle?.antennaOffset) || 0)
+        + (Number(vehicle?.hitchOffset) || 0)
+        + (Number(implement?.offset) || 0)
+});
+
+const getImplementWorkPoint = (pose, vehicle, implement) => {
+    const x = Number(pose?.x);
+    const y = Number(pose?.y);
+    const headingDeg = Number(pose?.heading ?? pose?.h ?? 0);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(headingDeg)) return null;
+    const headingRad = headingDeg * Math.PI / 180;
+    const offsets = getImplementWorkOffsets(vehicle, implement);
+    return {
+        ...pose,
+        x: x + (
+            -Math.sin(headingRad) * offsets.rearwardM
+            + Math.cos(headingRad) * offsets.lateralM
+        ) * PIXELS_PER_METER,
+        y: y + (
+            Math.cos(headingRad) * offsets.rearwardM
+            + Math.sin(headingRad) * offsets.lateralM
+        ) * PIXELS_PER_METER,
+        h: headingDeg
+    };
+};
+
+const getImplementPassSpacingM = (implement = {}) => Math.max(
+    0.1,
+    (Number(implement?.width) || 3) - (Number(implement?.overlap) || 0)
+);
+
+const getRuntimeTrackSpacingM = (line, implement = {}) => {
+    const storedSpacingM = Number(line?.trackSpacingM);
+    // A saved guidance asset owns its pass spacing. Switching or recalibrating
+    // the mounted implement must never move every parallel lane in that asset.
+    // The implement width is only the default while a new line is being made.
+    return Number.isFinite(storedSpacingM) && storedSpacingM > 0
+        ? Math.max(0.1, storedSpacingM)
+        : getImplementPassSpacingM(implement);
+};
+
 const toOptionalRtkMetric = (value) => {
     if (value === null || value === undefined || value === '') return null;
     const number = Number(value);
@@ -197,6 +281,14 @@ const App = () => {
   const [previewBoundary, setPreviewBoundary] = useState(null);
   const [boundaryCaptureReady, setBoundaryCaptureReady] = useState(false);
   const boundaryCaptureContextRef = useRef({ reopenFieldManager: false });
+  // Keep the high-frequency capture trail outside the global store. Writing a
+  // point to MockBackend while the physics loop is already rendering creates a
+  // second full-App render and shows up as a periodic hitch while driving.
+  const boundaryCapturePointsRef = useRef([]);
+  const boundaryCaptureLengthPxRef = useRef(0);
+  const liveBoundaryPoints = isRecordingBoundary && boundaryCapturePointsRef.current.length > 0
+      ? boundaryCapturePointsRef.current
+      : tempBoundary;
 
   // Delete Confirm Modal
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -333,6 +425,10 @@ const App = () => {
 
   const [satelliteCount, setSatelliteCount] = useState(() => Number(savedUiLocalState.satelliteCount || gnssTelemetry?.roverUsedSats || 12));
   const [notification, setNotification] = useState(null);
+  const notificationTimerRef = useRef(null);
+  useEffect(() => () => {
+      if (notificationTimerRef.current !== null) window.clearTimeout(notificationTimerRef.current);
+  }, []);
   const [zoomLevel, setZoomLevel] = useState(DEFAULT_MAP_ZOOM);
   const [sceneViewMode, setSceneViewMode] = useState(() => {
       const params = new URLSearchParams(window.location.search);
@@ -358,7 +454,13 @@ const App = () => {
       lastDisplay: 0
   });
   const mapVisualHeadingRef = useRef(0);
+  const cameraTurnSettleUntilRef = useRef(0);
+  const lastPoseRenderAtRef = useRef(0);
   const turnAssistRef = useRef(null);
+  const recordingIntentRef = useRef(isRecording);
+  const steeringModeRef = useRef(steeringMode);
+  const implementRaisedRef = useRef(implementRaised);
+  const uTurnPreviewPoseRef = useRef({ x: NaN, y: NaN, heading: NaN, updatedAt: 0 });
   const coverageSegmentIdRef = useRef(null);
   const coverageRecordingRef = useRef(false);
   const cancelTurnAssistRef = useRef(null);
@@ -368,10 +470,30 @@ const App = () => {
   const autoTriggerEvaluationRef = useRef(0);
   const rtkLossHandledRef = useRef(false);
   const [turnAssistActive, setTurnAssistActive] = useState(false);
+  recordingIntentRef.current = isRecording;
+  steeringModeRef.current = steeringMode;
+  implementRaisedRef.current = implementRaised;
+  const turnCoverageSuppressed = Boolean(
+      turnAssistActive
+      && turnAssistRef.current?.routeMode !== 'SMART'
+      && turnAssistRef.current?.coveragePaused
+  );
   const coverageFieldId = loadedField?.id || selectedFieldId || null;
   const coverageTaskId = activeTaskId || null;
   const coverageLineId = activeLineId || null;
   const coverageScopeKey = `${coverageFieldId || 'NO_FIELD'}:${coverageTaskId || 'NO_TASK'}:${coverageLineId || 'NO_LINE'}`;
+  const liveCoverageWidthM = Math.max(0.25, Number(implementSettings.width) || 3);
+  const coverageGeometryKey = [
+      coverageScopeKey,
+      implementSettings.profileId || 'NO_IMPLEMENT',
+      liveCoverageWidthM.toFixed(3),
+      Number(implementSettings.hitchToWorkPoint || 0).toFixed(3),
+      Number(implementSettings.offset || 0).toFixed(3),
+      Number(vehicleSettings?.antennaToRearAxle || 0).toFixed(3),
+      Number(vehicleSettings?.antennaOffset || 0).toFixed(3),
+      Number(vehicleSettings?.rearHitch || 0).toFixed(3),
+      Number(vehicleSettings?.hitchOffset || 0).toFixed(3)
+  ].join(':');
   const isCoveragePointInScope = (point) => Boolean(
       point
       && point.fieldId === coverageFieldId
@@ -429,7 +551,7 @@ const App = () => {
   useEffect(() => {
       coverageRecordingRef.current = false;
       coverageSegmentIdRef.current = null;
-  }, [coverageScopeKey]);
+  }, [coverageGeometryKey]);
 
   useEffect(() => {
     // Find active line object to get its specific properties
@@ -437,11 +559,7 @@ const App = () => {
     const activeLine = activeLineId
         ? (activeField?.lines || []).find(line => line.id === activeLineId)
         : null;
-    const defaultTrackSpacingM = Math.max(
-        0.1,
-        (Number(implementSettings.width) || DEFAULT_IMPLEMENT_WIDTH) - (Number(implementSettings.overlap) || 0)
-    );
-    const trackSpacingM = Math.max(0.1, Number(activeLine?.trackSpacingM) || defaultTrackSpacingM);
+    const trackSpacingM = getRuntimeTrackSpacingM(activeLine, implementSettings);
 
     guidanceRef.current = {
         type: guidanceLine,
@@ -885,9 +1003,12 @@ const App = () => {
         if (focusedControl || dockButtonActivation) return;
         if (menuOpen || settingsOpen || cameraPanelOpen || diagnosticsPanelOpen || (fieldManagerOpen && !isRecordingBoundary) || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || linesPanelOpen || manualHeadingModalOpen || boundaryAlertOpen || deleteModalOpen) return;
         if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].indexOf(e.key) > -1) e.preventDefault();
-        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        const firstPress = !keysPressed.current[e.key];
+        if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && firstPress) {
             const wasAutoControlled = steeringMode === 'AUTO' || Boolean(turnAssistRef.current);
-            cancelTurnAssistRef.current?.({ resumePreviousMode: false });
+            if (wasAutoControlled || autoUTurnArmed) {
+                cancelTurnAssistRef.current?.({ resumePreviousMode: false });
+            }
             if (wasAutoControlled) {
                 setSteeringMode('MANUAL');
                 actions.setRunStatus(prev => ({
@@ -906,7 +1027,7 @@ const App = () => {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
-  }, [menuOpen, settingsOpen, cameraPanelOpen, diagnosticsPanelOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen, steeringMode, rtkQualityOpen]);
+  }, [menuOpen, settingsOpen, cameraPanelOpen, diagnosticsPanelOpen, fieldManagerOpen, lineModeModalOpen, isRecordingBoundary, lineNameModalOpen, boundaryNameModalOpen, linesPanelOpen, manualHeadingModalOpen, boundaryAlertOpen, deleteModalOpen, steeringMode, rtkQualityOpen, autoUTurnArmed]);
 
   // --- 3. PHYSICS ---
   useEffect(() => {
@@ -1113,7 +1234,7 @@ const App = () => {
                  2 * wheelbase * Math.sin(headingError * Math.PI / 180),
                  lookaheadM
              ) * 180 / Math.PI;
-             const minRadiusM = Math.max(wheelbase + 0.1, Number(activeTurnAssist.minRadiusM) || 6.5);
+             const minRadiusM = Math.max(wheelbase + 0.1, Number(activeTurnAssist.minRadiusM) || 4.5);
              const maxWheelAngle = Math.min(42, Math.atan(wheelbase / minRadiusM) * 180 / Math.PI);
              if (activeTurnAssist.awaitingGear) {
                  p.steeringAngle = 0;
@@ -1162,42 +1283,61 @@ const App = () => {
              const finalRouteAligned = smartRoute
                  ? targetHeadingError <= 18
                  : Math.abs(finalLaneErrorPx) <= 0.75 * PIXELS_PER_METER && targetHeadingError <= 13;
-             if (activeTurnAssist.progressIndex >= activeTurnAssist.points.length - 3
-                 && isFinalLeg
-                 && driveGear === 'FORWARD'
-                 && endDistance <= 1 * PIXELS_PER_METER
-                 && finalRouteAligned) {
+              if (activeTurnAssist.progressIndex >= activeTurnAssist.points.length - 3
+                  && isFinalLeg
+                  && driveGear === 'FORWARD'
+                  && endDistance <= 1 * PIXELS_PER_METER
+                  && finalRouteAligned) {
                  const completedLaneIndex = activeTurnAssist.lastWorkLaneIndex ?? activeTurnAssist.targetLaneIndex;
                  if (Number.isFinite(Number(completedLaneIndex))) {
                      activeLaneRef.current = Number(completedLaneIndex);
                      manualLaneRef.current = Number(completedLaneIndex);
-                 }
-                 p.steeringAngle = 0;
-                 p.targetSpeed = smartRoute ? 0 : activeTurnAssist.previousTargetSpeed;
-                 turnAssistRef.current = null;
-                 setTurnAssistActive(false);
-                 setUTurnStage(activeTurnAssist.repeatAuto ? 'ARMED' : 'COMPLETE');
-                  setTurnGearRequest(null);
-                  setAutoUTurnArmed(Boolean(activeTurnAssist.repeatAuto));
-                  if (smartRoute) {
-                      if (!presentManualHeadlandRecommendation(activeTurnAssist)) {
-                          const resumeCoverage = Boolean(activeTurnAssist.coverageWasRecording);
-                          setIsRecording(resumeCoverage);
-                          setImplementRaised(
-                              !resumeCoverage || Boolean(activeTurnAssist.implementWasRaised)
-                          );
-                          setManualTargetSpeed(0);
-                          setSteeringMode('MANUAL');
-                          showNotification(`Smart Field complete / ${activeTurnAssist.remainingPassCount || 0} passes finished`, 'success');
-                      }
-                  } else {
-                     setImplementRaised(Boolean(activeTurnAssist.implementWasRaised));
-                     if (activeTurnAssist.coverageWasRecording && activeTurnAssist.coveragePaused) setIsRecording(true);
-                     setManualTargetSpeed(activeTurnAssist.previousTargetSpeed);
-                     if (activeTurnAssist.resumeAutosteer) setSteeringMode('AUTO');
-                     showNotification(`Turn complete / pass ${activeTurnAssist.targetLaneIndex >= 0 ? '+' : ''}${activeTurnAssist.targetLaneIndex}${activeTurnAssist.repeatAuto ? ' / Auto re-armed' : ''}`, 'success');
-                 }
-             }
+                  }
+                  p.steeringAngle = 0;
+                  const shouldResumeAuto = Boolean(
+                      !smartRoute
+                      && activeTurnAssist.resumeAutosteer
+                      && activeTurnAssist.previousMode === 'AUTO'
+                      && rtkGuidanceReady
+                  );
+                  const shouldRearmAutoRow = Boolean(activeTurnAssist.repeatAuto && shouldResumeAuto);
+                  p.targetSpeed = smartRoute
+                      ? 0
+                      : shouldResumeAuto
+                          ? activeTurnAssist.previousTargetSpeed
+                          : 0;
+                  if (!smartRoute) cameraTurnSettleUntilRef.current = performance.now() + 8000;
+                  turnAssistRef.current = null;
+                  setTurnAssistActive(false);
+                  setUTurnStage(shouldRearmAutoRow ? 'ARMED' : 'COMPLETE');
+                   setTurnGearRequest(null);
+                   setAutoUTurnArmed(shouldRearmAutoRow);
+                   if (smartRoute) {
+                       if (!presentManualHeadlandRecommendation(activeTurnAssist)) {
+                           const resumeCoverage = Boolean(activeTurnAssist.coverageWasRecording);
+                           recordingIntentRef.current = resumeCoverage;
+                           setIsRecording(resumeCoverage);
+                           const resumeRaised = !resumeCoverage || Boolean(activeTurnAssist.implementWasRaised);
+                           implementRaisedRef.current = resumeRaised;
+                           setImplementRaised(resumeRaised);
+                           setManualTargetSpeed(0);
+                           steeringModeRef.current = 'MANUAL';
+                           setSteeringMode('MANUAL');
+                           showNotification(`Smart Field complete / ${activeTurnAssist.remainingPassCount || 0} passes finished`, 'success');
+                       }
+                   } else {
+                      const resumeCoverage = Boolean(activeTurnAssist.coverageResumeRequested);
+                      const resumeRaised = Boolean(activeTurnAssist.resumeImplementRaised);
+                      recordingIntentRef.current = resumeCoverage;
+                      implementRaisedRef.current = resumeRaised;
+                      steeringModeRef.current = shouldResumeAuto ? 'AUTO' : 'MANUAL';
+                      setIsRecording(resumeCoverage);
+                      setImplementRaised(resumeRaised);
+                      setManualTargetSpeed(p.targetSpeed);
+                      setSteeringMode(shouldResumeAuto ? 'AUTO' : 'MANUAL');
+                      showNotification(`Turn complete / pass ${activeTurnAssist.targetLaneIndex >= 0 ? '+' : ''}${activeTurnAssist.targetLaneIndex}${shouldRearmAutoRow ? ' / Auto re-armed' : ''}${resumeCoverage ? ' / Coverage resumed' : ''}`, 'success');
+                  }
+              }
         // --- AUTO STEERING LOGIC ---
         } else if (steeringMode === 'AUTO') {
              // REMOVED FORCED SPEED LOGIC
@@ -1273,11 +1413,6 @@ const App = () => {
             p.y -= Math.cos(headingRad) * moveDist;
         }
 
-        setSpeed(p.speed);
-        setSteeringAngle(p.steeringAngle);
-        setHeading(p.heading);
-        setWorldPos({ x: p.x, y: p.y });
-
         const visualHeading = mapVisualHeadingRef.current;
         const visualDiff = getHeadingDelta(p.heading, visualHeading);
         const hasManualTurnInput = steeringMode === 'MANUAL' && (
@@ -1285,18 +1420,37 @@ const App = () => {
             keysPressed.current['ArrowRight'] ||
             Math.abs(p.steeringAngle) > 1
         );
-        const maxVisualStep = (isMap3D
-            ? (hasManualTurnInput ? 54 : (Math.abs(p.speed) > 0.1 ? 68 : 110))
-            : (Math.abs(p.speed) > 0.1 ? 38 : 120)
+        // Heading-up keeps the tractor upright. Follow a local turn at a
+        // controlled angular rate so the field rotates continuously instead of
+        // freezing and then snapping to the opposite heading at completion.
+        const trackingLocalTurn = turnAssistRef.current?.routeMode === 'LOCAL_TURN';
+        const settlingAfterLocalTurn = !trackingLocalTurn
+            && performance.now() < cameraTurnSettleUntilRef.current;
+        const maxVisualStep = (trackingLocalTurn
+            ? 30
+            : settlingAfterLocalTurn
+                ? 22
+                : isMap3D
+                ? (hasManualTurnInput ? 54 : (Math.abs(p.speed) > 0.1 ? 68 : 110))
+                : (Math.abs(p.speed) > 0.1 ? 38 : 120)
         ) * dt;
         const nextVisualHeading = normalizeHeadingValue(
             visualHeading + Math.max(-maxVisualStep, Math.min(maxVisualStep, visualDiff))
         );
         mapVisualHeadingRef.current = nextVisualHeading;
-        setMapVisualHeading(nextVisualHeading);
-
-        if (setManualTargetSpeed) {
-             setManualTargetSpeed(prev => Math.abs(prev - p.targetSpeed) > 0.5 ? Math.round(p.targetSpeed) : prev);
+        // Physics stays on requestAnimationFrame, while the large React map is
+        // committed at ~30 fps. This leaves headroom for pointer/Record/U-turn
+        // actions instead of rebuilding thousands of SVG projections at 60 Hz.
+        if (!lastPoseRenderAtRef.current || time - lastPoseRenderAtRef.current >= 32) {
+            lastPoseRenderAtRef.current = time;
+            setSpeed(p.speed);
+            setSteeringAngle(p.steeringAngle);
+            setHeading(p.heading);
+            setWorldPos({ x: p.x, y: p.y });
+            setMapVisualHeading(nextVisualHeading);
+            if (setManualTargetSpeed) {
+                 setManualTargetSpeed(prev => Math.abs(prev - p.targetSpeed) > 0.5 ? Math.round(p.targetSpeed) : prev);
+            }
         }
 
         animationFrameId = requestAnimationFrame(loop);
@@ -1309,24 +1463,28 @@ const App = () => {
   // --- 4. RECORDING ---
   useEffect(() => {
       let intervalId;
-      if (isRecording && !implementRaised && Math.abs(speed) > 0.1) {
+      if (isRecording && !implementRaised && !turnCoverageSuppressed) {
+          let lastSampleAt = performance.now();
           intervalId = setInterval(() => {
-              const speedMs = Math.abs(speed) / 3.6;
+              const sampledAt = performance.now();
+              const dt = Math.min(0.5, Math.max(0, (sampledAt - lastSampleAt) / 1000));
+              lastSampleAt = sampledAt;
+              const speedMs = Math.abs(physics.current.speed) / 3.6;
+              if (speedMs <= 0.03) return;
               const width = Math.max(0.1, Number(implementSettings.width) || 3);
-              const dt = 0.05;
               const areaM2 = speedMs * width * dt;
               const areaHa = areaM2 / 10000;
               setWorkedArea(prev => prev + areaHa);
-          }, 50);
+          }, 250);
       }
       return () => clearInterval(intervalId);
-  }, [isRecording, implementRaised, speed, implementSettings.width]);
+  }, [isRecording, implementRaised, turnCoverageSuppressed, implementSettings.width]);
 
   useEffect(() => {
-      const coveragePainting = isRecording && !implementRaised;
+      const coveragePainting = isRecording && !implementRaised && !turnCoverageSuppressed;
       const startingCoverageSegment = coveragePainting && !coverageRecordingRef.current;
       if (startingCoverageSegment) {
-          coverageSegmentIdRef.current = `${coverageScopeKey}:${Date.now()}`;
+          coverageSegmentIdRef.current = `${coverageGeometryKey}:${Date.now()}`;
           coverageRecordingRef.current = true;
       } else if (!coveragePainting && coverageRecordingRef.current) {
           coverageRecordingRef.current = false;
@@ -1334,34 +1492,23 @@ const App = () => {
       if (!coveragePainting && !isRecordingCurve && !isRecordingBoundary) return;
       const newPos = worldPos;
       const newHeading = heading;
-      const isFarEnough = (points, point) => {
+      const isFarEnough = (points, point, minimumDistancePx = 10) => {
           const last = points[points.length - 1];
-          return !last || Math.hypot(last.x - point.x, last.y - point.y) >= 10;
+          return !last || Math.hypot(last.x - point.x, last.y - point.y) >= minimumDistancePx;
       };
 
-      const headingRad = newHeading * Math.PI / 180;
-      const implementWorkOffsetM = Math.max(0,
-          (Number(vehicleSettings?.antennaToRearAxle) || 0)
-          + (Number(vehicleSettings?.rearHitch) || 0)
-          + Math.max(0, Number(implementSettings.hitchToWorkPoint) || 0)
-      );
-      const implementLateralOffsetM = -(Number(vehicleSettings?.antennaOffset) || 0)
-          + (Number(vehicleSettings?.hitchOffset) || 0)
-          + (Number(implementSettings.offset) || 0);
       const coveragePoint = {
-          x: newPos.x + (
-              -Math.sin(headingRad) * implementWorkOffsetM
-              + Math.cos(headingRad) * implementLateralOffsetM
-          ) * PIXELS_PER_METER,
-          y: newPos.y + (
-              Math.cos(headingRad) * implementWorkOffsetM
-              + Math.sin(headingRad) * implementLateralOffsetM
-          ) * PIXELS_PER_METER,
-          h: newHeading,
+          ...getImplementWorkPoint(
+              { x: newPos.x, y: newPos.y, heading: newHeading },
+              vehicleSettings,
+              implementSettings
+          ),
           segmentId: coverageSegmentIdRef.current,
           fieldId: coverageFieldId,
           taskId: coverageTaskId,
-          lineId: coverageLineId
+          lineId: coverageLineId,
+          coverageWidthM: liveCoverageWidthM,
+          implementProfileId: implementSettings.profileId || null
       };
       const pathPoint = { x: newPos.x, y: newPos.y };
       let lastScopedCoveragePoint = null;
@@ -1379,10 +1526,17 @@ const App = () => {
       if (isRecordingCurve && isFarEnough(curvePoints, pathPoint)) {
           actions.setCurvePoints(prev => [...prev, pathPoint]);
       }
-      if (isRecordingBoundary && isFarEnough(tempBoundary, pathPoint)) {
-          actions.setTempBoundary(prev => [...prev, pathPoint]);
+      if (isRecordingBoundary && isFarEnough(boundaryCapturePointsRef.current, pathPoint, PIXELS_PER_METER)) {
+          const previousPoint = boundaryCapturePointsRef.current[boundaryCapturePointsRef.current.length - 1];
+          if (previousPoint) {
+              boundaryCaptureLengthPxRef.current += Math.hypot(
+                  previousPoint.x - pathPoint.x,
+                  previousPoint.y - pathPoint.y
+              );
+          }
+          boundaryCapturePointsRef.current.push(pathPoint);
       }
-  }, [worldPos, isRecording, implementRaised, isRecordingCurve, isRecordingBoundary, heading, coverageScopeKey, vehicleSettings?.antennaToRearAxle, vehicleSettings?.antennaOffset, vehicleSettings?.rearHitch, vehicleSettings?.hitchOffset, implementSettings.hitchToWorkPoint, implementSettings.offset]);
+  }, [worldPos, isRecording, implementRaised, turnCoverageSuppressed, isRecordingCurve, isRecordingBoundary, heading, coverageGeometryKey]);
 
   useEffect(() => {
       const sync = runTelemetrySyncRef.current;
@@ -1613,9 +1767,13 @@ const App = () => {
   };
 
   const showNotification = (msg, type) => {
+      if (notificationTimerRef.current !== null) window.clearTimeout(notificationTimerRef.current);
       setNotification({ msg, type });
       addEventLog(msg, type === 'error' ? 'critical' : type === 'warning' ? 'warning' : 'info');
-      setTimeout(() => setNotification(null), 3000);
+      notificationTimerRef.current = window.setTimeout(() => {
+          notificationTimerRef.current = null;
+          setNotification(null);
+      }, 3000);
   };
   const updateFeatureSetting = (key, value) => {
       setFeatureSettings(prev => ({ ...prev, [key]: value }));
@@ -1751,12 +1909,24 @@ const App = () => {
       });
   };
   const handleCoverageRecordingToggle = () => {
-      const nextRecording = !isRecording;
+      const nextRecording = !recordingIntentRef.current;
+      recordingIntentRef.current = nextRecording;
       setIsRecording(nextRecording);
-      if (manualHeadlandActive) setImplementRaised(!nextRecording);
+      const activeTurn = turnAssistRef.current;
+      if (activeTurn && activeTurn.routeMode !== 'SMART') {
+          activeTurn.coverageResumeRequested = nextRecording;
+          activeTurn.resumeImplementRaised = !nextRecording;
+      }
+      if (manualHeadlandActive || (!activeTurn && nextRecording && implementRaisedRef.current)) {
+          const nextRaised = !nextRecording;
+          implementRaisedRef.current = nextRaised;
+          setImplementRaised(nextRaised);
+      }
       showNotification(
           nextRecording
-              ? manualHeadlandActive ? 'Coverage started / implement lowered' : 'Coverage recording started'
+              ? activeTurn
+                  ? 'Coverage armed / resumes after row alignment'
+                  : manualHeadlandActive ? 'Coverage started / implement lowered' : 'Coverage recording started'
               : manualHeadlandActive ? 'Coverage paused / implement raised' : 'Coverage recording paused',
           nextRecording ? 'success' : 'info'
       );
@@ -1846,11 +2016,15 @@ const App = () => {
       if (activeTurn) {
           const raiseForSafety = interruptedByOperator
               && Boolean(activeTurn.config?.liftAction);
-          setImplementRaised(raiseForSafety
+          const restoredRaised = raiseForSafety
               ? true
-              : activeTurn.implementWasRaised === undefined
-                  ? implementRaised
-                  : Boolean(activeTurn.implementWasRaised));
+              : activeTurn.resumeImplementRaised === undefined
+                  ? activeTurn.implementWasRaised === undefined
+                      ? implementRaisedRef.current
+                      : Boolean(activeTurn.implementWasRaised)
+                  : Boolean(activeTurn.resumeImplementRaised);
+          implementRaisedRef.current = restoredRaised;
+          setImplementRaised(restoredRaised);
       }
       setTurnGearRequest(null);
       if (activeTurn?.repeatAuto) {
@@ -1870,16 +2044,25 @@ const App = () => {
       autoApproachPreviousSpeedRef.current = null;
       physics.current.steeringAngle = 0;
       setSteeringAngle(0);
-      if (interruptedByOperator) setIsRecording(false);
-      else if (activeTurn?.routeMode === 'SMART') setIsRecording(Boolean(activeTurn.coverageWasRecording));
-      else if (activeTurn?.coverageWasRecording && activeTurn?.coveragePaused) setIsRecording(true);
+      if (interruptedByOperator) {
+          recordingIntentRef.current = false;
+          setIsRecording(false);
+      } else if (activeTurn) {
+          const resumeCoverage = activeTurn.routeMode === 'SMART'
+              ? Boolean(activeTurn.coverageWasRecording)
+              : Boolean(activeTurn.coverageResumeRequested);
+          recordingIntentRef.current = resumeCoverage;
+          setIsRecording(resumeCoverage);
+      }
       if (restoreTargetSpeed && activeTurn?.previousTargetSpeed != null) {
           physics.current.targetSpeed = activeTurn.previousTargetSpeed;
           setManualTargetSpeed(activeTurn.previousTargetSpeed);
       }
       if (resumePreviousMode && activeTurn?.previousMode && activeTurn?.resumeAutosteer) {
+          steeringModeRef.current = activeTurn.previousMode;
           setSteeringMode(activeTurn.previousMode);
       } else if (activeTurn && !resumePreviousMode) {
+          steeringModeRef.current = 'MANUAL';
           setSteeringMode('MANUAL');
       }
   };
@@ -1921,9 +2104,12 @@ const App = () => {
       physics.current.steeringAngle = 0;
       turnAssistRef.current = null;
       setTurnAssistActive(false);
+      steeringModeRef.current = 'MANUAL';
       setSteeringMode('MANUAL');
       setManualTargetSpeed(0);
+      recordingIntentRef.current = false;
       setIsRecording(false);
+      implementRaisedRef.current = true;
       setImplementRaised(true);
       setTurnGearRequest(null);
       setAutoUTurnArmed(false);
@@ -1933,6 +2119,23 @@ const App = () => {
       setUTurnStage('MANUAL HEADLAND');
       showNotification(`Interior route complete / ${recommendationPlan.headlandPasses || 'recommended'} headland passes ready for manual driving`, 'warning');
       return true;
+  };
+  const disarmAutoUTurn = () => {
+      if (!autoUTurnArmed) return;
+      setAutoUTurnArmed(false);
+      setUTurnPreview(null);
+      setUTurnDistanceToTriggerM(null);
+      autoLaneStepRef.current = null;
+      autoArmSafetySignatureRef.current = null;
+      autoTriggerEvaluationRef.current = 0;
+      if (autoApproachPreviousSpeedRef.current != null) {
+          physics.current.targetSpeed = autoApproachPreviousSpeedRef.current;
+          setManualTargetSpeed(autoApproachPreviousSpeedRef.current);
+      }
+      autoApproachPreviousSpeedRef.current = null;
+      setUTurnStage('IDLE');
+      setUTurnPanelOpen(false);
+      showNotification('Auto U-turn disarmed', 'info');
   };
   const handleUTurn = (requestedDirection) => {
       if (manualHeadlandActive) {
@@ -1946,25 +2149,17 @@ const App = () => {
           return;
       }
       if (autoUTurnArmed) {
-          setAutoUTurnArmed(false);
-          setUTurnPreview(null);
-          autoLaneStepRef.current = null;
-          autoArmSafetySignatureRef.current = null;
-          autoTriggerEvaluationRef.current = 0;
-          if (autoApproachPreviousSpeedRef.current != null) {
-              physics.current.targetSpeed = autoApproachPreviousSpeedRef.current;
-              setManualTargetSpeed(autoApproachPreviousSpeedRef.current);
-          }
-          autoApproachPreviousSpeedRef.current = null;
-          setUTurnStage('IDLE');
-          showNotification('Auto U-turn disarmed', 'info');
+          setUTurnPanelTab('TURN');
+          setUTurnPanelOpen(true);
           return;
       }
       openUTurnPlanner(requestedDirection);
   };
   const setSteerKey = (key, active) => {
-      if (active && (key === 'ArrowLeft' || key === 'ArrowRight')) {
-          if (steeringMode === 'AUTO' || turnAssistRef.current) {
+      const firstPress = active && !keysPressed.current[key];
+      if (firstPress && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+          const wasAutoControlled = steeringMode === 'AUTO' || Boolean(turnAssistRef.current);
+          if (wasAutoControlled) {
               setSteeringMode('MANUAL');
               actions.setRunStatus(prev => ({
                   ...(prev || {}),
@@ -1977,7 +2172,9 @@ const App = () => {
               addAlarm('manual-override', 'warning', 'Manual steering override detected');
               showNotification('Manual override: autosteer disengaged', 'warning');
           }
-          cancelTurnAssist({ resumePreviousMode: false });
+          if (wasAutoControlled || autoUTurnArmed) {
+              cancelTurnAssist({ resumePreviousMode: false });
+          }
       }
       keysPressed.current[key] = active;
   };
@@ -2126,11 +2323,15 @@ const App = () => {
         name: tempLineName.trim(),
         type: lineType,
         isMulti: isMultiLineMode,
-        trackSpacingM: Math.max(
-            0.1,
-            (Number(implementSettings.width) || DEFAULT_IMPLEMENT_WIDTH) - (Number(implementSettings.overlap) || 0)
-        ),
+        trackSpacingM: getImplementPassSpacingM(implementSettings),
+        spacingMode: 'FIXED',
         sourceImplementProfileId: implementSettings.profileId || null,
+        sourceWorkingWidthM: Math.max(0.25, Number(implementSettings.width) || 3),
+        sourceOverlapM: Math.max(0, Number(implementSettings.overlap) || 0),
+        sourceOverallWidthM: Math.max(
+            Number(implementSettings.width) || 3,
+            Number(implementSettings.overallWidth) || Number(implementSettings.width) || 3
+        ),
         tramline: {
             enabled: false,
             intervalPasses: 4,
@@ -2257,6 +2458,8 @@ const App = () => {
   const startBoundaryCreation = () => {
      setDockQuickPicker(null);
      boundaryCaptureContextRef.current = { reopenFieldManager: fieldManagerOpen };
+     boundaryCapturePointsRef.current = [];
+     boundaryCaptureLengthPxRef.current = 0;
      setFieldManagerOpen(false);
      setRtkQualityOpen(false);
      setEventHistoryOpen(false);
@@ -2272,28 +2475,93 @@ const App = () => {
   };
 
   const beginBoundaryRecording = () => {
+     const startPoint = { x: worldPos.x, y: worldPos.y };
+     boundaryCapturePointsRef.current = [startPoint];
+     boundaryCaptureLengthPxRef.current = 0;
      setBoundaryCaptureReady(false);
-     actions.setTempBoundary([{ x: worldPos.x, y: worldPos.y }]);
+     actions.setTempBoundary([startPoint]);
      actions.setIsRecordingBoundary(true);
      physics.current.targetSpeed = 0;
      setManualTargetSpeed(0);
      showNotification("Boundary recording started. Drive along the field edge.", "success");
   };
 
-  // UPDATED FINISH BOUNDARY LOGIC
+  const getBoundaryCaptureSnapshot = ({ includeCurrent = true } = {}) => {
+      const source = boundaryCapturePointsRef.current.length > 0
+          ? boundaryCapturePointsRef.current
+          : tempBoundary;
+      const points = [];
+      source.forEach((point) => {
+          const x = Number(point?.x);
+          const y = Number(point?.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+          const previous = points[points.length - 1];
+          if (!previous || Math.hypot(previous.x - x, previous.y - y) > 0.01) points.push({ x, y });
+      });
+      const currentPoint = { x: Number(worldPos.x), y: Number(worldPos.y) };
+      const lastPoint = points[points.length - 1];
+      if (includeCurrent
+          && Number.isFinite(currentPoint.x)
+          && Number.isFinite(currentPoint.y)
+          && (!lastPoint || Math.hypot(lastPoint.x - currentPoint.x, lastPoint.y - currentPoint.y) > 0.01)) {
+          points.push(currentPoint);
+      }
+      return points;
+  };
+
+  const stopBoundaryVehicle = () => {
+      physics.current.speed = 0;
+      physics.current.targetSpeed = 0;
+      physics.current.steeringAngle = 0;
+      setSpeed(0);
+      setManualTargetSpeed(0);
+      setSteeringAngle(0);
+  };
+
+  const openBoundaryNameReview = (points, message = "Boundary closed") => {
+      const boundaryRing = normalizeBoundaryRing(points);
+      if (boundaryRing.length < 3) {
+          showNotification("Boundary needs at least 3 recorded points", "warning");
+          return;
+      }
+      if (window.TurnGeometry?.isSimplePolygon
+          && !window.TurnGeometry.isSimplePolygon(boundaryRing)) {
+          showNotification("Boundary cannot close without crossing itself. Continue recording and return closer to the start.", "warning");
+          return;
+      }
+      const selectedBoundaryField = fields.find(field => field.id === selectedFieldId);
+      const count = viewMode === 'CREATE_FIELD'
+          ? currentFieldBoundaries.length
+          : (selectedBoundaryField?.boundaries?.length || 0);
+
+      setPreviewBoundary(boundaryRing);
+      actions.setIsRecordingBoundary(false);
+      actions.setTempBoundary([]);
+      stopBoundaryVehicle();
+      setTempBoundaryName(`Boundary ${count + 1}`);
+      setBoundaryNameModalOpen(true);
+      showNotification(message, "success");
+  };
+
   const finishBoundaryRecording = () => {
-      // 1. Check Minimum Distance (100m) - Reduced for testing
-      const pathLengthPx = calculatePathLength(tempBoundary);
-      // 50 meters * PIXELS_PER_METER (easier testing)
-      if (pathLengthPx < (50 * PIXELS_PER_METER)) {
-           showNotification(`Distance too short (< 50m). Run more!`, "warning");
-           return;
+      const currentPath = getBoundaryCaptureSnapshot();
+      const pathLengthPx = calculatePathLength(currentPath);
+      const minimumBoundaryLengthPx = 5 * PIXELS_PER_METER;
+      if (currentPath.length < 3 || pathLengthPx < minimumBoundaryLengthPx) {
+          setBoundaryAlertType('TOO_SHORT');
+          setBoundaryAlertOpen(true);
+          return;
       }
 
       // Use Case 1: Check for Self-Intersection (CROSSING) with LIVE POS
-      // Add current position to check for the most recent crossing
-      const currentPath = [...tempBoundary, worldPos];
-      const selfIntersect = checkSelfIntersection(currentPath);
+      let selfIntersect = null;
+      try {
+          selfIntersect = checkSelfIntersection(currentPath);
+      } catch (error) {
+          console.error('Boundary intersection check failed', error);
+          showNotification("Could not validate boundary. Continue recording and try again.", "error");
+          return;
+      }
 
       if (selfIntersect) {
           // INTERSECTION FOUND -> Auto Trim Tail & Head -> Create Polygon
@@ -2309,24 +2577,20 @@ const App = () => {
           }
           loopPoints.push(point); // Close it precisely
 
-          // Update preview and proceed
-          setPreviewBoundary(loopPoints);
-          actions.setTempBoundary([]);
-          actions.setIsRecordingBoundary(false);
-          physics.current.targetSpeed = 0;
-
-          const count = viewMode === 'CREATE_FIELD' ? currentFieldBoundaries.length : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
-          setTempBoundaryName(`Boundary ${count + 1}`);
-          setBoundaryNameModalOpen(true);
-          showNotification("Excess removed!", "success");
+          openBoundaryNameReview(loopPoints, "Crossing detected. Excess path removed.");
           return;
       }
 
       // Use Case 2 & 3: Check Distance to Start
-      const firstPoint = tempBoundary[0];
-      const lastPoint = worldPos;
+      const firstPoint = currentPath[0];
+      const lastPoint = currentPath[currentPath.length - 1];
+      if (!firstPoint || !lastPoint) {
+          setBoundaryAlertType('TOO_SHORT');
+          setBoundaryAlertOpen(true);
+          return;
+      }
       const dist = Math.hypot(firstPoint.x - lastPoint.x, firstPoint.y - lastPoint.y);
-      const THRESHOLD = 100 * PIXELS_PER_METER; // INCREASED THRESHOLD (~100m range) for easier closing
+      const THRESHOLD = 8 * PIXELS_PER_METER;
 
       if (dist < THRESHOLD) {
           setBoundaryAlertType('AUTO_CLOSE');
@@ -2342,23 +2606,21 @@ const App = () => {
 
       if (boundaryAlertType === 'AUTO_CLOSE') {
           if (choice === 'YES') {
-              // Auto close logic
-              const closedLoop = [...tempBoundary, tempBoundary[0]]; // Snap to start
-              setPreviewBoundary(closedLoop);
-              actions.setTempBoundary([]);
-              actions.setIsRecordingBoundary(false);
-              physics.current.targetSpeed = 0;
-
-              const count = viewMode === 'CREATE_FIELD' ? currentFieldBoundaries.length : (fields.find(f => f.id === selectedFieldId)?.boundaries?.length || 0);
-              setTempBoundaryName(`Boundary ${count + 1}`);
-              setBoundaryNameModalOpen(true);
-              showNotification("Boundary closed", "success");
+              openBoundaryNameReview(getBoundaryCaptureSnapshot(), "Boundary closed");
           } else {
                showNotification("Continue recording...", "info");
           }
+      } else if (boundaryAlertType === 'TOO_SHORT') {
+          if (choice === 'CANCEL') cancelBoundaryRecording();
+          else showNotification("Continue recording until the boundary is at least 5 m long.", "info");
       } else if (boundaryAlertType === 'INCOMPLETE') {
           if (choice === 'CONTINUE') {
                showNotification("Continue recording...", "info");
+          } else if (choice === 'CLOSE') {
+              openBoundaryNameReview(
+                  getBoundaryCaptureSnapshot(),
+                  "Boundary closed with a straight return segment."
+              );
           } else {
               // Cancel
               cancelBoundaryRecording();
@@ -2373,11 +2635,27 @@ const App = () => {
       }
 
       // Use preview boundary as final data
-      const finalPoints = previewBoundary || tempBoundary;
+      const finalPoints = normalizeBoundaryRing(
+          previewBoundary || getBoundaryCaptureSnapshot({ includeCurrent: false })
+      );
+      if (finalPoints.length < 3) {
+          showNotification("Boundary data is incomplete. Continue recording before saving.", "warning");
+          return;
+      }
+      if (window.TurnGeometry?.isSimplePolygon
+          && !window.TurnGeometry.isSimplePolygon(finalPoints)) {
+          showNotification("Boundary crosses itself and cannot be saved as a closed loop.", "warning");
+          return;
+      }
 
       const boundaryField = fields.find(field => field.id === selectedFieldId);
+      if (viewMode !== 'CREATE_FIELD' && !boundaryField) {
+          showNotification("The active field is unavailable. Reload the field and try again.", "error");
+          return;
+      }
       const newBoundaryObj = {
           name: tempBoundaryName,
+          role: 'WORK_AREA',
           points: finalPoints,
           createdAt: new Date().toISOString(),
           createdLocation: viewMode === 'CREATE_FIELD'
@@ -2418,6 +2696,8 @@ const App = () => {
       setBoundaryNameModalOpen(false);
       setBoundaryRunOverride(null);
       setPreviewBoundary(null);
+      boundaryCapturePointsRef.current = [];
+      boundaryCaptureLengthPxRef.current = 0;
       actions.setTempBoundary([]);
       setTempBoundaryName('');
       actions.setIsRecordingBoundary(false);
@@ -2431,6 +2711,8 @@ const App = () => {
 
   const cancelBoundaryRecording = () => {
     const shouldReopenFieldManager = boundaryCaptureContextRef.current.reopenFieldManager;
+    boundaryCapturePointsRef.current = [];
+    boundaryCaptureLengthPxRef.current = 0;
     setBoundaryCaptureReady(false);
     actions.setIsRecordingBoundary(false);
     physics.current.targetSpeed = 0;
@@ -2615,20 +2897,18 @@ const App = () => {
       Math.max((activeFieldRecord?.boundaries || []).length - 1, 0)
   );
   const activeBoundaryRecord = (activeFieldRecord?.boundaries || [])[activeBoundaryIndex] || null;
-  const activeBoundarySourcePoints = (Array.isArray(activeBoundaryRecord?.points)
+  const activeBoundarySourcePoints = normalizeBoundaryRing(Array.isArray(activeBoundaryRecord?.points)
       ? activeBoundaryRecord.points
-      : Array.isArray(activeBoundaryRecord) ? activeBoundaryRecord : [])
-      .filter(point => Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y)))
-      .map(point => ({ x: Number(point.x), y: Number(point.y) }));
+      : Array.isArray(activeBoundaryRecord) ? activeBoundaryRecord : []);
   const boundaryOverrideMatchesActive = Boolean(
       boundaryRunOverride
       && boundaryRunOverride.fieldId === activeFieldRecord?.id
       && boundaryRunOverride.boundaryIndex === activeBoundaryIndex
       && Array.isArray(boundaryRunOverride.points)
   );
-  const activeBoundaryRunPoints = boundaryOverrideMatchesActive
+  const activeBoundaryRunPoints = normalizeBoundaryRing(boundaryOverrideMatchesActive
       ? boundaryRunOverride.points
-      : activeBoundarySourcePoints;
+      : activeBoundarySourcePoints);
   const boundaryShiftPreview = useMemo(() => {
       if (dockQuickPicker !== 'boundary-shift' || activeBoundarySourcePoints.length < 3) {
           return { points: [], valid: false, reason: 'Select a closed boundary' };
@@ -2667,11 +2947,46 @@ const App = () => {
   }, [dockQuickPicker, activeFieldRecord?.id, activeBoundaryIndex, activeBoundaryRecord, boundaryShiftMode, boundaryShiftDirection, boundaryShiftDistanceM]);
   const activeTaskRecord = activeTaskId ? fields.find(f => f.id === selectedFieldId)?.tasks?.find(task => task.id === activeTaskId) : null;
   const activeLineRecord = activeLineId ? (activeFieldRecord?.lines || fields.find(f => f.id === selectedFieldId)?.lines || []).filter(line => !line.archived).find(line => line.id === activeLineId) : null;
-  const activeTrackSpacingM = Math.max(
-      0.1,
-      Number(activeLineRecord?.trackSpacingM)
-          || ((Number(implementSettings.width) || DEFAULT_IMPLEMENT_WIDTH) - (Number(implementSettings.overlap) || 0))
+  const activeTrackSpacingM = getRuntimeTrackSpacingM(activeLineRecord, implementSettings);
+  const currentImplementTrackSpacingM = getImplementPassSpacingM(implementSettings);
+  const activeTrackSpacingMismatch = Boolean(
+      activeLineRecord
+      && Math.abs(activeTrackSpacingM - currentImplementTrackSpacingM) > 0.02
   );
+  const coverageWidthSources = useMemo(() => {
+      const lineByScope = new Map();
+      (fields || []).forEach(field => {
+          (field.lines || []).forEach(line => {
+              lineByScope.set(`${field.id ?? 'NO_FIELD'}:${line.id ?? 'NO_LINE'}`, line);
+          });
+      });
+      const profileById = new Map(
+          (implementProfiles || []).map(profile => [String(profile.id), profile])
+      );
+      return { lineByScope, profileById };
+  }, [fields, implementProfiles]);
+  const getCoveragePointWidthM = (point) => {
+      const savedWidthM = Number(point?.coverageWidthM);
+      if (Number.isFinite(savedWidthM) && savedWidthM > 0) return Math.max(0.25, savedWidthM);
+
+      const pointFieldId = point?.fieldId ?? coverageFieldId ?? 'NO_FIELD';
+      const pointLineId = point?.lineId ?? coverageLineId ?? 'NO_LINE';
+      const sourceLine = coverageWidthSources.lineByScope.get(`${pointFieldId}:${pointLineId}`)
+          || (pointLineId === activeLineRecord?.id ? activeLineRecord : null);
+      const lineWorkingWidthM = Number(sourceLine?.sourceWorkingWidthM);
+      if (Number.isFinite(lineWorkingWidthM) && lineWorkingWidthM > 0) {
+          return Math.max(0.25, lineWorkingWidthM);
+      }
+
+      const profileId = point?.implementProfileId || sourceLine?.sourceImplementProfileId;
+      const sourceProfile = profileId
+          ? coverageWidthSources.profileById.get(String(profileId))
+          : null;
+      const profileWidthM = Number(sourceProfile?.width);
+      if (Number.isFinite(profileWidthM) && profileWidthM > 0) return Math.max(0.25, profileWidthM);
+
+      return liveCoverageWidthM;
+  };
   const activeTramline = activeLineRecord?.tramline || {
       enabled: false,
       intervalPasses: 4,
@@ -2766,7 +3081,7 @@ const App = () => {
           return { steeringState: 'FAULT', steeringReason: 'RTK quality lost while engaged', overrideDetected: false, engageAllowed: false, recoveryAction: 'Restore guidance-grade RTK' };
       }
       if (turnAssistActive) {
-          return { steeringState: 'PAUSED', steeringReason: 'Turn assist active', overrideDetected: false, engageAllowed: false, recoveryAction: 'Complete turn' };
+          return { steeringState: 'PAUSED', steeringReason: 'Turn assist active', overrideDetected: false, engageAllowed: false, recoveryAction: 'Complete or stop turn' };
       }
       if (runStatus?.overrideDetected) {
           return { steeringState: 'PAUSED', steeringReason: 'Operator manual steering override', overrideDetected: true, engageAllowed: true, recoveryAction: 'Clear override' };
@@ -2803,11 +3118,11 @@ const App = () => {
                   ? 'BLOCKED'
                   : 'READY';
   const autosteerPrimaryLabel = isRecordingBoundary || boundaryCaptureReady
-      ? (isRecordingBoundary ? 'RECORDING' : 'PRESS START')
+      ? (isRecordingBoundary ? 'FINISH' : 'START')
       : isCreating
           ? 'LINE SETUP'
       : turnAssistActive
-          ? 'TURN ACTIVE'
+          ? 'STOP TURN'
       : steeringMode === 'AUTO'
       ? 'DISENGAGE'
       : !hasGuidanceToEngage
@@ -2820,9 +3135,11 @@ const App = () => {
                   ? 'VIEW ISSUE'
                   : 'ENGAGE';
   const autosteerSubLabel = isRecordingBoundary || boundaryCaptureReady
-      ? (isRecordingBoundary ? `${tempBoundary.length} points / finish from the right controls` : 'Start boundary capture from the right controls')
+      ? (isRecordingBoundary ? `${liveBoundaryPoints.length} points / close boundary` : 'Begin boundary capture')
       : isCreating
           ? 'Complete guidance from the right controls'
+      : turnAssistActive
+          ? 'Tap to cancel and stop safely'
       : currentRunStatus.steeringState === 'FAULT' || currentRunStatus.steeringState === 'PAUSED'
           ? currentRunStatus.steeringReason
       : steeringMode === 'AUTO'
@@ -2855,7 +3172,9 @@ const App = () => {
   const autosteerIconTone = autosteerStateLabel === 'FAULT' || autosteerStateLabel === 'PAUSED' || autosteerStateLabel === 'BOUNDARY' || autosteerStateLabel === 'ENGAGED' || autosteerReady || autosteerStateLabel === 'CREATING' || autosteerStateLabel === 'NO LINE'
       ? 'bg-white/20 text-white'
       : 'bg-orange-500/15 text-orange-300';
-  const AutosteerStatusIcon = autosteerStateLabel === 'PAUSED'
+  const AutosteerStatusIcon = turnAssistActive
+      ? Square
+      : autosteerStateLabel === 'PAUSED'
       ? Pause
       : autosteerStateLabel === 'BOUNDARY'
           ? MapPin
@@ -2863,19 +3182,21 @@ const App = () => {
               ? Route
               : SteeringWheelIcon;
   const handleAutosteerPrimary = () => {
-      if (isRecordingBoundary || boundaryCaptureReady || isCreating) {
-          showNotification(
-              isRecordingBoundary
-                  ? 'Finish or cancel boundary from the right controls'
-                  : boundaryCaptureReady
-                      ? 'Press Start in the right controls to begin boundary capture'
-                      : 'Complete guidance setup from the right controls',
-              'info'
-          );
+      if (isRecordingBoundary) {
+          finishBoundaryRecording();
+          return;
+      }
+      if (boundaryCaptureReady) {
+          beginBoundaryRecording();
+          return;
+      }
+      if (isCreating) {
+          showNotification('Complete guidance setup from the right controls', 'info');
           return;
       }
       if (turnAssistActive) {
-          showNotification('Complete or cancel the active turn before engaging autosteer', 'info');
+          stopVehicle();
+          showNotification('U-turn cancelled / vehicle stopping', 'warning');
           return;
       }
       if (steeringMode === 'AUTO' || autosteerReady) {
@@ -2910,13 +3231,20 @@ const App = () => {
   };
 
   const getActiveBoundaryPoints = () => {
-      return activeBoundaryRunPoints.filter(point => Number.isFinite(point?.x) && Number.isFinite(point?.y));
+      return normalizeBoundaryRing(activeBoundaryRunPoints);
   };
 
-  const getBoundaryPointsFromRecord = (record) => (
+  const getBoundaryPointsFromRecord = (record) => normalizeBoundaryRing(
       Array.isArray(record?.points) ? record.points : Array.isArray(record) ? record : []
-  ).filter(point => Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y)))
-      .map(point => ({ x: Number(point.x), y: Number(point.y) }));
+  );
+
+  const getActiveFieldExclusionRecords = () => [
+      ...(activeFieldRecord?.boundaries || []).filter((record, index) => (
+          index !== activeBoundaryIndex && isExclusionBoundaryRecord(record)
+      )),
+      ...(Array.isArray(activeFieldRecord?.exclusions) ? activeFieldRecord.exclusions : []),
+      ...(Array.isArray(activeFieldRecord?.obstacles) ? activeFieldRecord.obstacles : [])
+  ];
 
   const getNestedBoundaryConflictCount = () => {
       const geometry = window.TurnGeometry;
@@ -2955,10 +3283,11 @@ const App = () => {
               )
           )));
       };
-      return (activeFieldRecord?.boundaries || []).reduce((count, record, index) => {
-          if (index === activeBoundaryIndex) return count;
+      return getActiveFieldExclusionRecords().reduce((count, record) => {
           const other = getBoundaryPointsFromRecord(record);
-          if (other.length < 3 || !geometry.isSimplePolygon(other)) return count;
+          // An explicitly declared no-go ring must fail closed if its geometry
+          // cannot be validated.
+          if (other.length < 3 || !geometry.isSimplePolygon(other)) return count + 1;
           return count + (polygonsConflict(active, other) ? 1 : 0);
       }, 0);
   };
@@ -2972,6 +3301,7 @@ const App = () => {
           direction: 'Auto',
           nextPass: 'Adjacent',
           skipPasses: 0,
+          targetSelectionVersion: 2,
           trigger: 'Manual confirm',
           startDistanceM: 18,
           turnSpeedKmh: 5.5,
@@ -2985,8 +3315,13 @@ const App = () => {
           ...overrides
       };
       if (merged.pattern === 'Smart U-Turn') merged.mode = 'SMART';
-      if (merged.pattern === 'Basic Omega') merged.pattern = 'OMEGA';
+      // Older builds persisted the geometry name OMEGA. Keep the operator's
+      // intent as the normal all-forward maneuver; the planner now chooses a
+      // simple U or a one-sided keyhole without exposing stale settings.
+      if (merged.pattern === 'Basic Omega' || merged.pattern === 'OMEGA') merged.pattern = 'AUTO';
       if (merged.pattern === 'Fish Tail') merged.pattern = 'FISH_TAIL';
+      const supportsMountedReverse = /3-point|mounted|front mount/i.test(String(implementSettings.connectionType || ''));
+      if (merged.pattern === 'FISH_TAIL' && !supportsMountedReverse) merged.pattern = 'AUTO';
       const skipPasses = Number(merged.skipPasses);
       const turnSpeedKmh = Number(merged.turnSpeedKmh);
       const startDistanceM = Number(merged.startDistanceM);
@@ -3003,7 +3338,26 @@ const App = () => {
       merged.smartHeadlandPasses = Number.isFinite(smartHeadlandPasses)
           ? Math.min(1, Math.max(0, Math.round(smartHeadlandPasses)))
           : 1;
+      if (merged.mode === 'SMART') merged.liftAction = true;
       return merged;
+  };
+
+  const getUTurnFailureMessage = (plan, fallback = 'No feasible turn path') => {
+      if (plan?.failReason === 'FORWARD_U_SPACING_TOO_NARROW') {
+          const targetLabel = plan.targetPolicy === 'ADJACENT'
+              ? 'Adjacent target'
+              : plan.targetPolicy === 'TRAMLINE'
+                  ? 'Tramline target'
+                  : 'Selected target';
+          return `${targetLabel} is ${Number(plan.selectedTargetSeparationM || 0).toFixed(1)} m away; a forward-only U needs ${Number(plan.minimumForwardDiameterM || 0).toFixed(1)} m. Target pass +${plan.requiredPassDelta || 1} (skip ${plan.requiredSkipPasses || 0} for now).`;
+      }
+      if (plan?.failReason === 'AUTO_BOUNDARY_REQUIRED') {
+          return 'Auto U-turn needs an active field boundary';
+      }
+      if (plan?.failReason === 'AUTO_BOUNDARY_AHEAD_NOT_FOUND') {
+          return 'No headland boundary was found ahead on the current pass';
+      }
+      return plan?.failReason || fallback;
   };
 
   // Fish-tail paths contain two cusps and need steering authority to recover
@@ -3270,14 +3624,15 @@ const App = () => {
               x: Math.cos(headingRadians),
               y: Math.sin(headingRadians)
           };
+          const pointWorkingWidthPx = getCoveragePointWidthM(point) * PIXELS_PER_METER;
           return {
               left: {
-                  x: point.x - pathRight.x * productiveWidthPx / 2,
-                  y: point.y - pathRight.y * productiveWidthPx / 2
+                  x: point.x - pathRight.x * pointWorkingWidthPx / 2,
+                  y: point.y - pathRight.y * pointWorkingWidthPx / 2
               },
               right: {
-                  x: point.x + pathRight.x * productiveWidthPx / 2,
-                  y: point.y + pathRight.y * productiveWidthPx / 2
+                  x: point.x + pathRight.x * pointWorkingWidthPx / 2,
+                  y: point.y + pathRight.y * pointWorkingWidthPx / 2
               }
           };
       };
@@ -3362,7 +3717,8 @@ const App = () => {
       uTurnSettings?.smartHeadlandPasses,
       coverageFieldId,
       coverageTaskId,
-      coverageLineId
+      coverageLineId,
+      coverageWidthSources
   ]);
 
   const isWorkedPass = (laneIndex) => coveragePassSummary.workedLaneIndices.includes(Number(laneIndex));
@@ -3373,12 +3729,14 @@ const App = () => {
       let passDelta = config.nextPass === 'Skip'
           ? Math.min(50, Math.max(1, Number(config.skipPasses || 0) + 1))
           : 1;
+      let targetPolicy = config.nextPass === 'Skip' ? 'SKIP' : 'ADJACENT';
       const tramlineRouting = activeTramline.enabled && config.mode !== 'SMART';
       const currentPassIsTramline = tramlineRouting && isTramlinePass(currentLaneIndex);
       const tramlineInterval = Math.max(2, Math.round(Number(activeTramline.intervalPasses) || 4));
 
       // F200 Basic U-turn preserves the repeating tramline class.
       if (tramlineRouting) {
+          targetPolicy = 'TRAMLINE';
           if (currentPassIsTramline) {
               passDelta = tramlineInterval;
           } else {
@@ -3387,31 +3745,20 @@ const App = () => {
           }
       }
 
-      const skippedWorkedLaneIndices = [];
-      let noAvailablePassWithinLimit = false;
-      if (config.mode !== 'SMART') {
-          const maximumDelta = 50;
-          while (passDelta <= maximumDelta) {
-              const candidateIndex = currentLaneIndex + laneDirection * passDelta;
-              if (!isWorkedPass(candidateIndex)) break;
-              skippedWorkedLaneIndices.push(candidateIndex);
-              if (currentPassIsTramline) {
-                  passDelta += tramlineInterval;
-              } else {
-                  passDelta += 1;
-                  while (tramlineRouting && passDelta <= maximumDelta
-                      && isTramlinePass(currentLaneIndex + laneDirection * passDelta)) passDelta += 1;
-              }
-          }
-          noAvailablePassWithinLimit = passDelta > maximumDelta;
-      }
+      // Adjacent and Skip are explicit operator policies. Coverage status can
+      // warn about the selected lane, but must never silently move the target.
+      // Smart Field owns coverage-aware routing in its separate planner.
+      const targetLaneIndex = currentLaneIndex + laneDirection * passDelta;
+      const targetPassAlreadyWorked = config.mode !== 'SMART' && isWorkedPass(targetLaneIndex);
 
       return {
           currentLaneIndex,
-          targetLaneIndex: currentLaneIndex + laneDirection * passDelta,
+          targetLaneIndex,
           passDelta,
-          skippedWorkedLaneIndices,
-          noAvailablePassWithinLimit
+          targetPolicy,
+          targetPassAlreadyWorked,
+          skippedWorkedLaneIndices: [],
+          noAvailablePassWithinLimit: false
       };
   };
 
@@ -3421,8 +3768,9 @@ const App = () => {
       const activeType = guidanceLine || activeLineRecord?.type || lineType;
       const target = getTurnPassTarget(direction, config);
       const boundaryPoints = getActiveBoundaryPoints();
-      const validateBoundary = !overrides.ignoreBoundaryValidation;
-      const mountedImplement = /3-point|mounted/i.test(String(implementSettings.connectionType || ''));
+      const validateBoundary = !overrides.ignoreBoundaryValidation
+          && (config.mode === 'AUTO' || config.requireBoundary);
+      const mountedImplement = /3-point|mounted|front mount/i.test(String(implementSettings.connectionType || ''));
       const alignedStartHeading = normalizeHeadingValue(
           liveGuidanceMetrics.lineHeading + (liveGuidanceDirectionFactor < 0 ? 180 : 0)
       );
@@ -3439,16 +3787,20 @@ const App = () => {
           targetLaneIndex: target.targetLaneIndex,
           targetLaneDelta: target.targetLaneIndex - target.currentLaneIndex,
           passDelta: target.passDelta,
+          targetPolicy: target.targetPolicy,
+          targetPassAlreadyWorked: target.targetPassAlreadyWorked,
           skippedWorkedLaneIndices: target.skippedWorkedLaneIndices,
           noAvailablePassWithinLimit: target.noAvailablePassWithinLimit,
-          boundaryPoints,
+          boundaryPoints: validateBoundary ? boundaryPoints : [],
           feasible: false,
           points: []
       };
 
       if (!window.TurnGeometry) return { ...baseResult, failReason: 'Turn planner is not loaded' };
       if (!config.enabled) return { ...baseResult, failReason: 'Turn assist is disabled' };
-      if (boundaryPoints.length >= 3 && !window.TurnGeometry.isSimplePolygon?.(boundaryPoints)) {
+      if (validateBoundary
+          && boundaryPoints.length >= 3
+          && !window.TurnGeometry.isSimplePolygon?.(boundaryPoints)) {
           return { ...baseResult, failReason: 'INVALID_BOUNDARY' };
       }
       if (target.noAvailablePassWithinLimit) {
@@ -3477,11 +3829,13 @@ const App = () => {
       if (config.mode === 'AUTO' && boundaryPoints.length < 3) {
           return { ...baseResult, failReason: 'Auto U-turn needs an active closed boundary' };
       }
+      // Saved work-area records are selectable alternatives. Only explicitly
+      // typed exclusion/obstacle rings participate in the no-go validation.
       if (config.mode === 'AUTO' && getNestedBoundaryConflictCount() > 0) {
           return { ...baseResult, failReason: 'INNER_BOUNDARY_UNSUPPORTED' };
       }
       if (config.pattern === 'FISH_TAIL' && !mountedImplement) {
-          return { ...baseResult, failReason: 'Fish-tail is only safe with a mounted implement' };
+          return { ...baseResult, failReason: 'A 3-point reverse turn is only supported with a mounted implement' };
       }
       const turnGeometry = getValidatedTurnGeometry();
       if (!turnGeometry.valid) return { ...baseResult, failReason: turnGeometry.failReason };
@@ -3489,7 +3843,22 @@ const App = () => {
       const plannerSafetyMarginPx = turnGeometry.plannerSafetyMarginPx;
       const wheelbaseM = turnGeometry.wheelbaseM;
       const minimumTurnRadiusM = turnGeometry.minimumTurnRadiusM;
-      const planningTurnRadiusM = config.pattern === 'FISH_TAIL'
+      const requiredForwardPassDelta = Math.max(
+          1,
+          Math.ceil(((minimumTurnRadiusM * 2) - 1e-6) / Math.max(0.1, activeTrackSpacingM))
+      );
+      const forwardSpacingTooNarrow = config.pattern !== 'FISH_TAIL'
+          && target.passDelta < requiredForwardPassDelta;
+      // Target selection and maneuver selection are independent. A forward
+      // turn always keeps the selected pass: use the compact semicircular U
+      // when D >= 2R, otherwise use a one-sided all-forward keyhole/bulb turn.
+      // Reverse is never selected silently; the operator must choose 3-point.
+      const effectiveTurnPattern = config.pattern === 'FISH_TAIL'
+          ? 'FISH_TAIL'
+          : forwardSpacingTooNarrow
+              ? 'FORWARD_BULB'
+              : 'AUTO';
+      const planningTurnRadiusM = effectiveTurnPattern === 'FISH_TAIL'
           ? getFishTailPlanningRadiusM(minimumTurnRadiusM)
           : minimumTurnRadiusM;
       const result = window.TurnGeometry.planBasicTurn({
@@ -3499,16 +3868,17 @@ const App = () => {
           laneSpacingPx: activeTrackSpacingM * PIXELS_PER_METER,
           passDelta: target.passDelta,
           minRadiusPx: planningTurnRadiusM * PIXELS_PER_METER,
-          pattern: config.pattern,
+          pattern: effectiveTurnPattern,
           boundaryPoints: validateBoundary && boundaryPoints.length >= 3 ? boundaryPoints : null,
           safetyMarginPx: plannerSafetyMarginPx
       });
       const targetHeading = normalizeHeadingValue(alignedStartHeading + 180);
       const targetHeadingRad = targetHeading * Math.PI / 180;
       const exitForward = { x: Math.sin(targetHeadingRad), y: -Math.cos(targetHeadingRad) };
-      const extensionLengthM = config.pattern === 'FISH_TAIL'
-          ? Math.max(10, planningTurnRadiusM * 1.5)
-          : Math.max(3.5, Number(vehicleSettings?.wheelbase || 2.5) * 1.5);
+      const implementWorkOffsets = getImplementWorkOffsets(vehicleSettings, implementSettings);
+      const extensionLengthM = effectiveTurnPattern === 'FISH_TAIL'
+          ? Math.max(10, planningTurnRadiusM * 1.5, implementWorkOffsets.rearwardM + 2)
+          : Math.max(3.5, Number(vehicleSettings?.wheelbase || 2.5) * 1.5, implementWorkOffsets.rearwardM + 2);
       const extensionLengthPx = extensionLengthM * PIXELS_PER_METER;
       const plannedPoints = result.points?.length ? [...result.points] : [];
       const turnExitIndex = Math.max(0, plannedPoints.length - 1);
@@ -3620,11 +3990,23 @@ const App = () => {
           targetLaneIndex: target.targetLaneIndex,
           targetLaneDelta: target.targetLaneIndex - target.currentLaneIndex,
           passDelta: target.passDelta,
-          openFieldPreview: boundaryPoints.length < 3,
+          openFieldPreview: !validateBoundary || boundaryPoints.length < 3,
           safetyMarginPx: turnSafetyMarginPx,
           plannerSafetyMarginPx,
           minRadiusM: minimumTurnRadiusM,
           planningRadiusM: planningTurnRadiusM,
+          effectiveTurnPattern,
+          maneuverLabel: result.shape === 'FISH_TAIL'
+              ? '3-POINT REVERSE'
+              : result.shape === 'FORWARD_BULB'
+                  ? 'KEYHOLE / ONE-SIDED'
+                  : 'FORWARD U',
+          forwardTurnVariant: result.shape === 'FORWARD_BULB' ? 'ONE_SIDED_KEYHOLE' : result.shape === 'U' ? 'SIMPLE_U' : null,
+          requiredPassDelta: requiredForwardPassDelta,
+          requiredSkipPasses: Math.max(0, requiredForwardPassDelta - 1),
+          requiredTargetSeparationM: requiredForwardPassDelta * activeTrackSpacingM,
+          selectedTargetSeparationM: target.passDelta * activeTrackSpacingM,
+          minimumForwardDiameterM: minimumTurnRadiusM * 2,
           targetHeading: curveExitValidation.targetHeading,
           curveExitLaneErrorM: curveExitValidation.laneErrorM,
           curveExitHeadingErrorDeg: curveExitValidation.headingErrorDeg
@@ -3702,7 +4084,7 @@ const App = () => {
           + (Number(vehicleSettings?.rearHitch) || 0)
           + (Number(implementSettings.hitchToWorkPoint) || 0)
       ) * PIXELS_PER_METER);
-      const mountedImplement = /3-point|mounted/i.test(String(implementSettings.connectionType || ''));
+      const mountedImplement = /3-point|mounted|front mount/i.test(String(implementSettings.connectionType || ''));
       const smartTurnPattern = mountedImplement ? 'FISH_TAIL' : 'AUTO';
       const planningTurnRadiusM = smartTurnPattern === 'FISH_TAIL'
           ? getFishTailPlanningRadiusM(minRadiusM)
@@ -3886,9 +4268,123 @@ const App = () => {
       return right.failReason ? right : left;
   };
 
+  const projectAutoPlanToHeadland = (plan) => {
+      if (!plan?.points?.length || plan.points.length < 2) return plan;
+      const boundaryPoints = getActiveBoundaryPoints();
+      if (boundaryPoints.length < 3) {
+          return {
+              ...plan,
+              points: [],
+              feasible: false,
+              failReason: 'AUTO_BOUNDARY_REQUIRED',
+              projectedAtTrigger: false,
+              distanceToTriggerM: null
+          };
+      }
+
+      const boundaryApproachHeading = normalizeHeadingValue(
+          liveGuidanceMetrics.lineHeading + (liveGuidanceDirectionFactor < 0 ? 180 : 0)
+      );
+      const forward = {
+          x: Math.sin(boundaryApproachHeading * Math.PI / 180),
+          y: -Math.cos(boundaryApproachHeading * Math.PI / 180)
+      };
+      const origin = {
+          x: Number(physics.current.x) || 0,
+          y: Number(physics.current.y) || 0
+      };
+      const cross2d = (ax, ay, bx, by) => ax * by - ay * bx;
+      let forwardBoundaryDistancePx = Infinity;
+      for (let index = 0; index < boundaryPoints.length; index += 1) {
+          const a = boundaryPoints[index];
+          const b = boundaryPoints[(index + 1) % boundaryPoints.length];
+          const sx = b.x - a.x;
+          const sy = b.y - a.y;
+          const qx = a.x - origin.x;
+          const qy = a.y - origin.y;
+          const denominator = cross2d(forward.x, forward.y, sx, sy);
+          if (Math.abs(denominator) < 1e-6) continue;
+          const rayDistance = cross2d(qx, qy, sx, sy) / denominator;
+          const segmentRatio = cross2d(qx, qy, forward.x, forward.y) / denominator;
+          if (rayDistance >= 0 && segmentRatio >= 0 && segmentRatio <= 1) {
+              forwardBoundaryDistancePx = Math.min(forwardBoundaryDistancePx, rayDistance);
+          }
+      }
+      if (!Number.isFinite(forwardBoundaryDistancePx)) {
+          return {
+              ...plan,
+              points: [],
+              feasible: false,
+              failReason: 'AUTO_BOUNDARY_AHEAD_NOT_FOUND',
+              projectedAtTrigger: false,
+              distanceToTriggerM: null
+          };
+      }
+
+      const config = plan.config || getNormalizedTurnConfig({ mode: 'AUTO' });
+      const configuredTriggerPx = Math.max(4, Number(config.startDistanceM) || 18) * PIXELS_PER_METER;
+      const triggerDistancePx = Math.max(
+          configuredTriggerPx,
+          Number(plan.requiredDepthPx) || 0
+      );
+      const translationPx = Math.max(0, forwardBoundaryDistancePx - triggerDistancePx);
+      const projectedPoints = plan.points.map(point => ({
+          ...point,
+          x: point.x + forward.x * translationPx,
+          y: point.y + forward.y * translationPx
+      }));
+      const projectedTurnSafe = plan.feasible !== false
+          && projectedPoints.length > 1
+          && window.TurnGeometry.pathInsidePolygon(
+              projectedPoints,
+              boundaryPoints,
+              Number(plan.plannerSafetyMarginPx) || 0
+          );
+
+      return {
+          ...plan,
+          points: projectedPoints,
+          boundaryPoints,
+          feasible: projectedTurnSafe,
+          failReason: projectedTurnSafe ? null : 'BOUNDARY_CLEARANCE',
+          openFieldPreview: false,
+          projectedAtTrigger: true,
+          previewStyle: 'HEADLAND_GHOST',
+          triggerDistancePx,
+          forwardBoundaryDistancePx,
+          distanceToTriggerM: translationPx / PIXELS_PER_METER
+      };
+  };
+
   const refreshUTurnPreview = (overrides = {}, requestedDirection) => {
-      const candidate = chooseUTurnCandidate(requestedDirection, overrides);
+      const previewConfig = getNormalizedTurnConfig(overrides);
+      const rawCandidate = chooseUTurnCandidate(
+          requestedDirection,
+          previewConfig.mode === 'AUTO'
+              ? {
+                  ...overrides,
+                  mode: 'AUTO',
+                  ignoreBoundaryValidation: true,
+                  ignoreSpeedValidation: true
+              }
+              : overrides
+      );
+      const candidate = previewConfig.mode === 'AUTO'
+          ? projectAutoPlanToHeadland(rawCandidate)
+          : rawCandidate;
+      uTurnPreviewPoseRef.current = {
+          x: Number(physics.current.x) || 0,
+          y: Number(physics.current.y) || 0,
+          heading: Number(physics.current.heading) || 0,
+          updatedAt: performance.now()
+      };
       setUTurnPreview(candidate);
+      if (previewConfig.mode === 'AUTO') {
+          const distanceToTriggerM = Number(candidate?.distanceToTriggerM);
+          setUTurnDistanceToTriggerM(Number.isFinite(distanceToTriggerM)
+              ? Math.round(distanceToTriggerM * 10) / 10
+              : null);
+      }
       setSmartPartialApprovalSignature(previous => (
           previous && previous === candidate?.planSignature ? previous : null
       ));
@@ -3900,10 +4396,45 @@ const App = () => {
       setEventHistoryOpen(false);
       setProductivityOpen(false);
       setUTurnPanelTab('TURN');
-      refreshUTurnPreview({}, requestedDirection);
+      const allowAutoEngage = steeringModeRef.current !== 'AUTO'
+          && rtkGuidanceReady
+          && hasGuidanceToEngage
+          && !currentRunStatus.overrideDetected
+          && currentRunStatus.engageAllowed !== false;
+      refreshUTurnPreview({ allowAutoEngage }, requestedDirection);
       setUTurnPanelOpen(true);
       setUTurnStage('PREVIEW');
   };
+
+  // Preview planning is boundary-heavy. Rebuild it only after meaningful pose
+  // movement instead of on every animation render; execution still rebuilds
+  // from the exact live pose before the vehicle starts.
+  useEffect(() => {
+      if (!uTurnPanelOpen || uTurnPanelTab !== 'TURN' || autoUTurnArmed || turnAssistActive || uTurnPreview?.manualHeadlandActive) return;
+      const turnConfig = getNormalizedTurnConfig();
+      if (turnConfig.mode === 'SMART') return;
+      const lastPose = uTurnPreviewPoseRef.current;
+      const now = performance.now();
+      const movedPx = Number.isFinite(lastPose.x) && Number.isFinite(lastPose.y)
+          ? Math.hypot(worldPos.x - lastPose.x, worldPos.y - lastPose.y)
+          : Infinity;
+      const headingMoved = Number.isFinite(lastPose.heading)
+          ? Math.abs(normalizeAngle(heading - lastPose.heading))
+          : Infinity;
+      if (movedPx < 0.5 * PIXELS_PER_METER
+          && headingMoved < 2
+          && now - (lastPose.updatedAt || 0) < 350) return;
+      const selectedDirection = uTurnPreview?.direction
+          ?? (turnConfig.direction === 'Left' ? -1 : turnConfig.direction === 'Right' ? 1 : undefined);
+      const allowAutoEngage = steeringModeRef.current !== 'AUTO'
+          && rtkGuidanceReady
+          && hasGuidanceToEngage
+          && !currentRunStatus.overrideDetected
+          && currentRunStatus.engageAllowed !== false;
+      refreshUTurnPreview({ allowAutoEngage }, selectedDirection);
+  }, [uTurnPanelOpen, uTurnPanelTab, autoUTurnArmed, turnAssistActive, worldPos.x, worldPos.y, heading, uTurnSettings, activeLineId, activeBoundaryIdx, activeTrackSpacingM]);
+
+  const displayedUTurnPlan = uTurnPreview;
 
   const getTurnSafetySignature = (turnOverrides = {}) => {
       const signatureTurnConfig = getNormalizedTurnConfig(turnOverrides);
@@ -3917,17 +4448,15 @@ const App = () => {
               a: roundPoint(pointA),
               b: roundPoint(pointB),
               aPlus: [roundPoint(aPlusPoint), Number.isFinite(Number(aPlusHeading)) ? Math.round(Number(aPlusHeading) * 10) / 10 : null],
-              curve: (curvePoints || []).map(roundPoint).filter(Boolean),
+              curve: (Array.isArray(curvePoints) ? curvePoints : []).map(roundPoint).filter(Boolean),
               pivot: [roundPoint(pivotCenter), Number.isFinite(Number(pivotRadius)) ? Math.round(Number(pivotRadius) * 10) / 10 : null],
               offsetPx: Math.round(effectiveGuidanceOffset * 10) / 10
           },
           boundaryIndex: activeBoundaryIdx,
           boundary: getActiveBoundaryPoints().map(roundPoint).filter(Boolean),
-          fieldBoundaries: (activeFieldRecord?.boundaries || []).map((record, index) => (
-              index === activeBoundaryIndex
-                  ? getActiveBoundaryPoints()
-                  : getBoundaryPointsFromRecord(record)
-          ).map(points => points.map(roundPoint).filter(Boolean))),
+          exclusions: getActiveFieldExclusionRecords().map(record => (
+              getBoundaryPointsFromRecord(record).map(roundPoint).filter(Boolean)
+          )),
           trackSpacingM: Math.round(activeTrackSpacingM * 1000) / 1000,
           vehicle: [
               vehicleSettings?.profileId,
@@ -3960,11 +4489,17 @@ const App = () => {
           && (!Array.isArray(plan.points) || plan.points.length < 2)
           && presentManualHeadlandRecommendation(plan)) return true;
       if (!plan?.feasible || !plan.points || plan.points.length < 2) {
-          showNotification(plan?.failReason || 'No feasible turn path', 'warning');
+          showNotification(getUTurnFailureMessage(plan), 'warning');
           return false;
       }
       const config = plan.config || getNormalizedTurnConfig();
       const current = physics.current;
+      const entryMode = plan.entryMode || steeringModeRef.current;
+      const coverageResumeRequested = recordingIntentRef.current;
+      const resumeImplementRaised = implementRaisedRef.current;
+      const resumeAutosteer = plan.resumeAutosteerAfterTurn === undefined
+          ? Boolean(config.resumeAutosteer && entryMode === 'AUTO')
+          : Boolean(plan.resumeAutosteerAfterTurn);
       const previousTargetSpeed = Number(autoApproachPreviousSpeedRef.current ?? current.targetSpeed) || 0;
       autoApproachPreviousSpeedRef.current = null;
       const preserveRouteSegments = plan.mode === 'SMART';
@@ -4062,25 +4597,35 @@ const App = () => {
           activePhase: smartRoute ? firstRoutePhase : null,
           activeCoverageActive: smartRoute ? firstCoverageActive : null,
           activeImplementDown: smartRoute ? firstImplementDown : null,
-          previousMode: steeringMode,
+          previousMode: entryMode,
           previousTargetSpeed,
-          coverageWasRecording: isRecording,
-          implementWasRaised: implementRaised,
-          coveragePaused: Boolean(!smartRoute && config.pauseCoverage && isRecording),
-          resumeAutosteer: Boolean(config.resumeAutosteer),
+          coverageWasRecording: coverageResumeRequested,
+          coverageResumeRequested,
+          implementWasRaised: resumeImplementRaised,
+          resumeImplementRaised,
+          coveragePaused: Boolean(!smartRoute && config.pauseCoverage && coverageResumeRequested),
+          resumeAutosteer,
           repeatAuto: plan.mode === 'AUTO',
           turnSpeedKmh,
           workSpeedKmh,
           wheelbaseM: Math.max(1.2, Number(vehicleSettings?.wheelbase) || 2.5),
-          minRadiusM: Math.max(2, Number(plan.minRadiusM) || 0, Number(vehicleSettings?.wheelbase || 2.5) + 0.1, Number(vehicleSettings?.turnRadius) || 6.5)
+          minRadiusM: Math.max(2, Number(plan.minRadiusM) || 0, Number(vehicleSettings?.wheelbase || 2.5) + 0.1, Number(vehicleSettings?.turnRadius) || 4.5)
       };
       if (smartRoute) {
+          recordingIntentRef.current = firstCoverageActive;
+          implementRaisedRef.current = !firstImplementDown;
           setIsRecording(firstCoverageActive);
           setImplementRaised(!firstImplementDown);
       } else {
-          if (config.pauseCoverage && isRecording) setIsRecording(false);
-          if (config.liftAction) setImplementRaised(true);
+          // Coverage remains armed while the actual turn is suppressed. This
+          // avoids a record-off/record-on race and makes the UI accurately show
+          // that work resumes automatically on the aligned exit pass.
+          if (config.liftAction) {
+              implementRaisedRef.current = true;
+              setImplementRaised(true);
+          }
       }
+      steeringModeRef.current = 'MANUAL';
       setSteeringMode('MANUAL');
       setTurnAssistActive(true);
       setUTurnPreview(null);
@@ -4091,7 +4636,7 @@ const App = () => {
       setManualTargetSpeed(current.targetSpeed);
       showNotification(smartRoute
           ? `Smart Field started / ${plan.remainingPassCount || 0} passes / ${plan.turnCount || 0} turns`
-          : `${plan.shape || 'U-turn'} path active / pass ${plan.targetLaneIndex >= 0 ? '+' : ''}${plan.targetLaneIndex}`, 'info');
+          : `${plan.maneuverLabel || plan.shape || 'U-turn'} path active / pass ${plan.targetLaneIndex >= 0 ? '+' : ''}${plan.targetLaneIndex}`, 'info');
       return true;
   };
 
@@ -4132,11 +4677,13 @@ const App = () => {
       });
       setUTurnPreview(plan);
       if (!plan?.feasible) {
-          showNotification(plan?.failReason || `No safe ${directionLabel.toLowerCase()} turn`, 'warning');
+          showNotification(getUTurnFailureMessage(plan, `No safe ${directionLabel.toLowerCase()} turn`), 'warning');
           return false;
       }
       if (!isMultiLineMode) actions.setIsMultiLineMode(true);
+      const entryMode = allowAutoEngage ? 'AUTO' : steeringModeRef.current;
       if (allowAutoEngage) {
+          steeringModeRef.current = 'AUTO';
           setSteeringMode('AUTO');
           actions.setRunStatus(prev => ({
               ...(prev || {}),
@@ -4146,7 +4693,11 @@ const App = () => {
               recoveryAction: 'Monitor the turn path'
           }));
       }
-      return executeUTurnPlan(plan);
+      return executeUTurnPlan({
+          ...plan,
+          entryMode,
+          resumeAutosteerAfterTurn: Boolean(plan.config?.resumeAutosteer && entryMode === 'AUTO')
+      });
   };
 
   const startPreviewedUTurn = () => {
@@ -4160,10 +4711,20 @@ const App = () => {
           && !currentRunStatus.overrideDetected
           && currentRunStatus.engageAllowed !== false;
       const requestedDirection = uTurnPreview?.direction ?? (config.direction === 'Left' ? -1 : config.direction === 'Right' ? 1 : undefined);
-      const plan = chooseUTurnCandidate(requestedDirection, { allowAutoEngage });
+      const rawPlan = chooseUTurnCandidate(requestedDirection, config.mode === 'AUTO'
+          ? {
+              allowAutoEngage,
+              mode: 'AUTO',
+              ignoreBoundaryValidation: true,
+              ignoreSpeedValidation: true
+          }
+          : { allowAutoEngage });
+      const plan = config.mode === 'AUTO'
+          ? projectAutoPlanToHeadland(rawPlan)
+          : rawPlan;
       setUTurnPreview(plan);
       if (!plan?.feasible) {
-          showNotification(plan?.failReason || 'No feasible turn path', 'warning');
+          showNotification(getUTurnFailureMessage(plan), 'warning');
           return;
       }
       if (plan.mode === 'SMART') {
@@ -4192,7 +4753,10 @@ const App = () => {
       }
       if (plan.mode === 'AUTO') {
           if (!isMultiLineMode) actions.setIsMultiLineMode(true);
-          if (allowAutoEngage) setSteeringMode('AUTO');
+          if (allowAutoEngage) {
+              steeringModeRef.current = 'AUTO';
+              setSteeringMode('AUTO');
+          }
           autoLaneStepRef.current = Math.sign(plan.targetLaneDelta) || 1;
           autoArmSafetySignatureRef.current = getTurnSafetySignature();
           const approachSpeedKmh = Math.min(9, Math.max(3.5, config.turnSpeedKmh + 1));
@@ -4203,7 +4767,9 @@ const App = () => {
           autoTriggerEvaluationRef.current = 0;
           physics.current.targetSpeed = requestedApproachSpeed;
           setManualTargetSpeed(requestedApproachSpeed);
-          setUTurnDistanceToTriggerM(null);
+          setUTurnDistanceToTriggerM(Number.isFinite(Number(plan.distanceToTriggerM))
+              ? Math.round(Number(plan.distanceToTriggerM) * 10) / 10
+              : null);
           setAutoUTurnArmed(true);
           setUTurnStage('ARMED');
           setUTurnPanelOpen(false);
@@ -4381,7 +4947,7 @@ const App = () => {
       const configuredTriggerPx = normalizedTurnConfig.startDistanceM * PIXELS_PER_METER;
       const triggerDistancePx = Math.max(
           configuredTriggerPx,
-          (clearancePlan.feasible ? Number(clearancePlan.requiredDepthPx) || 0 : 0) + 0.75 * PIXELS_PER_METER
+          clearancePlan.feasible ? Number(clearancePlan.requiredDepthPx) || 0 : 0
       );
       const approachDistancePx = triggerDistancePx + 6 * PIXELS_PER_METER;
       const distanceToTriggerM = Math.max(0, (forwardBoundaryDistancePx - triggerDistancePx) / PIXELS_PER_METER);
@@ -4402,9 +4968,15 @@ const App = () => {
           ...clearancePlan,
           mode: 'AUTO',
           points: projectedTurnPoints,
+          boundaryPoints,
           feasible: projectedTurnSafe,
           failReason: projectedTurnSafe ? null : 'BOUNDARY_CLEARANCE',
-          projectedAtTrigger: true
+          openFieldPreview: false,
+          projectedAtTrigger: true,
+          previewStyle: 'HEADLAND_GHOST',
+          triggerDistancePx,
+          forwardBoundaryDistancePx,
+          distanceToTriggerM
       });
       setUTurnDistanceToTriggerM(previous => (
           previous === null || Math.abs(previous - roundedDistanceToTriggerM) >= 0.1
@@ -4479,6 +5051,11 @@ const App = () => {
   const getGuidanceModeLabel = () => (activeLineRecord?.type || guidanceLine || lineType || 'NO_LINE').replace(/_/g, ' ');
   const isHeadingUpMap = mapOrientation === 'HEADING_UP';
   const isMap3D = sceneViewMode === '3D';
+  const map3DViewHeight = 700;
+  const map3DViewWidth = map3DViewHeight
+      * Math.max(1, mapCanvasSize.width)
+      / Math.max(1, mapCanvasSize.height);
+  const map3DViewMinX = 500 - map3DViewWidth / 2;
   const mapRotationDeg = isHeadingUpMap ? -mapVisualHeading : 0;
   const mapRotationRad = mapRotationDeg * Math.PI / 180;
   const sceneRotationDeg = isMap3D ? 0 : mapRotationDeg;
@@ -4911,41 +5488,113 @@ const App = () => {
           && currentRunStatus.engageAllowed !== false;
       const selectedDirection = uTurnPreview?.direction
           ?? (turnConfig.direction === 'Left' ? -1 : turnConfig.direction === 'Right' ? 1 : undefined);
-      const plan = uTurnPreview?.manualHeadlandActive
-          ? uTurnPreview
-          : turnConfig.mode === 'SMART'
-          ? (uTurnPreview?.mode === 'SMART'
-              ? uTurnPreview
-              : {
-                  mode: 'SMART',
-                  direction: selectedDirection || 1,
-                  feasible: false,
-                  failReason: 'Choose a start side to generate the complete route',
-                  points: []
-              })
-          : chooseUTurnCandidate(selectedDirection, { allowAutoEngage });
+      const plan = displayedUTurnPlan;
       const currentPass = activeLaneRef.current ?? manualLaneRef.current ?? livePassIndex;
       const currentIsTramline = isTramlinePass(currentPass);
-      const requiredDistanceM = plan?.requiredDepthPx
-          ? plan.requiredDepthPx / PIXELS_PER_METER
-          : 0;
       const smartRoutePartial = turnConfig.mode === 'SMART'
           && plan?.feasible
           && plan?.routeCompleteness === 'PARTIAL';
       const manualHeadlandRecommendation = Boolean(plan?.manualHeadlandActive);
-      const previewNeedsCaution = Boolean(plan?.openFieldPreview || smartRoutePartial || manualHeadlandRecommendation);
+      const targetPassAlreadyWorked = Boolean(plan?.targetPassAlreadyWorked);
+      const previewNeedsCaution = Boolean(
+          plan?.openFieldPreview
+          || smartRoutePartial
+          || manualHeadlandRecommendation
+          || targetPassAlreadyWorked
+          || (turnConfig.mode !== 'SMART' && (!turnConfig.liftAction || !turnConfig.pauseCoverage))
+      );
       const partialRouteApproved = smartRoutePartial
           && smartPartialApprovalSignature === plan?.planSignature;
+      const modeTitle = turnConfig.mode === 'SMART'
+          ? 'Smart Field'
+          : turnConfig.mode === 'AUTO'
+              ? 'Auto U-turn'
+              : 'One Turn';
+      const planPending = !plan;
+      const planBlocked = Boolean(plan && !plan.feasible);
+      const directionTitle = plan?.direction < 0
+          ? 'LEFT'
+          : plan?.direction > 0
+              ? 'RIGHT'
+              : turnConfig.direction === 'Left'
+                  ? 'LEFT'
+                  : turnConfig.direction === 'Right'
+                      ? 'RIGHT'
+                      : 'AUTO SIDE';
+      const maneuverTitle = plan?.shape === 'FORWARD_BULB'
+          ? 'KEYHOLE'
+          : plan?.shape === 'FISH_TAIL'
+              ? '3-POINT'
+              : plan?.shape === 'U'
+                  ? 'U-TURN'
+                  : turnConfig.pattern === 'FISH_TAIL'
+                      ? '3-POINT'
+                      : 'AUTO FIT';
+      const targetTitle = activeTramline.enabled
+          ? 'TRAMLINE'
+          : turnConfig.nextPass === 'Skip'
+              ? `SKIP ${Math.max(1, Number(turnConfig.skipPasses) || 1)}`
+              : 'NEXT PASS';
+      const planSummary = manualHeadlandRecommendation
+          ? `${plan?.headlandPasses || plan?.manualHeadlandRecommendation?.passCount || 0} HEADLAND PASSES`
+          : turnConfig.mode === 'SMART'
+              ? `${plan?.remainingPassCount || 0} PASSES · ${plan?.turnCount || 0} TURNS`
+              : `${maneuverTitle} · ${directionTitle} · ${targetTitle}`;
+      const readinessTitle = manualHeadlandRecommendation
+          ? 'MANUAL GUIDE'
+          : planPending
+              ? 'CHECKING'
+              : planBlocked
+                  ? 'BLOCKED'
+                  : smartRoutePartial || targetPassAlreadyWorked
+                      ? 'REVIEW'
+                      : autoUTurnArmed
+                          ? 'ARMED'
+                          : turnConfig.mode === 'SMART'
+                              ? 'ROUTE READY'
+                              : 'READY';
+      const statusHint = planBlocked
+          ? 'Resolve the issue above before starting.'
+          : turnConfig.mode !== 'SMART' && (!turnConfig.liftAction || !turnConfig.pauseCoverage)
+              ? 'Manual implement or coverage control is required.'
+              : manualHeadlandRecommendation
+                  ? 'Autosteer is off for the recommended headland passes.'
+                  : turnConfig.mode === 'AUTO'
+                      ? 'Starts automatically at the headland boundary.'
+                      : turnConfig.mode === 'SMART'
+                          ? 'Review the field route before starting.'
+                          : 'Press Start Turn when the preview is clear.';
+      const statusDistance = !planBlocked && turnConfig.mode === 'AUTO'
+          && Number.isFinite(Number(plan?.distanceToTriggerM ?? uTurnDistanceToTriggerM))
+          ? `${Number(plan?.distanceToTriggerM ?? uTurnDistanceToTriggerM).toFixed(1)} m to turn`
+          : turnConfig.mode === 'SMART' && Number(plan?.estimatedDistanceM) > 0
+              ? `${(Number(plan.estimatedDistanceM) / 1000).toFixed(2)} km`
+              : null;
       const panelButton = (active) => active
           ? 'border-blue-500 bg-blue-600 text-white shadow-sm'
           : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'} ${t.textMain} hover:bg-blue-500/5`;
-      const changeTurnSetting = (key, value, requestedDirection) => {
-          handleUTurnSettingChange(key, value);
-          refreshUTurnPreview({ [key]: value }, requestedDirection);
+      const changeTurnSettings = (changes, requestedDirection) => {
+          const versionedChanges = { ...changes, targetSelectionVersion: 2 };
+          actions.setUTurnSettings(previous => ({ ...previous, ...versionedChanges }));
+          refreshUTurnPreview({ ...versionedChanges, allowAutoEngage }, requestedDirection);
       };
-      const turnFailureLabel = (reason) => ({
+      const changeTurnSetting = (key, value, requestedDirection) => {
+          changeTurnSettings({ [key]: value }, requestedDirection);
+      };
+      const turnFailureLabel = (reason) => {
+          if (reason === 'FORWARD_U_SPACING_TOO_NARROW') {
+              const targetLabel = plan?.targetPolicy === 'ADJACENT'
+                  ? 'Adjacent pass'
+                  : plan?.targetPolicy === 'TRAMLINE'
+                      ? 'Tramline target'
+                      : 'Selected target';
+              return `${targetLabel}: ${Number(plan?.selectedTargetSeparationM || 0).toFixed(1)} m. Forward-only U diameter: ${Number(plan?.minimumForwardDiameterM || 0).toFixed(1)} m.`;
+          }
+          return ({
            INVALID_BOUNDARY: 'Boundary geometry is invalid',
-           INNER_BOUNDARY_UNSUPPORTED: 'Auto/Smart is blocked: inner or overlapping boundaries need obstacle-aware routing',
+           AUTO_BOUNDARY_REQUIRED: 'Auto U-turn needs an active field boundary',
+           AUTO_BOUNDARY_AHEAD_NOT_FOUND: 'No headland boundary was found ahead on the current pass',
+           INNER_BOUNDARY_UNSUPPORTED: 'An explicit exclusion or obstacle boundary overlaps this work area',
            INVALID_DIMENSIONS: 'Vehicle or implement dimensions are invalid',
            SMART_REQUIRES_AUTO_LIFT: 'Smart Field requires automatic implement lift for every turn and transit',
            SMART_REQUIRES_STOP: 'Stop the vehicle before generating or approving the Smart Field route',
@@ -4960,15 +5609,27 @@ const App = () => {
            UNSAFE_ROUTE: 'Complete route cannot stay inside the safety envelope',
            BOUNDARY_CLEARANCE: 'Not enough implement clearance at this headland',
            CURVE_EXIT_UNREACHABLE: 'Curve/Combination bends too tightly for a safe local U-turn; use a straighter section or turn manually'
-       }[reason] || reason || 'No valid turn path');
+          }[reason] || reason || 'No valid turn path');
+      };
       const closePanel = () => {
           setUTurnPanelOpen(false);
+          // Tramline is a standalone traffic-pattern panel. Closing it must not
+          // clear or otherwise mutate a prepared headland-turn preview.
+          if (uTurnPanelTab === 'TRAMLINE') return;
           if (manualHeadlandRecommendation) return;
           setUTurnPreview(null);
           setSmartPartialApprovalSignature(null);
           if (!turnAssistActive && !autoUTurnArmed) setUTurnStage('IDLE');
       };
       const approveOrStartPlannedTurn = () => {
+          if (autoUTurnArmed) {
+              disarmAutoUTurn();
+              return;
+          }
+          if (turnConfig.mode === 'ONE_KEY') {
+              startOneKeyUTurn(selectedDirection);
+              return;
+          }
           if (smartRoutePartial && !partialRouteApproved) {
               setSmartPartialApprovalSignature(plan.planSignature);
               showNotification('Partial Smart route approved / red dashed zones remain manual', 'warning');
@@ -4978,7 +5639,9 @@ const App = () => {
       };
       const beginManualHeadland = () => {
           setUTurnPreview(previous => previous ? { ...previous, manualHeadlandStarted: true } : previous);
+          recordingIntentRef.current = false;
           setIsRecording(false);
+          implementRaisedRef.current = true;
           setImplementRaised(true);
           setUTurnStage('MANUAL HEADLAND');
           setUTurnPanelOpen(false);
@@ -4986,8 +5649,11 @@ const App = () => {
       };
       const finishManualHeadland = () => {
           const resumeCoverage = Boolean(plan?.coverageWasRecording);
+          const resumeRaised = !resumeCoverage || Boolean(plan?.implementWasRaised);
+          recordingIntentRef.current = resumeCoverage;
+          implementRaisedRef.current = resumeRaised;
           setIsRecording(resumeCoverage);
-          setImplementRaised(!resumeCoverage || Boolean(plan?.implementWasRaised));
+          setImplementRaised(resumeRaised);
           setUTurnPreview(null);
           setUTurnPanelOpen(false);
           setUTurnStage('COMPLETE');
@@ -4995,161 +5661,120 @@ const App = () => {
       };
 
       return (
-          <div data-uturn-panel className={`absolute right-3 top-[96px] bottom-[102px] z-[45] w-[360px] max-w-[calc(100%-24px)] rounded-2xl border ${t.borderCard} ${t.bgCard} shadow-2xl overflow-hidden flex flex-col`}>
+          <div
+              data-uturn-panel={uTurnPanelTab === 'TURN' ? 'true' : undefined}
+              data-tramline-panel={uTurnPanelTab === 'TRAMLINE' ? 'true' : undefined}
+              style={{
+                  maxWidth: 'calc(100% - 24px)',
+                  ...(uTurnPanelTab === 'TURN' ? { bottom: 'auto', maxHeight: 'calc(100% - 198px)' } : {})
+              }}
+              className={`absolute right-3 top-[96px] ${uTurnPanelTab === 'TRAMLINE' ? 'bottom-[102px]' : ''} z-[45] w-[360px] rounded-2xl border border-t-4 ${uTurnPanelTab === 'TRAMLINE' ? 'border-yellow-500/60' : 'border-blue-500/60'} ${t.bgCard} shadow-2xl overflow-hidden flex flex-col`}
+          >
               <div className={`shrink-0 h-[54px] px-3 border-b ${t.divider} flex items-center justify-between gap-3`}>
                   <div className="min-w-0 flex items-center gap-2.5">
-                      <div className={`shrink-0 w-9 h-9 rounded-xl ${theme === 'dark' ? 'bg-slate-800' : 'bg-blue-50'} flex items-center justify-center`}>
+                      <div className={`shrink-0 w-9 h-9 rounded-xl ${uTurnPanelTab === 'TRAMLINE' ? 'bg-yellow-500/20' : 'bg-blue-500/10'} flex items-center justify-center`}>
                           {uTurnPanelTab === 'TRAMLINE'
                               ? <AlignJustify className="w-[18px] h-[18px] text-yellow-500" />
                               : <CornerUpLeft className="w-[18px] h-[18px] text-blue-500" />}
                       </div>
                       <div className="min-w-0">
-                          <div className={`text-[9px] uppercase tracking-[0.08em] font-black ${t.textSub}`}>Run assistant</div>
-                          <div className={`text-sm font-black truncate ${t.textMain}`}>{uTurnPanelTab === 'TRAMLINE' ? 'Tramline pattern' : 'Headland turn'}</div>
+                          <div className={`text-[9px] uppercase tracking-[0.08em] font-black ${uTurnPanelTab === 'TRAMLINE' ? 'text-yellow-500' : 'text-blue-500'}`}>
+                              {uTurnPanelTab === 'TRAMLINE' ? 'Traffic pattern' : 'U-turn control'}
+                          </div>
+                          <div className={`text-sm font-black truncate ${t.textMain}`}>{uTurnPanelTab === 'TRAMLINE' ? 'Tramline setup' : modeTitle}</div>
                       </div>
                   </div>
-                  <button aria-label="Close run assistant" onClick={closePanel} className={`w-9 h-9 rounded-lg border ${t.borderCard} ${t.textMain} flex items-center justify-center`}>
+                  <button aria-label={uTurnPanelTab === 'TRAMLINE' ? 'Close Tramline setup' : 'Close U-turn controls'} onClick={closePanel} className={`w-9 h-9 rounded-lg border ${t.borderCard} ${t.textMain} flex items-center justify-center`}>
                       <X className="w-4 h-4" />
                   </button>
               </div>
 
-              <div className={`shrink-0 grid grid-cols-2 gap-1 p-1.5 border-b ${t.divider}`}>
-                  <button onClick={() => { setUTurnPanelTab('TURN'); refreshUTurnPreview(); }} className={`h-8 rounded-lg text-[10px] font-black ${uTurnPanelTab === 'TURN' ? 'bg-blue-600 text-white' : t.textSub}`}>U-TURN</button>
-                  <button onClick={() => setUTurnPanelTab('TRAMLINE')} className={`h-8 rounded-lg text-[10px] font-black ${uTurnPanelTab === 'TRAMLINE' ? 'bg-yellow-500 text-slate-950' : t.textSub}`}>TRAMLINE</button>
-              </div>
-
               {uTurnPanelTab === 'TURN' ? (
-                  <div className="flex-1 min-h-0 p-3 flex flex-col gap-2">
+                  <div className="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2">
                       <div className="grid grid-cols-3 gap-1.5">
-                          <button disabled={manualHeadlandRecommendation} onClick={() => changeTurnSetting('mode', 'ONE_KEY')} className={`h-[50px] rounded-xl border text-left px-2 disabled:opacity-40 ${panelButton(turnConfig.mode === 'ONE_KEY')}`}>
-                              <span className="block text-[9px] font-black">ONE TURN</span>
-                              <span className="block text-[7px] font-bold opacity-75">Turn now</span>
+                          <button aria-label="One Turn, preview then start once" aria-pressed={turnConfig.mode === 'ONE_KEY'} disabled={manualHeadlandRecommendation || autoUTurnArmed || turnAssistActive} onClick={() => changeTurnSetting('mode', 'ONE_KEY')} className={`h-11 rounded-xl border px-2 text-[9px] font-black disabled:opacity-40 ${panelButton(turnConfig.mode === 'ONE_KEY')}`}>
+                              TURN NOW
                           </button>
-                          <button disabled={manualHeadlandRecommendation} onClick={() => changeTurnSetting('mode', 'AUTO')} className={`h-[50px] rounded-xl border text-left px-2 disabled:opacity-40 ${panelButton(turnConfig.mode === 'AUTO')}`}>
-                              <span className="block text-[9px] font-black">AUTO ROW</span>
-                              <span className="block text-[7px] font-bold opacity-75">At headland</span>
+                          <button aria-label="Auto U-turn at the headland boundary" aria-pressed={turnConfig.mode === 'AUTO'} disabled={manualHeadlandRecommendation || autoUTurnArmed || turnAssistActive} onClick={() => changeTurnSetting('mode', 'AUTO')} className={`h-11 rounded-xl border px-2 text-[9px] font-black disabled:opacity-40 ${panelButton(turnConfig.mode === 'AUTO')}`}>
+                              AUTO
                           </button>
-                          <button disabled={manualHeadlandRecommendation} onClick={() => changeTurnSetting('mode', 'SMART')} className={`h-[50px] rounded-xl border text-left px-2 disabled:opacity-40 ${panelButton(turnConfig.mode === 'SMART')}`}>
-                              <span className="block text-[9px] font-black">SMART FIELD</span>
-                              <span className="block text-[7px] font-bold opacity-75">Plan field</span>
+                          <button aria-label="Smart Field route planning" aria-pressed={turnConfig.mode === 'SMART'} disabled={manualHeadlandRecommendation || autoUTurnArmed || turnAssistActive} onClick={() => changeTurnSetting('mode', 'SMART')} className={`h-11 rounded-xl border px-2 text-[9px] font-black disabled:opacity-40 ${panelButton(turnConfig.mode === 'SMART')}`}>
+                              FIELD PLAN
                           </button>
                       </div>
-
-                      {turnConfig.mode !== 'SMART' && <div className="grid grid-cols-2 gap-1.5">
-                          <button onClick={() => changeTurnSetting('pattern', 'AUTO')} className={`h-[46px] rounded-xl border px-2 flex items-center gap-2 text-left ${panelButton(turnConfig.pattern !== 'FISH_TAIL')}`}>
-                              <CornerUpLeft className="w-4 h-4 shrink-0" />
-                              <span><span className="block text-[9px] font-black">Forward U / Omega</span><span className="block text-[7px] font-bold opacity-70">Automatic shape</span></span>
-                          </button>
-                          <button onClick={() => changeTurnSetting('pattern', 'FISH_TAIL')} className={`h-[46px] rounded-xl border px-2 flex items-center gap-2 text-left ${panelButton(turnConfig.pattern === 'FISH_TAIL')}`}>
-                              <Spline className="w-4 h-4 shrink-0" />
-                              <span><span className="block text-[9px] font-black">Fish-tail</span><span className="block text-[7px] font-bold opacity-70">Mounted only</span></span>
-                          </button>
-                      </div>}
 
                       <div className="grid grid-cols-2 gap-1.5">
                           {[['Left', -1, CornerUpLeft], ['Right', 1, CornerUpRight]].map(([label, direction, Icon]) => {
                               const active = plan?.direction === direction;
-                              const candidate = turnConfig.mode === 'SMART'
-                                  ? plan
-                                  : buildUTurnCandidate(direction, { allowAutoEngage, mode: turnConfig.mode });
-                               const actionLabel = turnConfig.mode === 'ONE_KEY'
-                                   ? `TURN ${label.toUpperCase()}`
-                                   : turnConfig.mode === 'AUTO'
-                                       ? `SWEEP ${label.toUpperCase()}`
-                                       : `PLAN ${label.toUpperCase()}`;
                               return (
                                   <button
                                       key={label}
-                                      disabled={manualHeadlandRecommendation || (turnConfig.mode !== 'SMART' && !candidate.feasible)}
-                                      onClick={() => turnConfig.mode === 'ONE_KEY'
-                                          ? startOneKeyUTurn(direction)
-                                          : changeTurnSetting('direction', label, direction)}
-                                      className={`h-11 rounded-xl border flex items-center justify-center gap-2 text-[9px] font-black disabled:opacity-35 ${panelButton(active)}`}
+                                      aria-label={`Turn ${label.toLowerCase()}`}
+                                      aria-pressed={active}
+                                      disabled={manualHeadlandRecommendation || autoUTurnArmed || turnAssistActive}
+                                      onClick={() => changeTurnSetting('direction', label, direction)}
+                                      className={`h-12 rounded-xl border flex items-center justify-center gap-2 text-[10px] font-black disabled:opacity-35 ${panelButton(active)}`}
                                   >
-                                      <Icon className="w-4 h-4" /> {actionLabel}
+                                      <Icon className="w-4 h-4" /> {label.toUpperCase()}
                                   </button>
                               );
                           })}
                       </div>
 
-                      <div className={`rounded-xl border px-3 py-2.5 ${!plan?.feasible ? 'border-red-500/35 bg-red-500/10' : previewNeedsCaution ? 'border-amber-500/40 bg-amber-500/10' : 'border-green-500/35 bg-green-500/10'}`}>
+                      <div className={`rounded-xl border px-3 py-3 ${planPending ? 'border-blue-500/35 bg-blue-500/8' : planBlocked ? 'border-red-500/35 bg-red-500/10' : previewNeedsCaution ? 'border-amber-500/40 bg-amber-500/10' : 'border-green-500/35 bg-green-500/10'}`}>
                           <div className="flex items-center justify-between gap-2">
-                              <span className={`text-[9px] font-black uppercase ${!plan?.feasible ? 'text-red-500' : previewNeedsCaution ? 'text-amber-500' : 'text-green-500'}`}>
-                                   {manualHeadlandRecommendation
-                                       ? 'Manual headland guide'
-                                       : !plan?.feasible
-                                       ? 'Blocked'
-                                      : smartRoutePartial
-                                          ? 'Partial route / review'
-                                          : plan?.openFieldPreview
-                                              ? 'Open-field preview'
-                                              : turnConfig.mode === 'SMART' ? 'Full route ready' : 'Safe path ready'}
+                              <span className={`text-[9px] font-black uppercase tracking-[0.06em] ${planPending ? 'text-blue-500' : planBlocked ? 'text-red-500' : previewNeedsCaution ? 'text-amber-500' : 'text-green-500'}`}>
+                                  {readinessTitle}
                               </span>
-                              {turnConfig.mode === 'SMART'
-                                  ? <span className={`text-[8px] font-black tabular-nums ${t.textSub}`}>{((Number(plan?.estimatedDistanceM) || 0) / 1000).toFixed(2)} km</span>
-                                  : <span className={`text-[8px] font-black tabular-nums ${t.textSub}`}>{requiredDistanceM.toFixed(1)} m clearance</span>}
+                              {statusDistance && <span className={`text-[8px] font-black tabular-nums ${t.textSub}`}>{statusDistance}</span>}
                           </div>
-                          <div className={`mt-1 text-[10px] font-black leading-tight ${plan?.feasible ? t.textMain : 'text-red-500'}`}>
-                               {manualHeadlandRecommendation
-                                   ? `${plan.headlandPasses || plan.manualHeadlandRecommendation?.passCount || 0} recommended passes / autosteer off`
-                                   : !plan?.feasible
-                                   ? turnFailureLabel(plan?.failReason)
-                                  : turnConfig.mode === 'SMART'
-                                      ? `${plan.remainingPassCount || 0} passes / ${plan.turnCount || 0} turns${plan.headlandPasses ? ' / headland close' : ''}`
-                                      : `${plan.shape || 'Turn'} / target pass ${plan.targetLaneIndex >= 0 ? '+' : ''}${plan.targetLaneIndex}${activeTramline.enabled ? ` / ${isTramlinePass(plan.targetLaneIndex) ? 'TRAMLINE' : 'WORK'}` : ''}`}
+                          <div className={`mt-1.5 text-[11px] font-black leading-tight ${planBlocked ? 'text-red-500' : t.textMain}`}>
+                              {planPending ? 'Preparing turn preview…' : planBlocked ? turnFailureLabel(plan?.failReason) : planSummary}
                           </div>
-                           {turnConfig.mode === 'SMART' && plan?.feasible && !manualHeadlandRecommendation && (
-                              <div className={`mt-1 text-[8px] font-bold ${t.textSub}`}>
-                                  {smartRoutePartial
-                                      ? `${plan.routeCoveragePercent || 0}% planned / ${plan.omittedWorkSegments?.length || 0} manual zones`
-                                      : `Skips ${plan.skippedWorkedLaneIndices?.length || 0} fully worked passes`} / starts {plan.direction < 0 ? 'left' : 'right'}
-                              </div>
+                          <div className={`mt-1 text-[8px] font-bold leading-snug ${previewNeedsCaution ? 'text-amber-600' : t.textSub}`}>{statusHint}</div>
+                          {targetPassAlreadyWorked && plan?.feasible && (
+                              <div className="mt-1.5 text-[8px] font-black text-amber-600">Selected pass already has coverage.</div>
                           )}
-                          {turnConfig.mode === 'AUTO' && autoUTurnArmed && (
-                              <div className="mt-1 text-[8px] font-black text-blue-500">
-                                  Armed / {uTurnDistanceToTriggerM == null ? 'finding headland' : `${uTurnDistanceToTriggerM.toFixed(1)} m to trigger`}
-                              </div>
+                          {smartRoutePartial && plan?.feasible && (
+                              <div className="mt-1.5 text-[8px] font-black text-amber-600">{plan.routeCoveragePercent || 0}% planned · {plan.omittedWorkSegments?.length || 0} manual zones</div>
                           )}
-                          {plan?.openFieldPreview && <div className="mt-1 text-[8px] font-bold text-amber-500">Boundary clearance is not verified for this One Turn.</div>}
+                          {plan?.openFieldPreview && <div className="mt-1.5 text-[8px] font-black text-amber-600">Boundary clearance is not checked.</div>}
                       </div>
 
-                      <div className={`rounded-lg px-2.5 py-2 text-[8px] font-bold leading-snug ${theme === 'dark' ? 'bg-slate-900 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
-                           {manualHeadlandRecommendation
-                               ? (plan.manualHeadlandStarted
-                                   ? 'Manual guide stays visible. Start Coverage on a green pass and pause it while shifting between passes.'
-                                   : 'Interior rows are complete. Begin the recommendation, then steer the green headland passes manually.')
-                               : turnConfig.mode === 'ONE_KEY'
-                               ? 'Choose LEFT or RIGHT: starts immediately, runs once. No obstacle detection.'
-                              : turnConfig.mode === 'AUTO'
-                                  ? 'Arm once, then drive. Starts only at the boundary trigger. Monitor obstacles.'
-                                  : smartRoutePartial
-                                      ? 'Review red manual zones, approve once, then Start. Operator supervision required.'
-                                      : 'Review the full route. Worked intervals are excluded. Operator supervision required.'}
-                      </div>
-
-                      <div className="mt-auto grid grid-cols-[1fr_42px] gap-2">
+                      <div className="mt-1 flex gap-2">
                           {manualHeadlandRecommendation ? (
-                              <button onClick={plan.manualHeadlandStarted ? finishManualHeadland : beginManualHeadland} className={`h-11 rounded-xl text-white text-[10px] font-black ${plan.manualHeadlandStarted ? 'bg-green-600 hover:bg-green-500' : 'bg-amber-500 hover:bg-amber-400'}`}>
+                              <button onClick={plan.manualHeadlandStarted ? finishManualHeadland : beginManualHeadland} className={`h-11 flex-1 rounded-xl text-white text-[10px] font-black ${plan.manualHeadlandStarted ? 'bg-green-600 hover:bg-green-500' : 'bg-amber-500 hover:bg-amber-400'}`}>
                                   {plan.manualHeadlandStarted ? 'FINISH MANUAL HEADLAND' : 'BEGIN MANUAL GUIDE'}
                               </button>
-                          ) : turnConfig.mode === 'ONE_KEY' ? (
-                              <div className={`h-11 rounded-xl border ${t.borderCard} ${t.textSub} flex items-center justify-center text-[9px] font-black`}>LEFT / RIGHT STARTS NOW</div>
                           ) : (
-                              <button disabled={!plan?.feasible} onClick={approveOrStartPlannedTurn} className={`h-11 rounded-xl text-white text-[10px] font-black disabled:bg-slate-400 disabled:opacity-55 ${smartRoutePartial && !partialRouteApproved ? 'bg-amber-500 hover:bg-amber-400' : 'bg-blue-600 hover:bg-blue-500'}`}>
-                                  {turnConfig.mode === 'AUTO'
-                                      ? 'ARM AUTO ROW'
-                                      : smartRoutePartial && !partialRouteApproved
-                                          ? 'APPROVE PARTIAL ROUTE'
-                                          : smartRoutePartial ? 'START PARTIAL ROUTE' : 'START SMART FIELD'}
+                              <button disabled={!plan?.feasible && !autoUTurnArmed} onClick={approveOrStartPlannedTurn} className={`h-11 flex-1 rounded-xl text-white text-[10px] font-black disabled:bg-slate-400 disabled:opacity-55 ${autoUTurnArmed || (smartRoutePartial && !partialRouteApproved) ? 'bg-amber-500 hover:bg-amber-400 text-slate-950' : 'bg-blue-600 hover:bg-blue-500'}`}>
+                                  {autoUTurnArmed
+                                      ? 'DISARM AUTO'
+                                      : planPending
+                                          ? 'CHECKING PATH'
+                                          : planBlocked
+                                              ? 'TURN BLOCKED'
+                                              : turnConfig.mode === 'ONE_KEY'
+                                                  ? 'START TURN'
+                                                  : turnConfig.mode === 'AUTO'
+                                                      ? 'ARM AUTO'
+                                                      : smartRoutePartial && !partialRouteApproved
+                                                          ? 'APPROVE PARTIAL ROUTE'
+                                                          : smartRoutePartial ? 'START PARTIAL ROUTE' : 'START SMART FIELD'}
                               </button>
                           )}
-                          <button aria-label="Advanced U-turn settings" onClick={() => { closePanel(); setSettingsTab('uturn'); setSettingsOpen(true); }} className={`h-11 rounded-xl border ${t.borderCard} ${t.textMain} flex items-center justify-center`}>
+                          <button aria-label="Detailed U-turn settings" disabled={autoUTurnArmed || turnAssistActive || manualHeadlandRecommendation} onClick={() => { closePanel(); setSettingsTab('uturn'); setSettingsOpen(true); }} className={`h-11 w-[92px] rounded-xl border ${t.borderCard} ${t.textMain} flex items-center justify-center gap-1.5 text-[9px] font-black disabled:opacity-35`}>
                               <Settings className="w-4 h-4" />
+                              DETAILS
                           </button>
                       </div>
                   </div>
               ) : (
                   <div className="flex-1 min-h-0 p-3 flex flex-col gap-2.5">
+                      <div className="rounded-xl border border-yellow-500/35 bg-yellow-500/10 px-3 py-2.5">
+                          <div className="text-[10px] font-black text-yellow-500">TRAFFIC-LANE PATTERN ONLY</div>
+                          <div className={`mt-0.5 text-[9px] font-bold leading-snug ${t.textSub}`}>Defines recurring machine lanes. It does not arm or start a U-turn.</div>
+                      </div>
                       {!tramlineSupported || !activeLineRecord ? (
                           <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 p-3">
                               <div className="text-[10px] font-black text-amber-500">SAVED AB, A+ OR CURVE REQUIRED</div>
@@ -5480,7 +6105,9 @@ const App = () => {
           };
       })();
       const horizonY = options.horizonY ?? 72;
-      const vehicleY = 470;
+      // The projected world origin must sit on the same 60% screen anchor as
+      // the tractor. A separate 470 px origin made every route look detached.
+      const vehicleY = 420;
       const depth = options.depth ?? 820;
       const forwardGain = options.forwardGain ?? 1;
       const projectedForward = forward * forwardGain;
@@ -5499,19 +6126,21 @@ const App = () => {
       const x = 500 + (projectedX - 500) * cameraZoom;
       const y = vehicleY + (projectedY - vehicleY) * cameraZoom;
       const screenMargin = options.screenMargin ?? 0;
-      const minX = options.minX ?? -screenMargin;
-      const maxX = options.maxX ?? (1000 + screenMargin);
-      if (Number.isFinite(options.minY) && y < options.minY) return null;
-      if (Number.isFinite(options.maxY) && y > options.maxY) return null;
+      const minX = options.minX ?? (map3DViewMinX - screenMargin);
+      const maxX = options.maxX ?? (map3DViewMinX + map3DViewWidth + screenMargin);
+      const minY = options.minY ?? -screenMargin;
+      const maxY = options.maxY ?? (map3DViewHeight + screenMargin);
+      if (y < minY || y > maxY) return null;
       if (Number.isFinite(minX) && x < minX) return null;
       if (Number.isFinite(maxX) && x > maxX) return null;
       if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
       return { x, y, perspective, lateralScale };
   };
 
-  const getPhysicalVehicleScreenScale3D = () => {
-      const widthMeters = Math.max(0.25, Number(implementSettings.width) || 3);
-      const halfWidthWorld = widthMeters * PIXELS_PER_METER / 2;
+  const getProjectedCrossSectionWidth3D = (center, widthMeters = 1) => {
+      if (!center) return 0;
+      const safeWidthMeters = Math.max(0.1, Number(widthMeters) || 1);
+      const halfWidthWorld = safeWidthMeters * PIXELS_PER_METER / 2;
       const headingRad = heading * Math.PI / 180;
       const rightX = Math.cos(headingRad);
       const rightY = Math.sin(headingRad);
@@ -5521,26 +6150,43 @@ const App = () => {
           usePerspectiveScale: true
       };
       const projectedLeft = getProjected3DPoint({
-          x: worldPos.x - rightX * halfWidthWorld,
-          y: worldPos.y - rightY * halfWidthWorld
+          x: center.x - rightX * halfWidthWorld,
+          y: center.y - rightY * halfWidthWorld
       }, projectionOptions);
       const projectedRight = getProjected3DPoint({
-          x: worldPos.x + rightX * halfWidthWorld,
-          y: worldPos.y + rightY * halfWidthWorld
+          x: center.x + rightX * halfWidthWorld,
+          y: center.y + rightY * halfWidthWorld
       }, projectionOptions);
 
-      if (!projectedLeft || !projectedRight) return 0.2;
+      if (!projectedLeft || !projectedRight) return 0;
 
-      const screenDx = (projectedRight.x - projectedLeft.x) * mapCanvasSize.width / 1000;
-      const screenDy = (projectedRight.y - projectedLeft.y) * mapCanvasSize.height / 700;
-      const projectedImplementWidth = Math.hypot(screenDx, screenDy);
-      const implementVisualWidth = widthMeters * 48;
-      return Math.max(0.1, Math.min(1.2, projectedImplementWidth / implementVisualWidth));
+      const screenDx = (projectedRight.x - projectedLeft.x) * mapCanvasSize.width / map3DViewWidth;
+      const screenDy = (projectedRight.y - projectedLeft.y) * mapCanvasSize.height / map3DViewHeight;
+      return Math.hypot(screenDx, screenDy);
+  };
+
+  const getPhysicalVehicleScreenScale3D = () => {
+      // Calibrate the tractor sprite at the GNSS pose. Tool width must not resize
+      // the tractor body.
+      const projectedMeter = getProjectedCrossSectionWidth3D(worldPos, 1);
+      return projectedMeter > 0
+          ? Math.max(0.1, Math.min(1.2, projectedMeter / 48))
+          : 0.2;
   };
 
   const vehicleScreenScale = isMap3D
       ? getPhysicalVehicleScreenScale3D()
       : Math.max(0.1, Math.min(1.2, zoomLevel * PIXELS_PER_METER / 48));
+  const visualImplementWorkPoint3D = getImplementWorkPoint(
+      { x: worldPos.x, y: worldPos.y, heading },
+      vehicleSettings,
+      implementSettings
+  ) || worldPos;
+  const projectedVehicleMeter3D = isMap3D ? getProjectedCrossSectionWidth3D(worldPos, 1) : 0;
+  const projectedImplementMeter3D = isMap3D ? getProjectedCrossSectionWidth3D(visualImplementWorkPoint3D, 1) : 0;
+  const implementDepthScale3D = projectedVehicleMeter3D > 0 && projectedImplementMeter3D > 0
+      ? Math.max(0.85, Math.min(1.35, projectedImplementMeter3D / projectedVehicleMeter3D))
+      : 1;
 
   const getProjected3DPath = (points, options = {}) => {
       let d = '';
@@ -5645,7 +6291,10 @@ const App = () => {
 
   const get3DGridBounds = () => {
       const step = gridMinorSize;
-      const extent = 3600 / Math.max(zoomLevel, 0.35);
+      // Keep enough world around the viewport for the pitched horizon without
+      // projecting several invisible kilometres of grid and guidance on every
+      // animation frame.
+      const extent = 1800 / Math.max(zoomLevel, 0.35);
       return {
           minX: Math.floor((worldPos.x - extent) / step) * step,
           maxX: Math.ceil((worldPos.x + extent) / step) * step,
@@ -5743,8 +6392,24 @@ const App = () => {
 
   const getUTurnPathPoints = () => {
       if (turnAssistRef.current?.points?.length > 1) return turnAssistRef.current.points;
-      if ((uTurnPanelOpen || autoUTurnArmed || manualHeadlandActive) && uTurnPreview?.points?.length > 1) return uTurnPreview.points;
+      if ((uTurnPanelOpen || autoUTurnArmed || manualHeadlandActive) && displayedUTurnPlan?.points?.length > 1) {
+          // AUTO is never a turn-now path. If a future headland trigger could
+          // not be projected, hide the live-pose loop instead of drawing it on
+          // top of completed work in the middle of the field.
+          if (displayedUTurnPlan.mode === 'AUTO' && !displayedUTurnPlan.projectedAtTrigger) return [];
+          return displayedUTurnPlan.points;
+      }
       return [];
+  };
+
+  const getUTurnPathPoints3D = () => {
+      const points = getUTurnPathPoints();
+      const activeTurn = turnAssistRef.current;
+      if (!activeTurn?.points?.length || points !== activeTurn.points) return points;
+      const cursor = Math.max(0, Math.floor(Number(activeTurn.progressIndex) || 0));
+      // Keep only two samples behind the live pose. Rendering the entire driven
+      // route in a moving perspective camera produced the giant backward lobe.
+      return activeTurn.points.slice(Math.max(0, cursor - 2));
   };
 
   const renderProjected3DPath = (key, points, stroke, strokeWidth = 2, options = {}) => {
@@ -5787,10 +6452,12 @@ const App = () => {
               </g>
           );
       }
-      const projectedPoints = densifyPoints(points, options.maxStep || 42)
-          .map((pt) => getProjected3DPoint(pt, { ...projectionOptions, ...options.projection }))
-          .filter(Boolean);
-      if (options.solid && projectedPoints.length > 1) {
+      const densePoints = densifyPoints(points, options.maxStep || 42);
+      if (options.solid) {
+          const projectedPoints = densePoints
+              .map((pt) => getProjected3DPoint(pt, { ...projectionOptions, ...options.projection }))
+              .filter(Boolean);
+          if (projectedPoints.length <= 1) return null;
           return (
               <polyline
                   key={key}
@@ -5807,7 +6474,7 @@ const App = () => {
           );
       }
 
-      const d = getProjected3DPath(densifyPoints(points, options.maxStep || 42), {
+      const d = getProjected3DPath(densePoints, {
           ...projectionOptions,
           ...options.projection
       });
@@ -5825,6 +6492,40 @@ const App = () => {
               strokeOpacity={options.opacity ?? 1}
               strokeDasharray={options.dash}
           />
+      );
+  };
+
+  const renderProjected3DPolylineLayers = (key, points, layers, options = {}) => {
+      const projectionOptions = {
+          lateralGain: 0.62,
+          forwardGain: 1.18,
+          usePerspectiveScale: true,
+          ...options.projection
+      };
+      const projectedPoints = densifyPoints(points, options.maxStep || 42)
+          .map(point => getProjected3DPoint(point, projectionOptions))
+          .filter(Boolean);
+      if (projectedPoints.length < 2) return null;
+      const pointString = projectedPoints
+          .map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`)
+          .join(' ');
+      return (
+          <g key={key} data-guidance-3d-path={key}>
+              {layers.map((layer, index) => (
+                  <polyline
+                      key={`${key}-${layer.id || index}`}
+                      data-guidance-3d-layer={layer.id || index}
+                      points={pointString}
+                      fill="none"
+                      stroke={layer.stroke}
+                      strokeWidth={layer.strokeWidth}
+                      strokeLinecap={layer.cap || 'round'}
+                      strokeLinejoin="round"
+                      strokeOpacity={layer.opacity ?? 1}
+                      vectorEffect="non-scaling-stroke"
+                  />
+              ))}
+          </g>
       );
   };
 
@@ -5925,10 +6626,10 @@ const App = () => {
       };
       const strokeInset = Math.max(1, strokeWidth / 2);
       const viewRect = options.rect || {
-          xMin: options.minX ?? strokeInset,
-          xMax: options.maxX ?? (1000 - strokeInset),
+          xMin: options.minX ?? (map3DViewMinX + strokeInset),
+          xMax: options.maxX ?? (map3DViewMinX + map3DViewWidth - strokeInset),
           yMin: options.minY ?? strokeInset,
-          yMax: options.maxY ?? (700 - strokeInset)
+          yMax: options.maxY ?? (map3DViewHeight - strokeInset)
       };
       const clippedWorld = clipLineToBounds(origin, unit, get3DGridBounds());
       if (!clippedWorld) return null;
@@ -5948,7 +6649,7 @@ const App = () => {
       };
       const worldSpan = clippedWorld.end - clippedWorld.start;
       if (!Number.isFinite(worldSpan) || worldSpan <= 0.001) return null;
-      const maxStep = options.maxStep ?? 80;
+      const maxStep = options.maxStep ?? 160;
       const steps = Math.max(2, Math.min(260, Math.ceil(worldSpan / maxStep)));
       let path = '';
       let drawing = false;
@@ -6037,7 +6738,7 @@ const App = () => {
               [{ x, y: minY }, { x, y: maxY }],
               t.gridColor1,
               major ? 1.1 : 0.75,
-              { opacity: major ? majorOpacity : minorOpacity, maxStep: 120, ground: true }
+              { opacity: major ? majorOpacity : minorOpacity, maxStep: 240, ground: true }
           ));
       }
 
@@ -6048,7 +6749,7 @@ const App = () => {
               [{ x: minX, y }, { x: maxX, y }],
               t.gridColor1,
               major ? 1.1 : 0.75,
-              { opacity: major ? majorOpacity : minorOpacity, maxStep: 120, ground: true }
+              { opacity: major ? majorOpacity : minorOpacity, maxStep: 240, ground: true }
           ));
       }
 
@@ -6056,8 +6757,8 @@ const App = () => {
           <svg
               data-ground-plane="3d"
               className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none z-[3]"
-              viewBox="0 0 1000 700"
-              preserveAspectRatio="none"
+              viewBox={`${map3DViewMinX} 0 ${map3DViewWidth} ${map3DViewHeight}`}
+              preserveAspectRatio="xMidYMid meet"
               style={{
                   opacity: viewTransitioning ? 0.72 : 1,
                   transform: viewTransitioning ? 'scale(0.985)' : 'scale(1)',
@@ -6075,11 +6776,27 @@ const App = () => {
   const liveBoundaryStrokeWidth = 4;
   const liveBoundaryUnderlayWidth = 8;
   const liveBoundaryUnderlayOpacity = 0.84;
-  const coverageWorldWidth = Math.max(1, Number(implementSettings.width || 3) * PIXELS_PER_METER);
+  const liveBoundaryRenderPath = isRecordingBoundary && liveBoundaryPoints.length > 0
+      ? [...liveBoundaryPoints, worldPos]
+      : [];
+  const liveBoundaryPolylinePoints = liveBoundaryRenderPath
+      .map(point => `${point.x},${point.y}`)
+      .join(' ');
+  const liveImplementWorkingWidthM = liveCoverageWidthM;
+  const liveImplementOverallWidthM = Math.max(
+      liveImplementWorkingWidthM,
+      Number(implementSettings.overallWidth) || liveImplementWorkingWidthM
+  );
+  const coverageWorldWidth = liveImplementWorkingWidthM * PIXELS_PER_METER;
   const coverageSwathColor = theme === 'dark' ? '#22c55e' : '#16a34a';
   const coverageSwathOpacity = theme === 'dark' ? 0.22 : 0.16;
   const coverageLiveColor = theme === 'dark' ? '#4ade80' : '#16a34a';
   const coverageLiveOpacity = theme === 'dark' ? 0.3 : 0.22;
+  const liveCoverageWorkPoint = getImplementWorkPoint(
+      { x: worldPos.x, y: worldPos.y, heading },
+      vehicleSettings,
+      implementSettings
+  ) || { ...worldPos, h: heading };
 
   const getCoverageRenderPoints = () => {
       const points = (coverageTrail || []).filter(point => (
@@ -6087,16 +6804,17 @@ const App = () => {
           && Number.isFinite(point?.y)
           && isCoveragePointInScope(point)
       ));
-      if (!isRecording) return points;
+      if (!isRecording || implementRaised || turnCoverageSuppressed) return points;
       const last = points[points.length - 1];
-      if (!last || Math.hypot(last.x - worldPos.x, last.y - worldPos.y) > 0.1) {
+      if (!last || Math.hypot(last.x - liveCoverageWorkPoint.x, last.y - liveCoverageWorkPoint.y) > 0.1) {
           return [...points, {
-              ...worldPos,
-              h: heading,
+              ...liveCoverageWorkPoint,
               segmentId: coverageSegmentIdRef.current,
               fieldId: coverageFieldId,
               taskId: coverageTaskId,
-              lineId: coverageLineId
+              lineId: coverageLineId,
+              coverageWidthM: liveCoverageWidthM,
+              implementProfileId: implementSettings.profileId || null
           }];
       }
       return points;
@@ -6106,9 +6824,18 @@ const App = () => {
       const segments = [];
       getCoverageRenderPoints().forEach(point => {
           const segmentId = point.segmentId ?? 0;
+          const widthM = getCoveragePointWidthM(point);
+          const widthKey = widthM.toFixed(3);
           const current = segments[segments.length - 1];
-          if (!current || current.segmentId !== segmentId) {
-              segments.push({ segmentId, points: [point] });
+          if (!current || current.segmentId !== segmentId || current.widthKey !== widthKey) {
+              segments.push({
+                  segmentId,
+                  widthKey,
+                  widthM,
+                  worldWidth: widthM * PIXELS_PER_METER,
+                  renderKey: `${segmentId}:${widthKey}:${segments.length}`,
+                  points: [point]
+              });
           } else {
               current.points.push(point);
           }
@@ -6128,24 +6855,25 @@ const App = () => {
               <g style={{ transform: 'translate(50%, 60%)' }}>
                   {segments.filter(segment => segment.points.length > 1).map(segment => (
                       <polyline
-                          key={`coverage-2d-${segment.segmentId}`}
+                          key={`coverage-2d-${segment.renderKey}`}
                           data-coverage-2d="swath"
+                          data-coverage-width-m={segment.widthM.toFixed(3)}
                           points={segment.points.map(point => `${point.x},${point.y}`).join(' ')}
                           fill="none"
                           stroke={coverageSwathColor}
-                          strokeWidth={coverageWorldWidth}
+                          strokeWidth={segment.worldWidth}
                           strokeOpacity={coverageSwathOpacity}
                           strokeLinecap="round"
                           strokeLinejoin="round"
                       />
                   ))}
-                  {isRecording && (
+                  {isRecording && !implementRaised && !turnCoverageSuppressed && (
                       <line
                           data-coverage-2d="live-footprint"
-                          x1={worldPos.x - forward.x * footprintHalfLength}
-                          y1={worldPos.y - forward.y * footprintHalfLength}
-                          x2={worldPos.x + forward.x * footprintHalfLength}
-                          y2={worldPos.y + forward.y * footprintHalfLength}
+                          x1={liveCoverageWorkPoint.x - forward.x * footprintHalfLength}
+                          y1={liveCoverageWorkPoint.y - forward.y * footprintHalfLength}
+                          x2={liveCoverageWorkPoint.x + forward.x * footprintHalfLength}
+                          y2={liveCoverageWorkPoint.y + forward.y * footprintHalfLength}
                           stroke={coverageLiveColor}
                           strokeWidth={coverageWorldWidth}
                           strokeOpacity={coverageLiveOpacity}
@@ -6160,7 +6888,7 @@ const App = () => {
   const renderCoverage3D = () => {
       if (!isMap3D || (!isRecording && coverageTrail.length < 2)) return null;
       const coverageSegments = getCoverageRenderSegments();
-      const halfWidth = coverageWorldWidth / 2;
+      const liveHalfWidth = coverageWorldWidth / 2;
       const projectionOptions = {
           lateralGain: 0.62,
           forwardGain: 1.18,
@@ -6211,9 +6939,19 @@ const App = () => {
           return length > 0.001 ? { x: dx / length, y: dy / length } : null;
       };
 
+      const totalCoveragePoints = coverageSegments.reduce((sum, segment) => sum + segment.points.length, 0);
+      const coverageRenderStride = Math.max(1, Math.ceil(totalCoveragePoints / 480));
       const ribbonSampleGroups = coverageSegments.map(segment => {
-          const centerline = smoothCoverageCenterline(segment.points);
-          return centerline.map((point, index) => {
+          const halfWidth = segment.worldWidth / 2;
+          const sampledPoints = coverageRenderStride === 1
+              ? segment.points
+              : segment.points.filter((point, index, points) => (
+                  index === 0
+                  || index === points.length - 1
+                  || index % coverageRenderStride === 0
+              ));
+          const centerline = smoothCoverageCenterline(sampledPoints);
+          const samples = centerline.map((point, index) => {
               const previousDirection = index > 0
                   ? getUnitDirection(centerline[index - 1], point)
                   : getUnitDirection(point, centerline[index + 1]);
@@ -6234,7 +6972,9 @@ const App = () => {
                   ? { x: normalSum.x / normalSumLength, y: normalSum.y / normalSumLength }
                   : outgoingNormal;
               const joinDot = Math.abs(joinNormal.x * outgoingNormal.x + joinNormal.y * outgoingNormal.y);
-              const miterLength = Math.min(halfWidth * 1.7, halfWidth / Math.max(0.36, joinDot));
+              // Keep sharp recorded turns from visually inflating the tool width.
+              // The dense ribbon samples already close the small inner-corner gap.
+              const miterLength = Math.min(halfWidth * 1.18, halfWidth / Math.max(0.36, joinDot));
 
               return {
                   left: {
@@ -6247,22 +6987,41 @@ const App = () => {
                   }
               };
           });
+          return {
+              renderKey: segment.renderKey,
+              widthM: segment.widthM,
+              samples
+          };
       });
 
       const projectedRibbonChunks = [];
       let currentChunk = [];
+      let currentChunkKey = null;
+      let currentChunkWidthM = null;
       const flushRibbonChunk = () => {
-          if (currentChunk.length > 1) projectedRibbonChunks.push(currentChunk);
+          if (currentChunk.length > 1) {
+              projectedRibbonChunks.push({
+                  renderKey: currentChunkKey,
+                  widthM: currentChunkWidthM,
+                  samples: currentChunk
+              });
+          }
           currentChunk = [];
+          currentChunkKey = null;
+          currentChunkWidthM = null;
       };
 
-      ribbonSampleGroups.forEach(ribbonSamples => {
+      ribbonSampleGroups.forEach(group => {
           flushRibbonChunk();
-          ribbonSamples.forEach(sample => {
+          currentChunkKey = group.renderKey;
+          currentChunkWidthM = group.widthM;
+          group.samples.forEach(sample => {
               const left = getProjected3DPoint(sample.left, projectionOptions);
               const right = getProjected3DPoint(sample.right, projectionOptions);
               if (!left || !right) {
                   flushRibbonChunk();
+                  currentChunkKey = group.renderKey;
+                  currentChunkWidthM = group.widthM;
                   return;
               }
               currentChunk.push({ left, right });
@@ -6272,14 +7031,15 @@ const App = () => {
 
       projectedRibbonChunks.forEach((chunk, chunkIndex) => {
           const polygon = [
-              ...chunk.map(sample => sample.left),
-              ...chunk.slice().reverse().map(sample => sample.right)
+              ...chunk.samples.map(sample => sample.left),
+              ...chunk.samples.slice().reverse().map(sample => sample.right)
           ].map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
 
           segmentNodes.push(
               <polygon
-                  key={`coverage-ribbon-${chunkIndex}`}
+                  key={`coverage-ribbon-${chunk.renderKey}-${chunkIndex}`}
                   data-coverage-3d-ribbon={chunkIndex}
+                  data-coverage-width-m={chunk.widthM.toFixed(3)}
                   points={polygon}
                   fill={coverageSwathColor}
                   fillOpacity={coverageSwathOpacity}
@@ -6289,16 +7049,16 @@ const App = () => {
           );
       });
 
-      if (isRecording) {
+      if (isRecording && !implementRaised && !turnCoverageSuppressed) {
           const headingRad = heading * Math.PI / 180;
           const forward = { x: Math.sin(headingRad), y: -Math.cos(headingRad) };
           const normal = { x: Math.cos(headingRad), y: Math.sin(headingRad) };
           const halfLength = Math.max(4, Math.min(10, coverageWorldWidth * 0.22));
           const polygon = projectPolygon([
-              { x: worldPos.x - forward.x * halfLength + normal.x * halfWidth, y: worldPos.y - forward.y * halfLength + normal.y * halfWidth },
-              { x: worldPos.x + forward.x * halfLength + normal.x * halfWidth, y: worldPos.y + forward.y * halfLength + normal.y * halfWidth },
-              { x: worldPos.x + forward.x * halfLength - normal.x * halfWidth, y: worldPos.y + forward.y * halfLength - normal.y * halfWidth },
-              { x: worldPos.x - forward.x * halfLength - normal.x * halfWidth, y: worldPos.y - forward.y * halfLength - normal.y * halfWidth }
+              { x: liveCoverageWorkPoint.x - forward.x * halfLength + normal.x * liveHalfWidth, y: liveCoverageWorkPoint.y - forward.y * halfLength + normal.y * liveHalfWidth },
+              { x: liveCoverageWorkPoint.x + forward.x * halfLength + normal.x * liveHalfWidth, y: liveCoverageWorkPoint.y + forward.y * halfLength + normal.y * liveHalfWidth },
+              { x: liveCoverageWorkPoint.x + forward.x * halfLength - normal.x * liveHalfWidth, y: liveCoverageWorkPoint.y + forward.y * halfLength - normal.y * liveHalfWidth },
+              { x: liveCoverageWorkPoint.x - forward.x * halfLength - normal.x * liveHalfWidth, y: liveCoverageWorkPoint.y - forward.y * halfLength - normal.y * liveHalfWidth }
           ]);
           if (polygon) {
               segmentNodes.push(
@@ -6346,6 +7106,7 @@ const App = () => {
       if (!isMap3D) return null;
 
       const elements = [];
+      const uTurnElements = [];
       elements.push(renderCoverage3D());
       const guide = guidanceRef.current;
       const activeGuidanceType = guidanceLine || guide?.type || activeLineRecord?.type || lineType;
@@ -6431,25 +7192,38 @@ const App = () => {
           ));
       }
 
-      if (isRecordingBoundary && tempBoundary.length > 0) {
-          const liveBoundaryPath = [...tempBoundary, worldPos];
+      if (isRecordingBoundary && liveBoundaryPoints.length > 0) {
+          const boundaryStartPoint = liveBoundaryPoints[0];
+          const liveBoundaryPath = liveBoundaryRenderPath;
+          elements.push(renderProjected3DPath(
+              'boundary-recording-return-guide',
+              [worldPos, boundaryStartPoint],
+              liveBoundaryStroke,
+              1.5,
+              { opacity: 0.68, dash: '6 8', maxStep: 120, projection: { screenMargin: 96 } }
+          ));
           if (liveBoundaryPath.length > 1) {
-              elements.push(renderProjected3DPath(
-                  'boundary-recording-underlay',
-                  liveBoundaryPath,
-                  theme === 'dark' ? '#0f172a' : '#ffffff',
-                  liveBoundaryUnderlayWidth,
-                  { opacity: liveBoundaryUnderlayOpacity, maxStep: 18, solid: true, projection: { screenMargin: 96 } }
-              ));
-              elements.push(renderProjected3DPath(
+              elements.push(renderProjected3DPolylineLayers(
                   'boundary-recording',
                   liveBoundaryPath,
-                  liveBoundaryStroke,
-                  liveBoundaryStrokeWidth,
-                  { opacity: 1, maxStep: 18, solid: true, projection: { screenMargin: 96 } }
+                  [
+                      {
+                          id: 'underlay',
+                          stroke: theme === 'dark' ? '#0f172a' : '#ffffff',
+                          strokeWidth: liveBoundaryUnderlayWidth,
+                          opacity: liveBoundaryUnderlayOpacity
+                      },
+                      {
+                          id: 'stroke',
+                          stroke: liveBoundaryStroke,
+                          strokeWidth: liveBoundaryStrokeWidth,
+                          opacity: 1
+                      }
+                  ],
+                  { maxStep: 18, projection: { screenMargin: 96 } }
               ));
           }
-          elements.push(render3DPointMarker('boundary-recording-start', tempBoundary[0], 'S', liveBoundaryStroke));
+          elements.push(render3DPointMarker('boundary-recording-start', boundaryStartPoint, 'S', liveBoundaryStroke));
       }
 
       if (!guidanceLine && !activeLineRecord && pointA && straightABPreviewEnd && lineType === 'STRAIGHT_AB') {
@@ -6464,47 +7238,55 @@ const App = () => {
           elements.push(renderProjected3DPath('pivot-radius-preview', [pivotCenter, worldPos], previewStroke, 3, { dash: '12 9' }));
       }
 
-      const uTurnPathPoints3D = getUTurnPathPoints();
+      const uTurnPathPoints3D = getUTurnPathPoints3D();
       if (uTurnPathPoints3D.length > 1) {
-          const activePlan = turnAssistRef.current || uTurnPreview;
+          const activePlan = turnAssistRef.current || displayedUTurnPlan;
+          const uTurnProjection = { ...guidanceProjection, screenMargin: 96 };
+          const headlandGhost = !turnAssistActive
+              && activePlan?.mode === 'AUTO'
+              && activePlan?.projectedAtTrigger;
+          const previewDash = headlandGhost ? '10 8' : undefined;
           const uTurnStroke = activePlan?.feasible === false
               ? '#ef4444'
-              : activePlan?.mode === 'AUTO' && !turnAssistActive
-                  ? '#eab308'
+              : !turnAssistActive
+                  ? '#f59e0b'
                   : theme === 'dark' ? '#c4b5fd' : '#7c3aed';
-          elements.push(renderProjected3DPath(
+          uTurnElements.push(renderProjected3DPath(
               'uturn-3d-path-underlay',
               uTurnPathPoints3D,
               theme === 'dark' ? '#020617' : '#ffffff',
-              7.5,
-              { opacity: theme === 'dark' ? 0.76 : 0.92, maxStep: 16, projection: guidanceProjection, solid: true }
+              headlandGhost ? 6 : 7.5,
+              { opacity: headlandGhost ? 0.56 : theme === 'dark' ? 0.76 : 0.92, maxStep: 16, projection: uTurnProjection, dash: previewDash }
           ));
-          elements.push(renderProjected3DPath(
+          uTurnElements.push(renderProjected3DPath(
               'uturn-3d-path',
               uTurnPathPoints3D,
               uTurnStroke,
-              turnAssistActive ? 4.6 : 4,
-              { opacity: turnAssistActive ? 1 : 0.9, maxStep: 16, projection: guidanceProjection, solid: true }
+              turnAssistActive ? 4.6 : headlandGhost ? 3.2 : 4,
+              { opacity: turnAssistActive ? 1 : headlandGhost ? 0.72 : 0.9, maxStep: 16, projection: uTurnProjection, dash: previewDash }
           ));
           (activePlan?.omittedWorkSegments || []).forEach((segment, index) => {
-              elements.push(renderProjected3DPath(
+              uTurnElements.push(renderProjected3DPath(
                   `uturn-3d-manual-zone-${segment.laneIndex}-${segment.laneFragmentIndex}-${index}`,
                   [segment.startPoint, segment.endPoint],
                   '#ef4444',
                   4.8,
-                  { opacity: 0.92, maxStep: 16, projection: guidanceProjection, dash: '10 7' }
+                  { opacity: 0.92, maxStep: 16, projection: uTurnProjection, dash: '10 7' }
               ));
           });
-          elements.push(render3DPointMarker('uturn-3d-exit', uTurnPathPoints3D[uTurnPathPoints3D.length - 1], 'T', uTurnStroke));
+          if (headlandGhost) {
+              uTurnElements.push(render3DPointMarker('uturn-3d-headland-start', uTurnPathPoints3D[0], 'H', uTurnStroke));
+          }
+          uTurnElements.push(render3DPointMarker('uturn-3d-exit', uTurnPathPoints3D[uTurnPathPoints3D.length - 1], 'T', uTurnStroke));
       }
 
-      if (!showGuidanceLines) return [...elements, ...getABMarkers()].filter(Boolean);
+      if (!showGuidanceLines) return [...elements, ...uTurnElements, ...getABMarkers()].filter(Boolean);
 
       if (activeGuidanceType === 'STRAIGHT_AB' && pointA && pointB) {
           const dx = pointB.x - pointA.x;
           const dy = pointB.y - pointA.y;
           const length = Math.hypot(dx, dy);
-          if (length <= 0.001) return elements;
+          if (length <= 0.001) return [...elements, ...uTurnElements, ...getABMarkers()].filter(Boolean);
           const unit = { x: dx / length, y: dy / length };
 
           if (isMultiLineMode) {
@@ -6615,18 +7397,24 @@ const App = () => {
           }
       }
 
-      return [...elements, ...getABMarkers()].filter(Boolean);
+      // Planned/active turns remain above guidance. AUTO previews are dashed
+      // headland transit ghosts so they cannot be mistaken for new coverage.
+      return [...elements, ...uTurnElements, ...getABMarkers()].filter(Boolean);
   };
 
   const renderUTurnPath2D = () => {
       if (isMap3D) return null;
       const points = getUTurnPathPoints();
       if (points.length < 2) return null;
-      const activePlan = turnAssistRef.current || uTurnPreview;
+      const activePlan = turnAssistRef.current || displayedUTurnPlan;
+      const headlandGhost = !turnAssistActive
+          && activePlan?.mode === 'AUTO'
+          && activePlan?.projectedAtTrigger;
+      const previewDash = headlandGhost ? '10 8' : undefined;
       const stroke = activePlan?.feasible === false
           ? '#ef4444'
-          : activePlan?.mode === 'AUTO' && !turnAssistActive
-              ? '#eab308'
+          : !turnAssistActive
+              ? '#f59e0b'
               : theme === 'dark' ? '#c4b5fd' : '#7c3aed';
       const exitPoint = points[points.length - 1];
       const pointString = points.map((p) => `${p.x},${p.y}`).join(' ');
@@ -6637,8 +7425,9 @@ const App = () => {
                   points={pointString}
                   fill="none"
                   stroke={theme === 'dark' ? '#020617' : '#ffffff'}
-                  strokeWidth={turnAssistActive ? 8 : 7}
-                  strokeOpacity={theme === 'dark' ? 0.78 : 0.94}
+                  strokeWidth={turnAssistActive ? 8 : headlandGhost ? 6 : 7}
+                  strokeOpacity={headlandGhost ? 0.56 : theme === 'dark' ? 0.78 : 0.94}
+                  strokeDasharray={previewDash}
                   strokeLinecap="round"
                   strokeLinejoin="round"
               />
@@ -6646,8 +7435,9 @@ const App = () => {
                   points={pointString}
                   fill="none"
                   stroke={stroke}
-                  strokeWidth={turnAssistActive ? 4.8 : 4}
-                  strokeOpacity={turnAssistActive ? 1 : 0.9}
+                  strokeWidth={turnAssistActive ? 4.8 : headlandGhost ? 3.2 : 4}
+                  strokeOpacity={turnAssistActive ? 1 : headlandGhost ? 0.72 : 0.9}
+                  strokeDasharray={previewDash}
                   strokeLinecap="round"
                   strokeLinejoin="round"
               />
@@ -6700,6 +7490,12 @@ const App = () => {
                   stroke="white"
                   strokeWidth="3"
               />
+              {headlandGhost && (
+                  <g transform={`translate(${points[0].x} ${points[0].y})`}>
+                      <circle r="9" fill={stroke} stroke="white" strokeWidth="3" />
+                      <text x="0" y="3.2" textAnchor="middle" fontSize="8" fontWeight="900" fill="white">H</text>
+                  </g>
+              )}
               {(activePlan?.markers || []).filter(marker => marker.type?.startsWith('CUSP')).map(marker => (
                   <g key={marker.type} transform={`translate(${marker.point.x} ${marker.point.y})`}>
                       <circle r="10" fill={marker.gear === 'REVERSE' ? '#ef4444' : '#22c55e'} stroke="white" strokeWidth="3" />
@@ -7809,7 +8605,9 @@ const App = () => {
                         detail: unsavedGuidance
                              ? 'Geometry ready / not saved'
                              : activeLineRecord
-                                  ? `${compactStatus(activeLineRecord.type || guidanceLine)}${Math.abs(lineShiftMeters) >= 0.005 ? ` / Shift ${shiftDirectionLabel(lineShiftMeters, { short: true })} ${Math.abs(lineShiftMeters).toFixed(2)}m` : ''}`
+                                  ? activeTrackSpacingMismatch
+                                      ? `${compactStatus(activeLineRecord.type || guidanceLine)} / LINE ${activeTrackSpacingM.toFixed(2)}m LOCKED / TOOL ${currentImplementTrackSpacingM.toFixed(2)}m`
+                                      : `${compactStatus(activeLineRecord.type || guidanceLine)}${Math.abs(lineShiftMeters) >= 0.005 ? ` / Shift ${shiftDirectionLabel(lineShiftMeters, { short: true })} ${Math.abs(lineShiftMeters).toFixed(2)}m` : ''}`
                                   : `${(activeFieldRecord?.lines || []).filter(line => !line.archived).length} saved`,
                         tone: 'blue',
                         actions: unsavedGuidance
@@ -7891,6 +8689,15 @@ const App = () => {
                           {Math.abs(lineShiftMeters) >= 0.005 && <span className="shrink-0 rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black text-blue-500">{shiftDirectionLabel(lineShiftMeters, { short: true })} {Math.abs(lineShiftMeters).toFixed(2)}m</span>}
                       </div>
                       <div className={`mt-0.5 text-[9px] font-bold truncate ${t.textSub}`}>{activeDockBoundaryLabel}</div>
+                      {activeTrackSpacingMismatch && (
+                          <div
+                              data-track-spacing-mismatch
+                              className={`mt-1 rounded-md px-1.5 py-1 text-[8px] font-black leading-tight ${theme === 'dark' ? 'bg-amber-400/12 text-amber-300' : 'bg-amber-50 text-amber-700'}`}
+                              title="The saved guidance spacing stays fixed when the mounted implement changes. Create a new line to use this tool's swath spacing."
+                          >
+                              LINE {activeTrackSpacingM.toFixed(2)} m LOCKED · TOOL {currentImplementTrackSpacingM.toFixed(2)} m
+                          </div>
+                      )}
                   </div>
                   {activeLineRecord && tramlineSupported && (
                       <button
@@ -7960,8 +8767,12 @@ const App = () => {
 
       const renderBoundaryCaptureDock = () => {
           const recording = Boolean(isRecordingBoundary);
-          const capturedLengthMeters = tempBoundary.length > 1
-              ? calculatePathLength(tempBoundary) / PIXELS_PER_METER
+          const lastCapturedPoint = liveBoundaryPoints[liveBoundaryPoints.length - 1];
+          const liveTailLengthPx = recording && lastCapturedPoint
+              ? Math.hypot(lastCapturedPoint.x - worldPos.x, lastCapturedPoint.y - worldPos.y)
+              : 0;
+          const capturedLengthMeters = recording
+              ? (boundaryCaptureLengthPxRef.current + liveTailLengthPx) / PIXELS_PER_METER
               : 0;
           const CaptureIcon = recording ? Radio : MapPin;
 
@@ -8009,7 +8820,7 @@ const App = () => {
                               <div className="grid grid-cols-2 gap-1.5">
                                   <div className={`rounded-lg ${isDarkDock ? 'bg-slate-900/65' : 'bg-slate-50'} p-2`}>
                                       <div className={`text-[8px] font-black uppercase ${t.textSub}`}>Points</div>
-                                      <div className={`mt-0.5 text-sm font-black ${t.textMain}`}>{tempBoundary.length}</div>
+                                      <div className={`mt-0.5 text-sm font-black ${t.textMain}`}>{liveBoundaryPoints.length}</div>
                                   </div>
                                   <div className={`rounded-lg ${isDarkDock ? 'bg-slate-900/65' : 'bg-slate-50'} p-2`}>
                                       <div className={`text-[8px] font-black uppercase ${t.textSub}`}>Distance</div>
@@ -8670,7 +9481,18 @@ const App = () => {
       actions.setWifiSettings(prev => ({ ...prev, [key]: value }));
   };
   const handleUTurnSettingChange = (key, value) => {
-      actions.setUTurnSettings(prev => ({ ...prev, [key]: value }));
+      actions.setUTurnSettings(previous => {
+          const next = {
+              ...previous,
+              [key]: value,
+              targetSelectionVersion: 2
+          };
+          if (key === 'nextPass') {
+              if (value === 'Adjacent') next.skipPasses = 0;
+              if (value === 'Skip') next.skipPasses = Math.max(1, Number(previous?.skipPasses) || 1);
+          }
+          return next;
+      });
   };
 
   const SettingsSection = ({ title, detail, icon: Icon = Settings, children, actions: sectionActions }) => (
@@ -8709,14 +9531,14 @@ const App = () => {
       </div>
   );
 
-  const SettingsActionButton = ({ children, onClick, variant = 'ghost' }) => {
+  const SettingsActionButton = ({ children, onClick, variant = 'ghost', disabled = false }) => {
       const variantClass = variant === 'primary'
           ? 'bg-blue-600 text-white border-blue-600 hover:bg-blue-500'
           : variant === 'danger'
               ? 'bg-red-500/10 text-red-500 border-red-500/40 hover:bg-red-500/15'
               : `${t.textMain} border ${t.borderCard} hover:brightness-95`;
       return (
-          <button onClick={onClick} className={`ui-action px-4 py-2 rounded-lg border transition ${variantClass}`}>
+          <button disabled={disabled} onClick={onClick} className={`ui-action px-4 py-2 rounded-lg border transition disabled:cursor-not-allowed disabled:opacity-40 ${variantClass}`}>
               {children}
           </button>
       );
@@ -9636,7 +10458,7 @@ const App = () => {
       const value = (field, decimals = 2) => Number(vehicleSettings[field] || 0).toFixed(decimals);
       const measures = {
           wheelbase: ['Wheelbase', `${value('wheelbase')} m`, 'Chassis', '#2563eb', 'side'],
-          turnRadius: ['Minimum turn radius', `${value('turnRadius')} m`, 'Chassis', '#2563eb', 'top'],
+          turnRadius: ['Reference-path turn radius', `${value('turnRadius')} m`, 'Steering', '#2563eb', 'top'],
           frontAxleWidth: ['Front wheel track', `${value('frontAxleWidth')} m`, 'Chassis', '#2563eb', 'front'],
           rearAxleWidth: ['Rear wheel track', `${value('rearAxleWidth')} m`, 'Chassis', '#2563eb', 'front'],
           frontOverhang: ['Front overhang', `${value('frontOverhang')} m`, 'Chassis', '#2563eb', 'side'],
@@ -11108,7 +11930,7 @@ const App = () => {
                                                     </div>
                                                     <div className={`overflow-hidden rounded-xl border ${t.borderCard}`}>
                                                         <VehicleParameterInput field="wheelbase" label="Wheelbase" value={vehicleSettings.wheelbase} hint="Front axle to rear axle." />
-                                                        <VehicleParameterInput field="turnRadius" label="Min. turn radius" value={vehicleSettings.turnRadius} hint="Must be at least wheelbase + 0.10 m." />
+                                                        <VehicleParameterInput field="turnRadius" label="Min. simulated path radius" value={vehicleSettings.turnRadius} hint="Reference-path radius at full lock; must be at least wheelbase + 0.10 m." />
                                                         <VehicleParameterInput field="frontAxleWidth" label="Front wheel track" value={vehicleSettings.frontAxleWidth} hint="Tire center to tire center." />
                                                         <VehicleParameterInput field="rearAxleWidth" label="Rear wheel track" value={vehicleSettings.rearAxleWidth} hint="Tire center to tire center." />
                                                         <VehicleParameterInput field="frontOverhang" label="Front overhang" value={vehicleSettings.frontOverhang || 0} hint="Front axle to nose." />
@@ -11642,104 +12464,193 @@ const App = () => {
         );
         case 'uturn': {
             const turnConfig = getNormalizedTurnConfig();
-            const turnPatternOptions = [
-                { id: 'AUTO', title: 'Forward U / Ω', detail: 'Forward-only turn. The planner uses U when spacing is wide enough and Ω when it is narrow.', icon: CornerUpLeft },
-                { id: 'FISH_TAIL', title: 'Fish-tail', detail: 'Restricted headland path with forward/reverse gear prompts. Mounted implements only.', icon: Spline }
+            const workflowOptions = [
+                { id: 'ONE_KEY', title: 'This turn only', detail: 'Start one turn when you need it.', icon: CornerUpLeft },
+                { id: 'AUTO', title: 'Every headland', detail: 'Turn automatically at each row end.', icon: Repeat2 },
+                { id: 'SMART', title: 'Finish the field', detail: 'Plan all remaining rows.', icon: Route }
             ];
-            const renderTurnToggle = ({ label, detail, settingKey, icon: Icon = CheckCircle2 }) => (
+            const mountedTurnImplement = /3-point|mounted|front mount/i.test(String(implementSettings.connectionType || ''));
+            const skipCount = Math.max(1, Number(turnConfig.skipPasses) || 1);
+            const modeLabel = turnConfig.mode === 'SMART'
+                ? 'Finish the field'
+                : turnConfig.mode === 'AUTO'
+                    ? 'Every headland'
+                    : 'This turn only';
+            const pathLabel = turnConfig.pattern === 'FISH_TAIL' ? '3-point' : 'Auto fit';
+            const targetLabel = activeTramline.enabled
+                ? 'Tramline routing'
+                : turnConfig.nextPass === 'Skip'
+                    ? `Skip ${skipCount}`
+                    : 'Next row';
+            const renderCompactToggle = ({ label, detail, settingKey, icon: Icon = CheckCircle2 }) => (
                 <button
+                    type="button"
+                    aria-pressed={Boolean(turnConfig[settingKey])}
                     onClick={() => handleUTurnSettingChange(settingKey, !turnConfig[settingKey])}
-                    className={`p-4 rounded-xl border text-left flex items-center justify-between gap-4 ${turnConfig[settingKey] ? 'border-green-500/50 bg-green-500/10' : `${t.borderCard} ${t.bgInput}`}`}
+                    className={`min-h-[76px] rounded-xl border px-3 py-2.5 text-left flex items-center justify-between gap-3 ${turnConfig[settingKey] ? 'border-green-500/45 bg-green-500/10' : `${t.borderCard} ${t.bgInput}`}`}
                 >
-                    <div className="flex items-center gap-3 min-w-0">
-                        <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${turnConfig[settingKey] ? 'bg-green-500 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} ${t.textDim}`}`}>
-                            <Icon className="w-5 h-5" />
-                        </div>
-                        <div className="min-w-0">
-                            <div className={`font-bold ${t.textMain}`}>{label}</div>
-                            <div className={`text-xs ${t.textSub}`}>{detail}</div>
-                        </div>
-                    </div>
-                    <div className={`shrink-0 w-12 h-7 rounded-full p-1 transition-colors ${turnConfig[settingKey] ? 'bg-green-500' : 'bg-slate-400'}`}>
-                        <div className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform ${turnConfig[settingKey] ? 'translate-x-5' : ''}`}></div>
-                    </div>
+                    <span className="flex min-w-0 items-center gap-2.5">
+                        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${turnConfig[settingKey] ? 'bg-green-500 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} ${t.textDim}`}`}>
+                            <Icon className="h-4 w-4" />
+                        </span>
+                        <span className="min-w-0">
+                            <span className={`block text-sm font-black ${t.textMain}`}>{label}</span>
+                            <span className={`block text-[11px] font-medium ${t.textSub}`}>{detail}</span>
+                        </span>
+                    </span>
+                    <span className={`shrink-0 w-11 h-6 rounded-full p-0.5 transition-colors ${turnConfig[settingKey] ? 'bg-green-500' : 'bg-slate-400'}`}>
+                        <span className={`block h-5 w-5 rounded-full bg-white shadow transition-transform ${turnConfig[settingKey] ? 'translate-x-5' : ''}`} />
+                    </span>
                 </button>
+            );
+            const SetupRow = ({ number, title, detail, last = false, children }) => (
+                <div className={`grid grid-cols-1 gap-3 py-3.5 lg:grid-cols-[210px_minmax(0,1fr)] lg:items-center ${last ? '' : `border-b ${t.borderCard}`}`}>
+                    <div className="flex items-start gap-2.5">
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-600 text-[10px] font-black text-white">{number}</span>
+                        <span className="min-w-0">
+                            <span className={`block text-sm font-black ${t.textMain}`}>{title}</span>
+                            <span className={`mt-0.5 block text-[10px] leading-snug ${t.textSub}`}>{detail}</span>
+                        </span>
+                    </div>
+                    <div>{children}</div>
+                </div>
             );
 
             return (
-              <div className="space-y-3">
-                <SettingsSection
-                    title="One Turn, Auto Row & Smart Field"
-                    detail="One Turn executes once, Auto Row repeats at validated headlands, and Smart Field plans the complete remaining route."
-                    icon={CornerUpLeft}
-                    actions={<><SettingsActionButton onClick={() => cancelTurnAssist({ resumePreviousMode: false })}>Cancel Turn</SettingsActionButton><SettingsActionButton variant="primary" onClick={() => { setSettingsOpen(false); openUTurnPlanner(); }}>Preview on Map</SettingsActionButton></>}
-                >
-                    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-                        <SettingsMetric label="State" value={turnAssistActive ? uTurnStage : autoUTurnArmed ? 'Armed' : turnConfig.enabled ? 'Ready' : 'Off'} tone={turnAssistActive || autoUTurnArmed ? 'text-blue-500' : turnConfig.enabled ? 'text-green-500' : 'text-slate-500'} />
-                        <SettingsMetric label="Mode" value={turnConfig.mode === 'SMART' ? 'Smart Field' : turnConfig.mode === 'AUTO' ? 'Auto Row' : 'One Turn'} />
-                        <SettingsMetric label="Next Pass" value={turnConfig.nextPass === 'Skip' ? `Skip ${turnConfig.skipPasses}` : turnConfig.nextPass} />
-                        <SettingsMetric label="Turn Speed" value={`${Number(turnConfig.turnSpeedKmh || 0).toFixed(1)} km/h`} />
+              <div className="mx-auto max-w-[980px] space-y-3 pb-3">
+                <section className={`${t.bgPanel} border ${t.borderCard} rounded-xl p-4`}>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white">
+                                <CornerUpLeft className="h-5 w-5" />
+                            </span>
+                            <span className="min-w-0">
+                                <span className="flex flex-wrap items-center gap-2">
+                                    <span className={`text-base font-black ${t.textMain}`}>U-turn setup</span>
+                                    <button
+                                        type="button"
+                                        aria-label="Turn assist"
+                                        aria-pressed={Boolean(turnConfig.enabled)}
+                                        onClick={() => handleUTurnSettingChange('enabled', !turnConfig.enabled)}
+                                        className={`rounded-full px-2 py-0.5 text-[9px] font-black ${turnConfig.enabled ? 'bg-green-500/15 text-green-600' : 'bg-slate-400/15 text-slate-500'}`}
+                                    >
+                                        TURN ASSIST {turnConfig.enabled ? 'ON' : 'OFF'}
+                                    </button>
+                                </span>
+                                <span className={`mt-0.5 block text-[11px] ${t.textSub}`}>{modeLabel} · {turnConfig.mode === 'SMART' ? (turnConfig.smartHeadlandPasses ? 'Auto finish' : 'Manual finish') : `${pathLabel} · ${targetLabel}`}</span>
+                            </span>
+                        </div>
+                        <div className="flex shrink-0 gap-2">
+                            <SettingsActionButton disabled={!turnConfig.enabled} variant="primary" onClick={() => { setSettingsOpen(false); openUTurnPlanner(); }}>Preview turn</SettingsActionButton>
+                        </div>
                     </div>
+                </section>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {renderTurnToggle({ label: 'Enable Turn Assist', detail: 'Allow single, repeating headland and full-field route workflows.', settingKey: 'enabled', icon: CornerUpLeft })}
-                        {renderTurnToggle({ label: 'Require Boundary', detail: 'Block One Turn without a boundary; Auto Row and Smart Field always require one.', settingKey: 'requireBoundary', icon: MapPin })}
-                    </div>
-                </SettingsSection>
+                <section className={`${t.bgPanel} border ${t.borderCard} rounded-xl px-4`}>
+                    <SetupRow number="1" title="How should it run?" detail="Pick the job you want to do.">
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                            {workflowOptions.map((option) => {
+                                const active = turnConfig.mode === option.id;
+                                const Icon = option.icon;
+                                return (
+                                    <button type="button" key={option.id} aria-pressed={active} onClick={() => handleUTurnSettingChange('mode', option.id)} className={`min-h-[64px] rounded-xl border px-3 py-2 text-left transition-colors ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput} hover:bg-blue-500/5`}`}>
+                                        <span className="flex items-center gap-2">
+                                            <Icon className={`h-4 w-4 ${active ? 'text-blue-600' : t.textDim}`} />
+                                            <span className={`text-sm font-black ${t.textMain}`}>{option.title}</span>
+                                            {active && <CheckCircle2 className="ml-auto h-4 w-4 text-blue-500" />}
+                                        </span>
+                                        <span className={`mt-1 block text-[10px] ${t.textSub}`}>{option.detail}</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        {turnConfig.mode !== 'ONE_KEY' && (
+                            <div className={`mt-2 flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[10px] font-bold ${activeBoundarySourcePoints.length >= 3 ? 'bg-green-500/10 text-green-600' : 'bg-amber-500/10 text-amber-600'}`}>
+                                <MapPin className="h-3.5 w-3.5 shrink-0" />
+                                <span>{activeBoundarySourcePoints.length >= 3 ? 'Boundary ready.' : 'Choose or record a closed boundary before starting.'}{turnConfig.mode === 'SMART' ? ' Finish the field also uses the active straight guidance line.' : ''}</span>
+                            </div>
+                        )}
+                    </SetupRow>
 
-                {turnConfig.mode !== 'SMART' && <SettingsSection title="Turn Path" detail="One Turn and Auto Row use the calibrated minimum radius." icon={Route}>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {turnPatternOptions.map((option) => {
-                            const active = turnConfig.pattern === option.id;
-                            const Icon = option.icon;
-                            return (
-                                <button
-                                    key={option.id}
-                                    onClick={() => handleUTurnSettingChange('pattern', option.id)}
-                                    className={`text-left rounded-xl border p-4 min-h-[132px] transition-all ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-white'} hover:brightness-95`}`}
-                                >
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${active ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-100'} text-blue-500`}`}>
-                                            <Icon className="w-5 h-5" />
+                    {turnConfig.mode !== 'SMART' ? (
+                        <>
+                            <SetupRow number="2" title="How should it turn?" detail="Auto fit works for most fields.">
+                                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                                    <button type="button" aria-pressed={turnConfig.pattern !== 'FISH_TAIL'} onClick={() => handleUTurnSettingChange('pattern', 'AUTO')} className={`min-h-[60px] rounded-xl border px-3 py-2 text-left ${turnConfig.pattern !== 'FISH_TAIL' ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}>
+                                        <span className="flex items-center gap-2"><CornerUpLeft className="h-4 w-4 text-blue-500" /><span className={`text-sm font-black ${t.textMain}`}>Auto fit</span><span className="rounded bg-green-500/15 px-1.5 py-0.5 text-[8px] font-black text-green-600">RECOMMENDED</span></span>
+                                        <span className={`mt-1 block text-[10px] ${t.textSub}`}>Normal U-turn when possible; compact keyhole when needed.</span>
+                                    </button>
+                                    <button type="button" aria-pressed={turnConfig.pattern === 'FISH_TAIL'} disabled={!mountedTurnImplement} onClick={() => handleUTurnSettingChange('pattern', 'FISH_TAIL')} className={`min-h-[60px] rounded-xl border px-3 py-2 text-left disabled:opacity-45 ${turnConfig.pattern === 'FISH_TAIL' ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}>
+                                        <span className="flex items-center gap-2"><Spline className="h-4 w-4 text-blue-500" /><span className={`text-sm font-black ${t.textMain}`}>3-point turn</span></span>
+                                        <span className={`mt-1 block text-[10px] ${t.textSub}`}>{mountedTurnImplement ? 'Forward, reverse, then forward.' : 'Available with a mounted implement.'}</span>
+                                    </button>
+                                </div>
+                            </SetupRow>
+
+                            <SetupRow number="3" title="Which row is next?" detail="Next row is the normal choice." last>
+                                {activeTramline.enabled ? (
+                                    <div className="rounded-xl border border-yellow-500/35 bg-yellow-500/10 px-3 py-3 text-sm font-black text-yellow-600">Tramline routing chooses the target row automatically.</div>
+                                ) : (
+                                    <>
+                                        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                                            <button type="button" aria-pressed={turnConfig.nextPass !== 'Skip'} onClick={() => handleUTurnSettingChange('nextPass', 'Adjacent')} className={`min-h-[58px] rounded-xl border px-3 py-2 text-left ${turnConfig.nextPass !== 'Skip' ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}>
+                                                <span className={`block text-sm font-black ${t.textMain}`}>Next row</span>
+                                                <span className={`mt-0.5 block text-[10px] ${t.textSub}`}>Continue without leaving a gap.</span>
+                                            </button>
+                                            <button type="button" aria-pressed={turnConfig.nextPass === 'Skip'} onClick={() => handleUTurnSettingChange('nextPass', 'Skip')} className={`min-h-[58px] rounded-xl border px-3 py-2 text-left ${turnConfig.nextPass === 'Skip' ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}>
+                                                <span className={`block text-sm font-black ${t.textMain}`}>Skip rows</span>
+                                                <span className={`mt-0.5 block text-[10px] ${t.textSub}`}>Leave rows to complete later.</span>
+                                            </button>
                                         </div>
-                                        {active && <CheckCircle2 className="w-5 h-5 text-blue-500" />}
-                                    </div>
-                                    <div className={`mt-3 font-black ${t.textMain}`}>{option.title}</div>
-                                    <div className={`text-xs ${t.textSub}`}>{option.detail}</div>
-                                </button>
-                            );
-                        })}
-                    </div>
-                </SettingsSection>}
+                                        {turnConfig.nextPass === 'Skip' && (
+                                            <div className={`mt-2 flex items-center justify-between gap-3 rounded-xl border ${t.borderCard} ${t.bgInput} p-2`}>
+                                                <button type="button" aria-label="Skip one fewer row" disabled={skipCount <= 1} onClick={() => handleUTurnSettingChange('skipPasses', Math.max(1, skipCount - 1))} className={`flex h-9 w-9 items-center justify-center rounded-lg border ${t.borderCard} ${t.textMain} disabled:opacity-30`}><Minus className="h-4 w-4" /></button>
+                                                <span className="min-w-0 text-center"><span className={`block text-sm font-black ${t.textMain}`}>Skip {skipCount} {skipCount === 1 ? 'row' : 'rows'}</span><span className={`block text-[10px] ${t.textSub}`}>Target is {skipCount + 1} rows away</span></span>
+                                                <button type="button" aria-label="Skip one more row" disabled={skipCount >= 49} onClick={() => handleUTurnSettingChange('skipPasses', Math.min(49, skipCount + 1))} className={`flex h-9 w-9 items-center justify-center rounded-lg border ${t.borderCard} ${t.textMain} disabled:opacity-30`}><Plus className="h-4 w-4" /></button>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </SetupRow>
+                        </>
+                    ) : (
+                        <SetupRow number="2" title="How should the field finish?" detail="Choose automatic or guided headland passes." last>
+                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                                <button type="button" aria-pressed={Boolean(turnConfig.smartHeadlandPasses)} onClick={() => handleUTurnSettingChange('smartHeadlandPasses', 1)} className={`min-h-[60px] rounded-xl border px-3 py-2 text-left ${turnConfig.smartHeadlandPasses ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}><span className={`block text-sm font-black ${t.textMain}`}>Finish automatically</span><span className={`mt-0.5 block text-[10px] ${t.textSub}`}>Plan and drive the validated headland passes.</span></button>
+                                <button type="button" aria-pressed={!turnConfig.smartHeadlandPasses} onClick={() => handleUTurnSettingChange('smartHeadlandPasses', 0)} className={`min-h-[60px] rounded-xl border px-3 py-2 text-left ${!turnConfig.smartHeadlandPasses ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}><span className={`block text-sm font-black ${t.textMain}`}>Finish manually</span><span className={`mt-0.5 block text-[10px] ${t.textSub}`}>Show the remaining rows for manual steering.</span></button>
+                            </div>
+                        </SetupRow>
+                    )}
+                </section>
 
-                <SettingsSection title="Turn Rules" detail="These values define when the turn starts and which pass it targets." icon={Settings}>
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                        <SettingSelect label="Mode" value={turnConfig.mode} onChange={(value) => handleUTurnSettingChange('mode', value)} options={[
-                            { value: 'ONE_KEY', label: 'One Turn' },
-                            { value: 'AUTO', label: 'Auto Row' },
-                            { value: 'SMART', label: 'Smart Field' }
-                        ]} />
-                        <SettingSelect label="Direction" value={turnConfig.direction} onChange={(value) => handleUTurnSettingChange('direction', value)} options={['Auto', 'Left', 'Right']} />
-                        <SettingSelect label={activeTramline.enabled ? 'Next Pass (Tramline)' : 'Next Pass'} value={turnConfig.nextPass} disabled={activeTramline.enabled || turnConfig.mode === 'SMART'} onChange={(value) => handleUTurnSettingChange('nextPass', value)} options={['Adjacent', 'Skip']} />
-                        <SettingInput theme={t} label={activeTramline.enabled ? 'Skip Passes (Tramline owns routing)' : 'Skip Passes (0–49)'} value={turnConfig.skipPasses} disabled={activeTramline.enabled || turnConfig.mode === 'SMART'} type="number" onChange={(e) => handleUTurnSettingChange('skipPasses', Math.min(49, Math.max(0, parseInt(e.target.value, 10) || 0)))} />
-                        <SettingInput theme={t} label="Start Distance (4–100 m)" value={turnConfig.startDistanceM} disabled={turnConfig.mode !== 'AUTO'} type="number" onChange={(e) => handleUTurnSettingChange('startDistanceM', Math.min(100, Math.max(4, parseFloat(e.target.value) || 4)))} />
-                        <SettingInput theme={t} label="Turn Speed (1–10 km/h)" value={turnConfig.turnSpeedKmh} type="number" onChange={(e) => handleUTurnSettingChange('turnSpeedKmh', Math.min(10, Math.max(1, parseFloat(e.target.value) || 1)))} />
-                        <SettingInput theme={t} label="Auto skip threshold (95–98%)" value={Math.round(turnConfig.workedPassThreshold * 100)} disabled={turnConfig.mode === 'SMART'} type="number" onChange={(e) => handleUTurnSettingChange('workedPassThreshold', Math.min(98, Math.max(95, parseFloat(e.target.value) || 98)) / 100)} />
-                        <SettingSelect label="Smart headland close" value={String(turnConfig.smartHeadlandPasses)} disabled={turnConfig.mode !== 'SMART'} onChange={(value) => handleUTurnSettingChange('smartHeadlandPasses', Number(value))} options={[{ value: '0', label: 'Manual guide' }, { value: '1', label: 'Auto close' }]} />
-                        <SettingsMetric label="Trigger source" value={turnConfig.mode === 'SMART' ? 'Reviewed route' : turnConfig.mode === 'AUTO' ? 'Active boundary' : 'Left / right button'} />
+                <details className={`${t.bgPanel} border ${t.borderCard} rounded-xl overflow-hidden`}>
+                    <summary className={`cursor-pointer px-4 py-3 text-sm font-black ${t.textMain}`}>
+                        More settings
+                        <span className={`ml-2 text-[10px] font-medium ${t.textSub}`}>Speed, safety and implement actions</span>
+                    </summary>
+                    <div className={`border-t ${t.borderCard} p-4`}>
+                        {turnConfig.mode === 'SMART' ? (
+                            <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-green-500/35 bg-green-500/10 px-3 py-3">
+                                <span className="flex items-center gap-2.5"><ArrowUpFromDot className="h-4 w-4 text-green-600" /><span><span className={`block text-sm font-black ${t.textMain}`}>Lift implement during turns</span><span className={`block text-[10px] ${t.textSub}`}>Required for Finish the field.</span></span></span>
+                                <span className="rounded-full bg-green-500 px-2 py-1 text-[9px] font-black text-white">ALWAYS ON</span>
+                            </div>
+                        ) : (
+                            <div className="mb-4 grid grid-cols-1 gap-2 md:grid-cols-3">
+                                {renderCompactToggle({ label: 'Lift implement', detail: 'Raise during the turn.', settingKey: 'liftAction', icon: ArrowUpFromDot })}
+                                {renderCompactToggle({ label: "Don't count the turn", detail: 'Keep headland out of worked area.', settingKey: 'pauseCoverage', icon: Pause })}
+                                {renderCompactToggle({ label: 'Resume autosteer', detail: 'Guide back onto the next row.', settingKey: 'resumeAutosteer', icon: CheckCircle2 })}
+                            </div>
+                        )}
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                            <SettingSelect label="Default turn side" value={turnConfig.direction} onChange={(value) => handleUTurnSettingChange('direction', value)} options={['Auto', 'Left', 'Right']} />
+                            {turnConfig.mode === 'AUTO' && <SettingInput theme={t} label="Start before boundary (m)" value={turnConfig.startDistanceM} type="number" onChange={(e) => handleUTurnSettingChange('startDistanceM', Math.min(100, Math.max(4, parseFloat(e.target.value) || 4)))} />}
+                            <SettingInput theme={t} label="Turn speed (km/h)" value={turnConfig.turnSpeedKmh} type="number" onChange={(e) => handleUTurnSettingChange('turnSpeedKmh', Math.min(10, Math.max(1, parseFloat(e.target.value) || 1)))} />
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                            {turnConfig.mode === 'ONE_KEY' && renderCompactToggle({ label: 'Boundary check', detail: 'Require a closed boundary for Turn once.', settingKey: 'requireBoundary', icon: MapPin })}
+                        </div>
                     </div>
-                    <div className={`mt-4 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/70' : 'bg-slate-50'} p-3 text-xs ${t.textSub}`}>
-                        Smart Field requires a closed boundary plus a saved Straight AB or A+ reference. It subtracts recorded worked intervals, treats only ≥98% as fully complete, and marks any manual-finish zones in red before Start. Manual guide stops autosteer after the interior rows; Auto close follows every validated headland pass.
-                    </div>
-                </SettingsSection>
-
-                <SettingsSection title="Implement Actions" detail="Simulation requests shown during the turn; live actuation requires implement feedback." icon={ArrowUpFromDot}>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        {renderTurnToggle({ label: 'Lift Request', detail: 'Show raise/lower timing; connect ISOBUS or I/O for physical lift.', settingKey: 'liftAction', icon: ArrowUpFromDot })}
-                        {renderTurnToggle({ label: 'Pause Coverage', detail: 'Do not paint coverage while turning on headland.', settingKey: 'pauseCoverage', icon: Pause })}
-                        {renderTurnToggle({ label: 'Resume Autosteer', detail: 'Re-engage guidance when heading error is acceptable.', settingKey: 'resumeAutosteer', icon: CheckCircle2 })}
-                    </div>
-                </SettingsSection>
+                </details>
               </div>
             );
         }
@@ -13178,7 +14089,7 @@ const App = () => {
                       </div>
                       <button
                           onClick={closeSettingsPanel}
-                          aria-label={settingsTab === 'wifi' ? 'Close network settings' : 'Close settings and discard unsaved changes'}
+                          aria-label={settingsTab === 'wifi' ? 'Close network settings' : settingsTab === 'uturn' ? 'Close U-turn settings' : 'Close settings and discard unsaved changes'}
                           className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${t.borderCard} ${t.activeItem} ${t.textMain} transition-colors hover:border-blue-500 hover:text-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50`}
                       >
                           <CloseGlyph className="h-4 w-4" />
@@ -13236,7 +14147,7 @@ const App = () => {
                           </div>
                       </div>
                       <div className={`ui-action-bar h-16 min-h-16 shrink-0 px-3 py-2 border-t ${t.borderCard} flex items-center gap-3 ${['vehicle', 'implement'].includes(settingsTab) ? 'justify-between' : 'justify-end'} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
-                          {!['wifi', 'overview', 'calibration'].includes(settingsTab) && (
+                          {!['wifi', 'overview', 'calibration', 'uturn'].includes(settingsTab) && (
                               <button className={`px-5 lg:px-7 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-sm lg:text-base`} onClick={closeSettingsPanel}>Cancel</button>
                           )}
                           {['overview', 'calibration'].includes(settingsTab) ? (
@@ -13249,6 +14160,13 @@ const App = () => {
                           ) : settingsTab === 'wifi' ? (
                               <button
                                   className="h-10 rounded-lg bg-blue-600 px-6 text-sm font-bold text-white shadow-md shadow-blue-900/15 hover:bg-blue-500"
+                                  onClick={closeSettingsPanel}
+                              >
+                                  Done
+                              </button>
+                          ) : settingsTab === 'uturn' ? (
+                              <button
+                                  className="h-11 rounded-lg bg-blue-600 px-8 text-sm font-black text-white shadow-md shadow-blue-900/15 hover:bg-blue-500"
                                   onClick={closeSettingsPanel}
                               >
                                   Done
@@ -13434,7 +14352,7 @@ const renderLinesPanel = () => {
     const selectedLineLocation = selectedLine ? getCreatedLocation(selectedLine, activeField) : '--';
     const workingWidthMeters = Math.max(0, Number(implementSettings.width) || 0);
     const overlapMeters = Math.max(0, Number(implementSettings.overlap) || 0);
-    const passSpacingMeters = Math.max(0.1, Number(selectedLine?.trackSpacingM) || (workingWidthMeters - overlapMeters));
+    const passSpacingMeters = getRuntimeTrackSpacingM(selectedLine, implementSettings);
 
     const getLineHeadingDegrees = (line) => {
         const storedHeading = Number(line?.heading ?? line?.points?.aplus?.heading);
@@ -13828,9 +14746,9 @@ const renderLinesPanel = () => {
       };
 
       const getBoundaryPoints = (boundary) => {
-          if (Array.isArray(boundary?.points)) return boundary.points;
-          if (Array.isArray(boundary)) return boundary;
-          return [];
+          return normalizeBoundaryRing(
+              Array.isArray(boundary?.points) ? boundary.points : Array.isArray(boundary) ? boundary : []
+          );
       };
 
       const renderFieldQuickView = () => {
@@ -14306,7 +15224,7 @@ const renderLinesPanel = () => {
           const selectedLocation = getCreatedLocation(selectedBoundary, activeField);
           const selectedPosition = getCreatedPosition(selectedBoundary);
           const selectedPerimeter = selectedPoints.length > 1
-              ? calculatePathLength(selectedPoints) / PIXELS_PER_METER
+              ? calculateBoundaryRingLength(selectedPoints) / PIXELS_PER_METER
               : 0;
           const selectedArea = selectedPoints.length > 2
               ? Math.abs(selectedPoints.reduce((sum, point, index) => {
@@ -15359,6 +16277,62 @@ const renderLinesPanel = () => {
       );
   };
 
+  const runtimeTurnConfig = getNormalizedTurnConfig();
+  const runtimeTurnMode = manualHeadlandActive
+      ? 'SMART'
+      : turnAssistRef.current?.mode
+          || (autoUTurnArmed ? 'AUTO' : uTurnPreview?.mode)
+          || runtimeTurnConfig.mode;
+  const runtimeTurnModeTitle = runtimeTurnMode === 'SMART'
+      ? 'SMART FIELD'
+      : runtimeTurnMode === 'AUTO'
+          ? 'AUTO U-TURN'
+          : 'ONE TURN';
+  const runtimeTurnBlocked = Boolean(uTurnPreview && !uTurnPreview.feasible && uTurnPanelOpen);
+  const runtimeTurnTone = turnAssistActive
+      ? 'ACTIVE'
+      : autoUTurnArmed
+          ? 'ARMED'
+          : runtimeTurnBlocked
+              ? 'BLOCKED'
+              : manualHeadlandActive
+                  ? 'MANUAL'
+                  : 'READY';
+  const runtimeTurnSubtitle = manualHeadlandActive
+      ? 'MANUAL HEADLAND'
+      : turnAssistActive
+          ? `${uTurnStage || 'TURNING'} · TAP TO STOP`
+          : autoUTurnArmed
+              ? (uTurnDistanceToTriggerM == null ? 'ARMED · FINDING HEADLAND' : `ARMED · ${uTurnDistanceToTriggerM.toFixed(1)} M`)
+              : runtimeTurnBlocked
+                  ? 'BLOCKED · TAP TO REVIEW'
+                  : runtimeTurnMode === 'AUTO'
+                      ? 'READY · HEADLAND'
+                      : runtimeTurnMode === 'SMART'
+                          ? 'READY · FIELD ROUTE'
+                          : 'READY · TURN ONCE';
+  const runtimeTurnAccentClass = runtimeTurnTone === 'ACTIVE'
+      ? 'text-orange-500'
+      : runtimeTurnTone === 'BLOCKED'
+          ? 'text-red-500'
+          : runtimeTurnTone === 'ARMED' || runtimeTurnTone === 'MANUAL'
+              ? 'text-blue-500'
+              : t.textMain;
+  const runtimeTurnSurfaceClass = runtimeTurnTone === 'ACTIVE'
+      ? 'bg-orange-500/10'
+      : runtimeTurnTone === 'BLOCKED'
+          ? 'bg-red-500/8'
+          : runtimeTurnTone === 'ARMED' || runtimeTurnTone === 'MANUAL'
+              ? 'bg-blue-500/8'
+              : 'bg-transparent';
+  const runtimeTurnIconClass = runtimeTurnTone === 'ACTIVE'
+      ? 'bg-orange-500/15 text-orange-500'
+      : runtimeTurnTone === 'BLOCKED'
+          ? 'bg-red-500/15 text-red-500'
+          : runtimeTurnTone === 'ARMED' || runtimeTurnTone === 'MANUAL'
+              ? 'bg-blue-500/15 text-blue-500'
+              : `${theme === 'dark' ? 'bg-slate-800/80' : 'bg-slate-100'} ${t.textDim}`;
+
   return (
     <div className="w-full h-screen bg-neutral-900 flex items-center justify-center overflow-hidden">
         <div
@@ -15572,10 +16546,23 @@ const renderLinesPanel = () => {
                             {/* RENDER SAVED BOUNDARIES (LOADED FIELD & NEW FIELD CREATION) */}
                             {!isMap3D && <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" shapeRendering="geometricPrecision">
                                 <g style={{ transform: 'translate(50%, 60%)' }}>
-                                    {isRecordingBoundary && tempBoundary.length > 0 && (
+                                    {isRecordingBoundary && liveBoundaryPoints.length > 0 && (
                                         <g data-boundary-recording-2d="live-path">
+                                            <line
+                                                data-boundary-return-guide-2d="true"
+                                                x1={worldPos.x}
+                                                y1={worldPos.y}
+                                                x2={liveBoundaryPoints[0].x}
+                                                y2={liveBoundaryPoints[0].y}
+                                                stroke={liveBoundaryStroke}
+                                                strokeWidth="1.5"
+                                                strokeOpacity="0.68"
+                                                strokeDasharray="6 8"
+                                                strokeLinecap="round"
+                                                vectorEffect="non-scaling-stroke"
+                                            />
                                             <polyline
-                                                points={[...tempBoundary, worldPos].map(point => `${point.x},${point.y}`).join(' ')}
+                                                points={liveBoundaryPolylinePoints}
                                                 fill="none"
                                                 stroke={theme === 'dark' ? '#0f172a' : '#ffffff'}
                                                 strokeWidth={liveBoundaryUnderlayWidth}
@@ -15585,7 +16572,7 @@ const renderLinesPanel = () => {
                                                 vectorEffect="non-scaling-stroke"
                                             />
                                             <polyline
-                                                points={[...tempBoundary, worldPos].map(point => `${point.x},${point.y}`).join(' ')}
+                                                points={liveBoundaryPolylinePoints}
                                                 fill="none"
                                                 stroke={liveBoundaryStroke}
                                                 strokeWidth={liveBoundaryStrokeWidth}
@@ -15594,15 +16581,15 @@ const renderLinesPanel = () => {
                                                 vectorEffect="non-scaling-stroke"
                                             />
                                             <circle
-                                                cx={tempBoundary[0].x}
-                                                cy={tempBoundary[0].y}
+                                                cx={liveBoundaryPoints[0].x}
+                                                cy={liveBoundaryPoints[0].y}
                                                 r="11"
                                                 fill={theme === 'dark' ? '#0f172a' : '#ffffff'}
                                                 fillOpacity="0.9"
                                             />
                                             <circle
-                                                cx={tempBoundary[0].x}
-                                                cy={tempBoundary[0].y}
+                                                cx={liveBoundaryPoints[0].x}
+                                                cy={liveBoundaryPoints[0].y}
                                                 r="8"
                                                 fill={liveBoundaryStroke}
                                                 stroke="white"
@@ -15610,8 +16597,8 @@ const renderLinesPanel = () => {
                                                 vectorEffect="non-scaling-stroke"
                                             />
                                             <text
-                                                x={tempBoundary[0].x}
-                                                y={tempBoundary[0].y + 3.5}
+                                                x={liveBoundaryPoints[0].x}
+                                                y={liveBoundaryPoints[0].y + 3.5}
                                                 textAnchor="middle"
                                                 fontSize="9"
                                                 fontWeight="900"
@@ -15707,8 +16694,8 @@ const renderLinesPanel = () => {
                         <svg
                             data-guidance-layer="3d"
                             className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none z-[12]"
-                            viewBox="0 0 1000 700"
-                            preserveAspectRatio="none"
+                            viewBox={`${map3DViewMinX} 0 ${map3DViewWidth} ${map3DViewHeight}`}
+                            preserveAspectRatio="xMidYMid meet"
                             style={{
                                 opacity: viewTransitioning ? 0.72 : 1,
                                 transform: viewTransitioning ? 'scale(0.985)' : 'scale(1)',
@@ -15747,6 +16734,7 @@ const renderLinesPanel = () => {
                         data-vehicle-anchor
                         data-vehicle-scale={vehicleScreenScale.toFixed(4)}
                         data-implement-width-m={Number(implementSettings.width || 0).toFixed(3)}
+                        data-implement-overall-width-m={liveImplementOverallWidthM.toFixed(3)}
                         data-vehicle-width-m={Math.max(Number(vehicleSettings.frontAxleWidth) || 0, Number(vehicleSettings.rearAxleWidth) || 0).toFixed(3)}
                         className="absolute flex flex-col items-center pointer-events-none z-[15]"
                         style={{
@@ -15759,7 +16747,14 @@ const renderLinesPanel = () => {
                         }}
                     >
                         <div className="relative group">
-                            <TractorVehicle mode={steeringMode} steeringAngle={steeringAngle} implementWidth={implementSettings.width} vehicleSettings={vehicleSettings} viewMode={sceneViewMode} />
+                            <TractorVehicle
+                                mode={steeringMode}
+                                steeringAngle={steeringAngle}
+                                implementWidth={liveImplementOverallWidthM}
+                                implementDepthScale={implementDepthScale3D}
+                                vehicleSettings={vehicleSettings}
+                                viewMode={sceneViewMode}
+                            />
                         </div>
                     </div>
 
@@ -15808,30 +16803,48 @@ const renderLinesPanel = () => {
                 {renderUTurnQuickPanel()}
                 {renderEventHistoryDrawer()}
                 {renderProductivityPanel()}
-                {(turnAssistActive || autoUTurnArmed || manualHeadlandActive) && (
-                    <div data-uturn-status className="absolute left-1/2 top-[98px] z-[42] -translate-x-1/2 max-w-[calc(100%-420px)] rounded-xl bg-slate-950/92 px-4 py-2.5 text-white shadow-xl border border-slate-700 flex items-center gap-3">
-                        <span className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center ${turnAssistActive ? 'bg-green-500' : 'bg-blue-600'}`}>
-                            {turnAssistActive || manualHeadlandActive ? <Check className="w-4 h-4" /> : <Clock className="w-4 h-4" />}
+                {autoUTurnArmed && !turnAssistActive && !manualHeadlandActive && !uTurnPanelOpen && (
+                    <div
+                        data-auto-uturn-status
+                        role="status"
+                        aria-live="polite"
+                        aria-label={uTurnDistanceToTriggerM == null
+                            ? 'Auto U-turn armed, finding a validated headland trigger'
+                            : `Auto U-turn armed, ${uTurnDistanceToTriggerM.toFixed(1)} meters to turn`}
+                        style={{ maxWidth: 'calc(100% - 24px)' }}
+                        className="absolute bottom-[100px] left-3 xl:left-4 z-[42] w-[248px] overflow-hidden rounded-xl border border-blue-400/60 bg-slate-950 px-3 py-2 text-white shadow-2xl"
+                    >
+                        <div className="flex items-center gap-2">
+                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white">
+                                <CornerUpLeft className="h-4 w-4" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                                <span className="block text-[10px] font-black uppercase tracking-[0.06em] text-blue-300">AUTO U-TURN · ARMED</span>
+                                <span className="mt-0.5 block truncate text-[11px] font-black tabular-nums text-white">
+                                    {uTurnDistanceToTriggerM == null ? 'Finding headland' : `${uTurnDistanceToTriggerM.toFixed(1)} m to turn`}
+                                </span>
+                            </span>
+                        </div>
+                    </div>
+                )}
+                {(turnAssistActive || manualHeadlandActive) && (
+                    <div data-uturn-status role="status" aria-live="polite" className="absolute left-1/2 top-[98px] z-[42] -translate-x-1/2 max-w-[420px] rounded-xl bg-slate-950 px-4 py-2.5 text-white shadow-2xl border border-slate-700 flex items-center gap-3">
+                        <span className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${turnAssistActive ? 'bg-green-500' : 'bg-blue-600'}`}>
+                            <Check className="w-4 h-4" />
                         </span>
                         <span className="min-w-0">
-                            <span className="block text-[10px] font-black uppercase tracking-[0.06em]">
+                            <span className="block text-[11px] font-black uppercase tracking-[0.06em] text-white">
                                 {manualHeadlandActive
                                     ? 'Smart Field / manual headland'
-                                    : autoUTurnArmed
-                                     ? 'Auto Row armed'
                                     : turnAssistRef.current?.routeMode === 'SMART'
                                         ? `Smart Field / ${uTurnStage}`
                                         : `U-turn ${uTurnStage.toLowerCase()}`}
                             </span>
-                            <span className="block text-[9px] font-bold text-slate-300 truncate">
+                            <span className="block text-[10px] font-bold text-slate-200 truncate">
                                 {manualHeadlandActive
                                     ? (uTurnPreview?.manualHeadlandStarted
                                         ? 'Steer the recommended passes / toggle Coverage on passes and shifts'
                                         : 'Recommended headland route ready / tap U-turn to begin')
-                                    : autoUTurnArmed
-                                     ? (uTurnDistanceToTriggerM == null
-                                        ? 'Driving to the validated headland trigger'
-                                        : `${uTurnDistanceToTriggerM.toFixed(1)} m to turn / keep autosteer engaged`)
                                     : turnGearRequest
                                         ? (Math.abs(speed) <= 0.25 ? `Stopped · select ${turnGearRequest.toLowerCase()} gear` : 'Stopping before gear change')
                                         : turnAssistRef.current?.routeMode === 'SMART'
@@ -15850,13 +16863,13 @@ const renderLinesPanel = () => {
                 {/* BOTTOM BAR */}
                 <div data-bottom-bar className={`absolute bottom-0 left-0 right-0 h-[88px] min-h-[88px] ${t.bgBottom} backdrop-blur-xl border-t ${t.border} grid grid-cols-[minmax(170px,1fr)_minmax(300px,480px)_minmax(170px,1fr)] xl:grid-cols-[minmax(280px,1fr)_480px_minmax(280px,1fr)] items-stretch gap-0 px-0 z-30`}>
                     <div className="min-w-0 h-full grid grid-cols-2 gap-0">
-                        <button data-bottom-action="uturn" onClick={handleUTurn} className={`h-full w-full px-2 xl:px-4 border-0 border-r ${t.borderCard} ${turnAssistActive || autoUTurnArmed || manualHeadlandActive ? 'bg-blue-500/8' : 'bg-transparent'} flex items-center justify-center gap-1.5 xl:gap-2.5 text-left active:bg-blue-500/10 hover:bg-blue-500/5 transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/35`}>
-                            <span className={`shrink-0 w-8 h-8 xl:w-9 xl:h-9 rounded-lg flex items-center justify-center ${turnAssistActive || autoUTurnArmed || manualHeadlandActive ? 'bg-blue-500/15 text-blue-500' : `${theme === 'dark' ? 'bg-slate-800/80' : 'bg-slate-100'} ${t.textDim}`}`}>
+                        <button data-bottom-action="uturn" aria-label={turnAssistActive ? 'Stop active U-turn' : autoUTurnArmed ? 'Open armed Auto U-turn controls' : manualHeadlandActive ? 'Open manual headland controls' : 'Open U-turn controls'} onClick={turnAssistActive ? stopVehicle : handleUTurn} className={`h-full w-full px-2 xl:px-4 border-0 border-r ${t.borderCard} ${runtimeTurnSurfaceClass} flex items-center justify-center gap-1.5 xl:gap-2.5 text-left active:bg-blue-500/10 hover:bg-blue-500/5 transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/35`}>
+                            <span className={`shrink-0 w-8 h-8 xl:w-9 xl:h-9 rounded-lg flex items-center justify-center ${runtimeTurnIconClass}`}>
                                 <CornerUpLeft className="w-5 h-5"/>
                             </span>
                             <span className="min-w-0">
-                                <span className={`block whitespace-nowrap text-[10px] font-bold tracking-[0.06em] ${turnAssistActive || autoUTurnArmed || manualHeadlandActive ? 'text-blue-500' : t.textMain}`}>U-TURN</span>
-                                <span className={`mt-0.5 hidden xl:block max-w-[118px] truncate text-[9px] font-bold leading-none ${turnAssistActive || autoUTurnArmed || manualHeadlandActive ? 'text-blue-500' : t.textSub}`}>{manualHeadlandActive ? 'MANUAL HEADLAND' : turnAssistActive ? uTurnStage : autoUTurnArmed ? (uTurnDistanceToTriggerM == null ? 'ARMED / TAP TO CANCEL' : `${uTurnDistanceToTriggerM.toFixed(1)} M TO TURN`) : 'ONE / AUTO / SMART'}</span>
+                                <span className={`block whitespace-nowrap text-[10px] font-bold tracking-[0.06em] ${runtimeTurnAccentClass}`}>{runtimeTurnModeTitle}</span>
+                                <span className={`mt-0.5 hidden xl:block max-w-[134px] truncate text-[9px] font-bold leading-none ${runtimeTurnTone === 'READY' ? t.textSub : runtimeTurnAccentClass}`}>{runtimeTurnSubtitle}</span>
                             </span>
                         </button>
                         <button
@@ -15873,7 +16886,7 @@ const renderLinesPanel = () => {
                             </span>
                             <span className="min-w-0">
                                 <span className="block whitespace-nowrap text-[10px] font-bold tracking-[0.06em]">COVERAGE</span>
-                                <span className={`mt-0.5 hidden xl:block text-[9px] font-bold leading-none ${isRecording ? 'text-red-500' : t.textSub}`}>{isRecording ? 'RECORDING' : 'READY'}</span>
+                                <span className={`mt-0.5 hidden xl:block text-[9px] font-bold leading-none ${isRecording ? 'text-red-500' : t.textSub}`}>{isRecording ? (turnCoverageSuppressed ? 'ARMED / TURN PAUSE' : 'RECORDING') : 'READY'}</span>
                             </span>
                         </button>
                     </div>
@@ -16019,12 +17032,18 @@ const renderLinesPanel = () => {
                                 </div>
                             </div>
                             <h3 className={`text-xl font-bold ${t.textMain} mb-2`}>
-                                {boundaryAlertType === 'AUTO_CLOSE' ? 'Close boundary?' : 'Boundary not closed'}
+                                {boundaryAlertType === 'AUTO_CLOSE'
+                                    ? 'Close boundary?'
+                                    : boundaryAlertType === 'TOO_SHORT'
+                                        ? 'Boundary is too short'
+                                        : 'Boundary not closed'}
                             </h3>
                             <p className={`${t.textSub} mb-6`}>
                                 {boundaryAlertType === 'AUTO_CLOSE'
                                     ? 'Vehicle is near starting point. Do you want to automatically connect boundary into a closed loop?'
-                                    : 'Vehicle has not crossed the old boundary line. Do you want to continue running to complete or cancel?'}
+                                    : boundaryAlertType === 'TOO_SHORT'
+                                        ? 'Record at least 5 m and 3 distinct points before finishing this boundary.'
+                                        : 'Vehicle is still far from the start marker. Continue along the dashed return guide or cancel this capture.'}
                             </p>
 
                             <div className="flex justify-center gap-3">
@@ -16033,10 +17052,16 @@ const renderLinesPanel = () => {
                                         <button onClick={() => handleBoundaryAlertConfirm('NO')} className={`px-6 py-2 rounded-lg border ${t.borderCard} ${t.textSub} font-bold`}>Continue running</button>
                                         <button onClick={() => handleBoundaryAlertConfirm('YES')} className="px-6 py-2 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500">Close loop</button>
                                     </>
+                                ) : boundaryAlertType === 'TOO_SHORT' ? (
+                                    <>
+                                        <button onClick={() => handleBoundaryAlertConfirm('CANCEL')} className={`px-6 py-2 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold`}>Cancel capture</button>
+                                        <button onClick={() => handleBoundaryAlertConfirm('CONTINUE')} className="px-6 py-2 rounded-lg bg-orange-500 text-white font-bold hover:bg-orange-400">Continue recording</button>
+                                    </>
                                 ) : (
                                     <>
                                         <button onClick={() => handleBoundaryAlertConfirm('CANCEL')} className={`px-6 py-2 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 font-bold`}>Cancel</button>
                                         <button onClick={() => handleBoundaryAlertConfirm('CONTINUE')} className="px-6 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500">Continue running</button>
+                                        <button onClick={() => handleBoundaryAlertConfirm('CLOSE')} className="px-6 py-2 rounded-lg bg-green-600 text-white font-bold hover:bg-green-500">Close loop</button>
                                     </>
                                 )}
                             </div>
@@ -16141,6 +17166,24 @@ const renderLinesPanel = () => {
                     </aside>
                 )}
             </main>
+            {notification && (
+                <div
+                    data-app-notification
+                    role={notification.type === 'error' ? 'alert' : 'status'}
+                    aria-live={notification.type === 'error' ? 'assertive' : 'polite'}
+                    className={`pointer-events-none absolute left-1/2 top-[98px] z-[90] max-w-[520px] -translate-x-1/2 rounded-xl border px-4 py-2.5 text-sm font-bold text-white shadow-2xl backdrop-blur-md ${
+                        notification.type === 'error'
+                            ? 'border-red-300/60 bg-red-700/95'
+                            : notification.type === 'warning'
+                                ? 'border-amber-200/60 bg-amber-600/95'
+                                : notification.type === 'success'
+                                    ? 'border-emerald-200/60 bg-emerald-700/95'
+                                    : 'border-blue-200/60 bg-blue-700/95'
+                    }`}
+                >
+                    {notification.msg}
+                </div>
+            )}
         </div>
     </div>
   );

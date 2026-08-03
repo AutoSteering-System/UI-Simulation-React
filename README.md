@@ -2,6 +2,18 @@
 
 This project is plain HTML + React (via CDN) and loads icons from `src/assets/icons`.
 Because icons are loaded with `fetch`, you must serve the folder with a local web server.
+JSX is precompiled into `dist/browser`, so the browser can render immediately without
+running Babel on every page load.
+
+## After editing JSX
+
+Run the local build before refreshing Live Server:
+
+```bash
+npm run build
+```
+
+The build uses the bundled Babel runtime in `libs/babel.js`; no package install is required.
 
 ## Option 1: VS Code Live Server (recommended)
 1. Open `main.html` in VS Code.

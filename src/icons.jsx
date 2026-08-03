@@ -13,6 +13,7 @@ const Target = makeIconComponent('target');
 const Signal = makeIconComponent('signal');
 const Play = makeIconComponent('play');
 const Pause = makeIconComponent('pause');
+const Repeat2 = makeIconComponent('repeat-2');
 const ArrowLeftRight = makeIconComponent('arrow-left-right');
 const CornerUpLeft = makeIconComponent('corner-up-left');
 const CornerUpRight = makeIconComponent('corner-up-right');

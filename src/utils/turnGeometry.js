@@ -188,43 +188,43 @@
         return builder;
     };
 
-    const buildOmegaTurn = (laneOffset, radius) => {
+    // Adjacent passes closer than 2R cannot be joined by a simple semicircle.
+    // Use a one-sided keyhole/bulb connector. The current guidance pass is the
+    // entry stem: begin the turn at its headland trigger, make the large loop
+    // entirely toward the selected pass, then re-enter that pass behind the
+    // trigger. This preserves the calibrated radius without flaring across the
+    // already-worked side or drawing a duplicate straight entry segment.
+    const buildOneSidedBulbTurn = (laneOffset, radius) => {
         const builder = createPathBuilder(radius);
-        const firstCenter = { v: -radius, s: 0 };
-        const lastCenter = { v: laneOffset + radius, s: 0 };
-        const centerDistance = laneOffset + radius * 2;
-        const middleCenter = {
-            v: laneOffset / 2,
-            s: Math.sqrt(Math.max(0, radius * radius * 4 - centerDistance * centerDistance / 4))
-        };
-        const firstTangent = {
-            v: (firstCenter.v + middleCenter.v) / 2,
-            s: (firstCenter.s + middleCenter.s) / 2
-        };
-        const secondTangent = {
-            v: (middleCenter.v + lastCenter.v) / 2,
-            s: (middleCenter.s + lastCenter.s) / 2
-        };
-        const firstEndAngle = Math.atan2(firstTangent.s - firstCenter.s, firstTangent.v - firstCenter.v);
-        const middleStartAngle = Math.atan2(firstTangent.s - middleCenter.s, firstTangent.v - middleCenter.v);
-        const middleEndAngle = Math.atan2(secondTangent.s - middleCenter.s, secondTangent.v - middleCenter.v);
-        const lastStartAngle = Math.atan2(secondTangent.s - lastCenter.s, secondTangent.v - lastCenter.v);
+        const exitCorrectionAngle = Math.acos(clamp(laneOffset / (radius * 2), 0, 1));
+        const exitSetback = radius * 2 * Math.sin(exitCorrectionAngle);
 
-        builder.appendArc(firstCenter, radius, 0, counterClockwiseSweep(0, firstEndAngle), {
-            gear: 'FORWARD',
-            steer: 'AWAY_FROM_TARGET',
-            phase: 'OPEN'
-        });
-        builder.appendArc(middleCenter, radius, middleStartAngle, clockwiseSweep(middleStartAngle, middleEndAngle), {
-            gear: 'FORWARD',
-            steer: 'TOWARD_TARGET',
-            phase: 'LOOP'
-        });
-        builder.appendArc(lastCenter, radius, lastStartAngle, counterClockwiseSweep(lastStartAngle, Math.PI), {
-            gear: 'FORWARD',
-            steer: 'AWAY_FROM_TARGET',
-            phase: 'CLOSE'
-        });
+        // The long clockwise arc is the visible one-sided keyhole bulb. It begins
+        // tangent to the entry pass and continues beyond 180 degrees until it
+        // reaches the external tangent shared with the exit-alignment circle.
+        builder.appendArc(
+            { v: radius, s: 0 },
+            radius,
+            Math.PI,
+            -(Math.PI + exitCorrectionAngle),
+            {
+                gear: 'FORWARD',
+                steer: 'TOWARD_TARGET',
+                phase: 'ONE_SIDED_BULB'
+            }
+        );
+
+        builder.appendArc(
+            { v: laneOffset + radius, s: -exitSetback },
+            radius,
+            Math.PI - exitCorrectionAngle,
+            exitCorrectionAngle,
+            {
+                gear: 'FORWARD',
+                steer: 'AWAY_FROM_TARGET',
+                phase: 'EXIT_ALIGN'
+            }
+        );
         return builder;
     };
 
@@ -291,19 +291,32 @@
         const laneOffset = laneSpacingPx * passDelta;
         const normalizedPattern = String(options.pattern || '').trim().toUpperCase().replace(/[^A-Z]/g, '_');
         const isFishTail = normalizedPattern.includes('FISH');
+        const forwardBulbExplicitlyRequested = normalizedPattern.includes('OMEGA')
+            || normalizedPattern.includes('BULB')
+            || normalizedPattern.includes('KEYHOLE')
+            || normalizedPattern.includes('ONE_SIDED');
         // A fish-tail degenerates to a zero-length reverse cusp once the target
         // pass is at least 2R away. In that case the safer and shorter result is
         // the ordinary forward U that already fits the available lane spacing.
         const fishTailRequired = isFishTail && laneOffset + EPSILON < minimumRadius * 2;
-        const shape = fishTailRequired ? 'FISH_TAIL' : (laneOffset + EPSILON >= minimumRadius * 2 ? 'U' : 'OMEGA');
+        if (!fishTailRequired
+            && laneOffset + EPSILON < minimumRadius * 2
+            && !forwardBulbExplicitlyRequested) {
+            return invalidResult('FORWARD_U_SPACING_TOO_NARROW');
+        }
+        const shape = fishTailRequired
+            ? 'FISH_TAIL'
+            : laneOffset + EPSILON >= minimumRadius * 2
+                ? 'U'
+                : 'FORWARD_BULB';
 
         let builder;
         let actualRadius = minimumRadius;
         let cuspPoints = [];
         if (shape === 'U') {
             builder = buildUTurn(laneOffset, minimumRadius);
-        } else if (shape === 'OMEGA') {
-            builder = buildOmegaTurn(laneOffset, minimumRadius);
+        } else if (shape === 'FORWARD_BULB') {
+            builder = buildOneSidedBulbTurn(laneOffset, minimumRadius);
         } else {
             const fishTail = buildFishTailTurn(laneOffset, minimumRadius);
             builder = fishTail.builder;
@@ -1188,9 +1201,9 @@
         // Interior portions deeper than this band are working rows. Transit may
         // cross a completed row only inside this headland zone.
         const headlandBandDepth = safetyMargin + Math.max(
-            // Tight-spacing omega turns can reach roughly 2.6R into the
-            // headland before reversing their heading. Keep a conservative
-            // 3R envelope so those valid connectors are not rejected.
+            // A one-sided keyhole can sweep laterally to 2R while its tractor
+            // centre reaches R forward of the trigger. Keep a conservative 3R
+            // band for the implement envelope and safety clearance.
             minimumRadius * 3,
             laneSpacingPx * 1.5
         );

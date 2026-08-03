@@ -91,7 +91,7 @@ const TractorVehicle2D = ({ mode, steeringAngle, implementWidth, vehicleSettings
   );
 };
 
-const TractorVehicle3DStyled = ({ mode, steeringAngle, implementWidth, vehicleSettings }) => {
+const TractorVehicle3DStyled = ({ mode, steeringAngle, implementWidth, implementDepthScale = 1, vehicleSettings }) => {
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const cx = VEHICLE_VIEWPORT_WIDTH / 2;
   const bodyColor = mode === 'AUTO' ? '#22c55e' : '#2563eb';
@@ -100,7 +100,9 @@ const TractorVehicle3DStyled = ({ mode, steeringAngle, implementWidth, vehicleSe
   const rearTrack = clamp((vehicleSettings?.rearAxleWidth || 2.65) * 40, 96, 118);
   const frontTrack = clamp((vehicleSettings?.frontAxleWidth || 1.95) * 38, 72, 92);
   const metersToVisualUnits = 48;
-  const implementVisualWidth = Math.max(0.25, Number(implementWidth) || 3) * metersToVisualUnits;
+  const implementVisualWidth = Math.max(0.25, Number(implementWidth) || 3)
+    * metersToVisualUnits
+    * clamp(Number(implementDepthScale) || 1, 0.85, 1.35);
   const physicalVehicleWidth = Math.max(
     0.6,
     Number(vehicleSettings?.frontAxleWidth) || 0,
@@ -150,14 +152,13 @@ const TractorVehicle3DStyled = ({ mode, steeringAngle, implementWidth, vehicleSe
       <g transform={tractorWidthTransform}>
         <ellipse cx={cx} cy="152" rx="68" ry="84" fill="#0f172a" opacity="0.14" />
       </g>
-      <path d={`M${cx - 7} 174 L${cx + 7} 174 L${cx + 4} 205 L${cx - 4} 205 Z`} fill="#475569" />
-      <circle cx={cx} cy="212" r="4" fill="#f59e0b" stroke="#b45309" strokeWidth="2" />
-      <rect x={cx - implementVisualWidth / 2} y="222" width={implementVisualWidth} height="10" rx="2" fill="#f59e0b" stroke="#b45309" strokeWidth="2" />
+      <path d={`M${cx - 7} 174 L${cx + 7} 174 L${cx + 4} 199 L${cx - 4} 199 Z`} fill="#475569" />
+      <circle cx={cx} cy="203" r="4" fill="#f59e0b" stroke="#b45309" strokeWidth="2" />
+      <rect data-implement-bar="3d" x={cx - implementVisualWidth / 2} y="209" width={implementVisualWidth} height="10" rx="2" fill="#f59e0b" stroke="#b45309" strokeWidth="2" />
       {Array.from({ length: 11 }).map((_, i) => {
         const x = cx - implementVisualWidth / 2 + (implementVisualWidth / 10) * i;
-        return <line key={i} x1={x} y1="224" x2={x} y2="237" stroke="#78350f" strokeWidth="2" opacity="0.75" />;
+        return <line key={i} x1={x} y1="211" x2={x} y2="224" stroke="#78350f" strokeWidth="2" opacity="0.75" />;
       })}
-
       <g transform={tractorWidthTransform}>
         <rect x={cx - rearTrack / 2} y="147" width={rearTrack} height="10" rx="5" fill="#334155" />
         <rect x={cx - frontTrack / 2} y="88" width={frontTrack} height="7" rx="4" fill="#334155" />
@@ -640,13 +641,14 @@ const TractorVehicle3D = ({ mode, steeringAngle, implementWidth, vehicleSettings
   return <div ref={mountRef} className="drop-shadow-2xl filter" style={{ width: VEHICLE_VIEWPORT_WIDTH, height: VEHICLE_VIEWPORT_HEIGHT }} />;
 };
 
-const TractorVehicle = ({ mode, steeringAngle, implementWidth, vehicleSettings, viewMode = '2D' }) => {
+const TractorVehicle = ({ mode, steeringAngle, implementWidth, implementDepthScale = 1, vehicleSettings, viewMode = '2D' }) => {
   if (viewMode === '3D') {
     return (
       <TractorVehicle3DStyled
         mode={mode}
         steeringAngle={steeringAngle}
         implementWidth={implementWidth}
+        implementDepthScale={implementDepthScale}
         vehicleSettings={vehicleSettings}
       />
     );

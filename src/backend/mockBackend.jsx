@@ -77,12 +77,13 @@ const MockBackend = (() => {
       rearHitch: 1.10,
       hitchOffset: 0,
       hitchHeight: 0.65,
-      turnRadius: 6.5,
+      turnRadius: 4.5,
+      turnRadiusSemanticsVersion: 2,
       steeringType: 'Front axle',
       hitchType: 'Rear 3-point'
     },
     vehicleProfiles: [
-      { id: 'tractor-4wd', label: 'Tractor 4WD', detail: 'Standard rear implement tractor', type: 'Tractor 4WD', brand: 'Generic', model: 'Utility 125', controlType: 'Electronic Steering Wheel', horsepower: 125, purchaseDate: '2024-01-15', wheelbase: 2.5, frontAxleWidth: 1.95, rearAxleWidth: 2.65, frontOverhang: 1.35, rearOverhang: 1.05, overallHeight: 3.1, antennaHeight: 3.2, antennaOffset: 0, antennaToRearAxle: 1.15, gnssReceiverModel: 'AG-372', gnssLayout: 'Dual antenna horizontal', gnssAntennaCount: 2, gnssBaseline: 1.2, gnssPrimarySide: 'Left / ANT A', gnssMountPosition: 'Cab roof crossbar', gnssHeadingOffset: 0, gnssRollOffset: 0, gnssPitchOffset: 0, rearHitch: 1.1, hitchOffset: 0, hitchHeight: 0.65, turnRadius: 6.5, steeringType: 'Front axle', hitchType: 'Rear 3-point' },
+      { id: 'tractor-4wd', label: 'Tractor 4WD', detail: 'Standard rear implement tractor', type: 'Tractor 4WD', brand: 'Generic', model: 'Utility 125', controlType: 'Electronic Steering Wheel', horsepower: 125, purchaseDate: '2024-01-15', wheelbase: 2.5, frontAxleWidth: 1.95, rearAxleWidth: 2.65, frontOverhang: 1.35, rearOverhang: 1.05, overallHeight: 3.1, antennaHeight: 3.2, antennaOffset: 0, antennaToRearAxle: 1.15, gnssReceiverModel: 'AG-372', gnssLayout: 'Dual antenna horizontal', gnssAntennaCount: 2, gnssBaseline: 1.2, gnssPrimarySide: 'Left / ANT A', gnssMountPosition: 'Cab roof crossbar', gnssHeadingOffset: 0, gnssRollOffset: 0, gnssPitchOffset: 0, rearHitch: 1.1, hitchOffset: 0, hitchHeight: 0.65, turnRadius: 4.5, turnRadiusSemanticsVersion: 2, steeringType: 'Front axle', hitchType: 'Rear 3-point' },
       { id: 'articulated', label: 'Articulated', detail: 'Large articulated tractor', type: 'Articulated Tractor', brand: 'Generic', model: 'Artic 420', controlType: 'CAN Hydraulic', horsepower: 420, purchaseDate: '2023-09-20', wheelbase: 3.4, frontAxleWidth: 2.9, rearAxleWidth: 2.9, frontOverhang: 1.75, rearOverhang: 1.45, overallHeight: 3.55, antennaHeight: 3.45, antennaOffset: 0, antennaToRearAxle: 1.65, gnssReceiverModel: 'SMART7-S', gnssLayout: 'Dual antenna horizontal', gnssAntennaCount: 2, gnssBaseline: 1.6, gnssPrimarySide: 'Left / ANT A', gnssMountPosition: 'Cab roof crossbar', gnssHeadingOffset: 0, gnssRollOffset: 0, gnssPitchOffset: 0, rearHitch: 1.4, hitchOffset: 0, hitchHeight: 0.78, turnRadius: 8.0, steeringType: 'Articulated', hitchType: 'Drawbar' },
       { id: 'self-propelled', label: 'Self Propelled', detail: 'Sprayer / applicator chassis', type: 'Self Propelled', brand: 'Generic', model: 'SP 3200', controlType: 'CAN Hydraulic', horsepower: 280, purchaseDate: '2024-05-10', wheelbase: 3.0, frontAxleWidth: 3.2, rearAxleWidth: 3.2, frontOverhang: 1.6, rearOverhang: 1.25, overallHeight: 3.7, antennaHeight: 3.8, antennaOffset: 0, antennaToRearAxle: 1.4, gnssReceiverModel: 'AG-372', gnssLayout: 'Dual antenna horizontal', gnssAntennaCount: 2, gnssBaseline: 1.5, gnssPrimarySide: 'Left / ANT A', gnssMountPosition: 'Cab roof crossbar', gnssHeadingOffset: 0, gnssRollOffset: 0, gnssPitchOffset: 0, rearHitch: 0.5, hitchOffset: 0, hitchHeight: 0.72, turnRadius: 7.2, steeringType: 'Front axle', hitchType: 'Integrated' }
     ],
@@ -184,6 +185,7 @@ const MockBackend = (() => {
       direction: 'Auto',
       nextPass: 'Adjacent',
       skipPasses: 0,
+      targetSelectionVersion: 2,
       trigger: 'Manual confirm',
       startDistanceM: 18,
       turnSpeedKmh: 5.5,
@@ -276,7 +278,11 @@ const MockBackend = (() => {
             isMulti: true,
             // 3.00 m working width minus the saved 0.10 m overlap.
             trackSpacingM: 2.9,
+            spacingMode: 'FIXED',
             sourceImplementProfileId: 'planter-6r',
+            sourceWorkingWidthM: 3,
+            sourceOverlapM: 0.1,
+            sourceOverallWidthM: 3.2,
             tramline: {
               enabled: false,
               intervalPasses: 4,
@@ -339,11 +345,21 @@ const MockBackend = (() => {
         scopeIndices.set(scopeKey, scopeIndex);
       }
       const segmentId = point.segmentId ?? `SEGMENT:${scopeIndex}`;
-      const segmentKey = JSON.stringify([scopeIndex, segmentId]);
+      const coverageWidthM = Number(point.coverageWidthM);
+      const encodedCoverageWidthMm = Number.isFinite(coverageWidthM) && coverageWidthM > 0
+        ? Math.round(coverageWidthM * 1000)
+        : 0;
+      const implementProfileId = point.implementProfileId ?? null;
+      const segmentKey = JSON.stringify([
+        scopeIndex,
+        segmentId,
+        encodedCoverageWidthMm,
+        implementProfileId
+      ]);
       let segmentIndex = segmentIndices.get(segmentKey);
       if (segmentIndex === undefined) {
         segmentIndex = segments.length;
-        segments.push([segmentId, scopeIndex]);
+        segments.push([segmentId, scopeIndex, encodedCoverageWidthMm, implementProfileId]);
         segmentIndices.set(segmentKey, segmentIndex);
       }
       points.push([
@@ -353,16 +369,18 @@ const MockBackend = (() => {
         Math.round((Number(point.h) || 0) * 10)
       ]);
     });
-    return { format: 'SCOPED_XYH_V1', scopes, segments, points };
+    return { format: 'SCOPED_XYH_WIDTH_V2', scopes, segments, points };
   };
 
   const decodeCoverageTrail = (payload) => {
     if (Array.isArray(payload)) return payload;
-    if (payload?.format !== 'SCOPED_XYH_V1' || !Array.isArray(payload.points)) return [];
+    const supportedFormat = payload?.format === 'SCOPED_XYH_V1'
+      || payload?.format === 'SCOPED_XYH_WIDTH_V2';
+    if (!supportedFormat || !Array.isArray(payload.points)) return [];
     return payload.points.map((row) => {
       const segment = payload.segments?.[row?.[0]] || [null, 0];
       const scope = payload.scopes?.[segment[1]] || [null, null, null];
-      return {
+      const point = {
         x: Number(row?.[1]) / 10,
         y: Number(row?.[2]) / 10,
         h: Number(row?.[3]) / 10,
@@ -371,6 +389,14 @@ const MockBackend = (() => {
         taskId: scope[1],
         lineId: scope[2]
       };
+      if (payload.format === 'SCOPED_XYH_WIDTH_V2') {
+        const coverageWidthMm = Number(segment[2]);
+        if (Number.isFinite(coverageWidthMm) && coverageWidthMm > 0) {
+          point.coverageWidthM = coverageWidthMm / 1000;
+        }
+        point.implementProfileId = segment[3] ?? null;
+      }
+      return point;
     }).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
   };
 
@@ -399,6 +425,22 @@ const MockBackend = (() => {
     const persisted = readPersistedState();
     if (!persisted) return base;
 
+    const migrateStockTractorTurnRadius = (profile) => {
+      const profileId = profile?.profileId || profile?.id;
+      const isUntouchedStockTractor = profileId === 'tractor-4wd'
+        && profile?.brand === 'Generic'
+        && profile?.model === 'Utility 125'
+        && profile?.custom !== true
+        && profile?.isCustom !== true;
+      const usesLegacyDefault = Math.abs(Number(profile?.turnRadius) - 6.5) < 0.001;
+      if (!isUntouchedStockTractor || !usesLegacyDefault) return profile;
+      return {
+        ...profile,
+        turnRadius: 4.5,
+        turnRadiusSemanticsVersion: 2
+      };
+    };
+
     const next = {
       ...base,
       ...persisted.data,
@@ -420,6 +462,7 @@ const MockBackend = (() => {
         gnssMountPosition: 'Cab roof crossbar'
       };
     }
+    next.vehicleSettings = migrateStockTractorTurnRadius(next.vehicleSettings);
     const persistedVehicleProfiles = persisted.data.vehicleProfiles || base.vehicleProfiles;
     next.vehicleProfiles = persistedVehicleProfiles.map((profile) => {
       const baseProfile = base.vehicleProfiles.find((item) => item.id === profile.id) || base.vehicleSettings;
@@ -430,9 +473,10 @@ const MockBackend = (() => {
         gnssAntennaCount: 2,
         gnssBaseline: baseProfile.gnssBaseline || 1.2,
         gnssPrimarySide: 'Left / ANT A',
-        gnssMountPosition: 'Cab roof crossbar'
+          gnssMountPosition: 'Cab roof crossbar'
       };
     });
+    next.vehicleProfiles = next.vehicleProfiles.map(migrateStockTractorTurnRadius);
     const persistedImplementSettings = persisted.data.implementSettings || {};
     const activeImplementBase = base.implementProfiles.find((item) => item.id === persistedImplementSettings.profileId) || base.implementSettings;
     next.implementSettings = { ...base.implementSettings, ...activeImplementBase, ...persistedImplementSettings };
@@ -443,25 +487,62 @@ const MockBackend = (() => {
       ...profile,
       profileId: undefined
     }));
-    // Freeze the swath spacing on legacy saved lines at migration time. Before
-    // trackSpacingM existed, changing the active implement silently resized every
-    // historical pass; that would make a Tramline pattern move between sessions.
+    // Every saved line owns a spacing snapshot. The implement profile remains
+    // provenance only; changing that profile must not move old parallel lanes.
     const migratedTrackSpacingM = Math.max(
       0.1,
       (Number(next.implementSettings.width) || 3) - (Number(next.implementSettings.overlap) || 0)
     );
-    const migrateLine = (line) => ({
-      ...line,
-      trackSpacingM: Number(line.trackSpacingM) > 0 ? Number(line.trackSpacingM) : migratedTrackSpacingM,
-      sourceImplementProfileId: line.sourceImplementProfileId || next.implementSettings.profileId || null,
-      tramline: {
-        enabled: false,
-        intervalPasses: 4,
-        anchorPassIndex: 0,
-        visualOnly: true,
-        ...(line.tramline || {})
-      }
-    });
+    const migrateLine = (line) => {
+      const trackSpacingM = Number(line.trackSpacingM) > 0
+        ? Number(line.trackSpacingM)
+        : migratedTrackSpacingM;
+      const sourceImplementProfileId = line.sourceImplementProfileId
+        || next.implementSettings.profileId
+        || null;
+      const sourceProfile = next.implementProfiles.find(profile => profile.id === sourceImplementProfileId) || null;
+      const explicitOverlapM = Number(line.sourceOverlapM);
+      const sourceOverlapM = Number.isFinite(explicitOverlapM) && explicitOverlapM >= 0
+        ? explicitOverlapM
+        : Math.max(0, Number(sourceProfile?.overlap ?? next.implementSettings.overlap) || 0);
+      const explicitWorkingWidthM = Number(line.sourceWorkingWidthM);
+      const profileWorkingWidthM = Number(sourceProfile?.width);
+      const profileSpacingM = profileWorkingWidthM - sourceOverlapM;
+      const sourceWorkingWidthM = Number.isFinite(explicitWorkingWidthM) && explicitWorkingWidthM > 0
+        ? explicitWorkingWidthM
+        : Number.isFinite(profileWorkingWidthM)
+            && profileWorkingWidthM > 0
+            && Math.abs(profileSpacingM - trackSpacingM) <= 0.15
+          ? profileWorkingWidthM
+          : trackSpacingM + sourceOverlapM;
+      const explicitOverallWidthM = Number(line.sourceOverallWidthM);
+      const profileOverallWidthM = Number(sourceProfile?.overallWidth);
+      const sourceOverallWidthM = Math.max(
+        sourceWorkingWidthM,
+        Number.isFinite(explicitOverallWidthM) && explicitOverallWidthM > 0
+          ? explicitOverallWidthM
+          : Number.isFinite(profileOverallWidthM)
+              && profileOverallWidthM >= sourceWorkingWidthM
+            ? profileOverallWidthM
+            : sourceWorkingWidthM
+      );
+      return {
+        ...line,
+        trackSpacingM,
+        spacingMode: 'FIXED',
+        sourceImplementProfileId,
+        sourceWorkingWidthM,
+        sourceOverlapM,
+        sourceOverallWidthM,
+        tramline: {
+          enabled: false,
+          intervalPasses: 4,
+          anchorPassIndex: 0,
+          visualOnly: true,
+          ...(line.tramline || {})
+        }
+      };
+    };
     next.fields = (next.fields || []).map((field) => ({
       ...field,
       lines: (field.lines || []).map(migrateLine)
@@ -483,11 +564,32 @@ const MockBackend = (() => {
     next.coverageTrail = (next.coverageTrail || []).map((point, index) => {
       const hasScope = Object.prototype.hasOwnProperty.call(point || {}, 'fieldId')
         || Object.prototype.hasOwnProperty.call(point || {}, 'lineId');
-      if (hasScope) return point;
+      const scopedPoint = hasScope ? point : {
+          ...point,
+          ...legacyCoverageScope,
+          segmentId: `LEGACY:${legacyCoverageScope.fieldId || 'NO_FIELD'}:${legacyCoverageScope.lineId || 'NO_LINE'}:${point?.segmentId ?? index}`
+      };
+      const sourceField = next.fields.find(field => field.id === scopedPoint.fieldId)
+        || next.loadedField
+        || null;
+      const sourceLine = (sourceField?.lines || []).find(line => line.id === scopedPoint.lineId)
+        || null;
+      const implementProfileId = scopedPoint.implementProfileId
+        || sourceLine?.sourceImplementProfileId
+        || next.implementSettings.profileId
+        || null;
+      const sourceProfile = next.implementProfiles.find(profile => profile.id === implementProfileId) || null;
+      const savedCoverageWidthM = Number(scopedPoint.coverageWidthM);
+      const inferredCoverageWidthM = Number(sourceLine?.sourceWorkingWidthM)
+        || Number(sourceProfile?.width)
+        || Number(next.implementSettings.width)
+        || 3;
       return {
-        ...point,
-        ...legacyCoverageScope,
-        segmentId: `LEGACY:${legacyCoverageScope.fieldId || 'NO_FIELD'}:${legacyCoverageScope.lineId || 'NO_LINE'}:${point?.segmentId ?? index}`
+        ...scopedPoint,
+        coverageWidthM: Number.isFinite(savedCoverageWidthM) && savedCoverageWidthM > 0
+          ? savedCoverageWidthM
+          : Math.max(0.25, inferredCoverageWidthM),
+        implementProfileId
       };
     });
     next.rtkSettings = { ...base.rtkSettings, ...(persisted.data.rtkSettings || {}) };
@@ -500,9 +602,19 @@ const MockBackend = (() => {
       next.uTurnSettings.mode = legacyPattern === 'Smart U-Turn' ? 'SMART' : 'ONE_KEY';
       next.uTurnSettings.pattern = legacyPattern === 'Fish Tail'
         ? 'FISH_TAIL'
-        : legacyPattern === 'Basic Omega'
-          ? 'OMEGA'
-          : 'AUTO';
+        : 'AUTO';
+    }
+    if (next.uTurnSettings.pattern === 'Basic Omega' || next.uTurnSettings.pattern === 'OMEGA') {
+      next.uTurnSettings.pattern = 'AUTO';
+    }
+    // Earlier builds persisted the temporary "Skip 2 / forward U" fallback
+    // globally. Normal Forward U now keeps the adjacent target with a validated
+    // bulb when needed, so migrate the old target policy once; future explicit
+    // Skip choices remain untouched.
+    if (Number(persisted.data.uTurnSettings?.targetSelectionVersion || 0) < 2) {
+      next.uTurnSettings.nextPass = 'Adjacent';
+      next.uTurnSettings.skipPasses = 0;
+      next.uTurnSettings.targetSelectionVersion = 2;
     }
     next.systemHealth = { ...base.systemHealth, ...(persisted.data.systemHealth || {}) };
     next.gnssTelemetry = { ...base.gnssTelemetry, ...(persisted.data.gnssTelemetry || {}) };
