@@ -3003,9 +3003,12 @@ const App = () => {
       const safeModulus = Math.max(1, Math.round(Number(modulus) || 1));
       return ((Math.round(Number(value) || 0) % safeModulus) + safeModulus) % safeModulus;
   };
-  const isTramlinePass = (passIndex, config = activeTramline) => Boolean(
-      config?.enabled
+  const isTramlinePatternPass = (passIndex, config = activeTramline) => Boolean(
+      config
       && normalizedModulo(passIndex - (Number(config.anchorPassIndex) || 0), config.intervalPasses) === 0
+  );
+  const isTramlinePass = (passIndex, config = activeTramline) => Boolean(
+      config?.enabled && isTramlinePatternPass(passIndex, config)
   );
 
   useEffect(() => {
@@ -3041,6 +3044,13 @@ const App = () => {
   const liveGuidanceDirectionFactor = getGuidanceDirectionFactor(liveGuide, { ...worldPos, heading });
   const liveGuidanceDisplayFactor = liveGuide.type === 'PIVOT' ? 1 : liveGuidanceDirectionFactor;
   const hasGuidanceToEngage = Boolean((guidanceLine || activeLineRecord || liveGuide.type) && liveGuidanceMetrics.validLine);
+  const lineShiftPreviewType = guidanceLine || activeLineRecord?.type || lineType;
+  const lineShiftPreviewDisplayMeters = (dockShiftDirection === 'left' ? -1 : 1)
+      * Math.min(99.99, Math.max(0, Number(dockShiftDistanceM) || 0));
+  const lineShiftPreviewOffsetPx = lineShiftPreviewDisplayMeters
+      * (lineShiftPreviewType === 'PIVOT' ? 1 : liveGuidanceDirectionFactor)
+      * PIXELS_PER_METER;
+  const lineShiftPreviewActive = dockQuickPicker === 'line-shift' && hasGuidanceToEngage;
   const getAxisHeadingError = (lineHeading, vehicleHeading) => {
       let diff = normalizeAngle(lineHeading - vehicleHeading);
       if (Math.abs(diff) > 90) diff = normalizeAngle(lineHeading + 180 - vehicleHeading);
@@ -5490,7 +5500,11 @@ const App = () => {
           ?? (turnConfig.direction === 'Left' ? -1 : turnConfig.direction === 'Right' ? 1 : undefined);
       const plan = displayedUTurnPlan;
       const currentPass = activeLaneRef.current ?? manualLaneRef.current ?? livePassIndex;
-      const currentIsTramline = isTramlinePass(currentPass);
+      const currentMatchesTramlinePattern = isTramlinePatternPass(currentPass);
+      const tramlineIntervalPasses = Math.max(2, Math.round(Number(activeTramline.intervalPasses) || 4));
+      const tramlinePreviewOffsets = Array.from({ length: 17 }, (_, index) => index - 8);
+      const nextTramlineDelta = Array.from({ length: tramlineIntervalPasses }, (_, index) => index)
+          .find(delta => isTramlinePatternPass(currentPass + delta));
       const smartRoutePartial = turnConfig.mode === 'SMART'
           && plan?.feasible
           && plan?.routeCompleteness === 'PARTIAL';
@@ -5666,22 +5680,23 @@ const App = () => {
               data-tramline-panel={uTurnPanelTab === 'TRAMLINE' ? 'true' : undefined}
               style={{
                   maxWidth: 'calc(100% - 24px)',
-                  ...(uTurnPanelTab === 'TURN' ? { bottom: 'auto', maxHeight: 'calc(100% - 198px)' } : {})
+                  bottom: 'auto',
+                  maxHeight: 'calc(100% - 198px)'
               }}
-              className={`absolute right-3 top-[96px] ${uTurnPanelTab === 'TRAMLINE' ? 'bottom-[102px]' : ''} z-[45] w-[360px] rounded-2xl border border-t-4 ${uTurnPanelTab === 'TRAMLINE' ? 'border-yellow-500/60' : 'border-blue-500/60'} ${t.bgCard} shadow-2xl overflow-hidden flex flex-col`}
+              className={`absolute right-3 top-[96px] z-[45] w-[360px] rounded-2xl border ${uTurnPanelTab === 'TRAMLINE' ? t.borderCard : 'border-t-4 border-blue-500/60'} ${t.bgCard} shadow-2xl overflow-hidden flex flex-col`}
           >
               <div className={`shrink-0 h-[54px] px-3 border-b ${t.divider} flex items-center justify-between gap-3`}>
                   <div className="min-w-0 flex items-center gap-2.5">
-                      <div className={`shrink-0 w-9 h-9 rounded-xl ${uTurnPanelTab === 'TRAMLINE' ? 'bg-yellow-500/20' : 'bg-blue-500/10'} flex items-center justify-center`}>
+                      <div className={`shrink-0 w-9 h-9 rounded-xl ${uTurnPanelTab === 'TRAMLINE' ? (theme === 'dark' ? 'bg-slate-900 text-fuchsia-400' : 'bg-slate-100 text-fuchsia-600') : 'bg-blue-500/10 text-blue-500'} flex items-center justify-center`}>
                           {uTurnPanelTab === 'TRAMLINE'
-                              ? <AlignJustify className="w-[18px] h-[18px] text-yellow-500" />
-                              : <CornerUpLeft className="w-[18px] h-[18px] text-blue-500" />}
+                              ? <AlignJustify className="w-[18px] h-[18px]" />
+                              : <CornerUpLeft className="w-[18px] h-[18px]" />}
                       </div>
                       <div className="min-w-0">
-                          <div className={`text-[9px] uppercase tracking-[0.08em] font-black ${uTurnPanelTab === 'TRAMLINE' ? 'text-yellow-500' : 'text-blue-500'}`}>
-                              {uTurnPanelTab === 'TRAMLINE' ? 'Traffic pattern' : 'U-turn control'}
+                          <div className={`text-[9px] uppercase tracking-[0.08em] font-black ${uTurnPanelTab === 'TRAMLINE' ? t.textSub : 'text-blue-500'}`}>
+                              {uTurnPanelTab === 'TRAMLINE' ? 'Pattern setup' : 'U-turn control'}
                           </div>
-                          <div className={`text-sm font-black truncate ${t.textMain}`}>{uTurnPanelTab === 'TRAMLINE' ? 'Tramline setup' : modeTitle}</div>
+                          <div className={`text-sm font-black truncate ${t.textMain}`}>{uTurnPanelTab === 'TRAMLINE' ? 'Tramline' : modeTitle}</div>
                       </div>
                   </div>
                   <button aria-label={uTurnPanelTab === 'TRAMLINE' ? 'Close Tramline setup' : 'Close U-turn controls'} onClick={closePanel} className={`w-9 h-9 rounded-lg border ${t.borderCard} ${t.textMain} flex items-center justify-center`}>
@@ -5770,56 +5785,85 @@ const App = () => {
                       </div>
                   </div>
               ) : (
-                  <div className="flex-1 min-h-0 p-3 flex flex-col gap-2.5">
-                      <div className="rounded-xl border border-yellow-500/35 bg-yellow-500/10 px-3 py-2.5">
-                          <div className="text-[10px] font-black text-yellow-500">TRAFFIC-LANE PATTERN ONLY</div>
-                          <div className={`mt-0.5 text-[9px] font-bold leading-snug ${t.textSub}`}>Defines recurring machine lanes. It does not arm or start a U-turn.</div>
-                      </div>
+                  <div className="flex-1 min-h-0 overflow-y-auto p-2">
                       {!tramlineSupported || !activeLineRecord ? (
                           <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 p-3">
                               <div className="text-[10px] font-black text-amber-500">SAVED AB, A+ OR CURVE REQUIRED</div>
-                              <div className={`mt-1 text-[9px] font-bold ${t.textSub}`}>F200 Tramline is not available on Pivot or Combination lines.</div>
+                              <div className={`mt-1 text-[9px] font-bold ${t.textSub}`}>Tramline is not available on Pivot or Combination lines.</div>
                           </div>
                       ) : (
                           <>
-                              <div className={`rounded-xl border ${activeTramline.enabled ? 'border-yellow-500/45 bg-yellow-500/10' : t.borderCard} px-3 py-2 flex items-center justify-between gap-3`}>
-                                  <div className="min-w-0">
-                                      <div className={`text-[10px] font-black ${t.textMain}`}>TRAMLINE ROUTING</div>
-                                      <div className={`text-[8px] font-bold ${t.textSub}`}>Blue work / yellow traffic / active pass bold</div>
+                              <div className={`overflow-hidden rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/55' : 'bg-slate-50/70'}`}>
+                                  <div className={`flex items-center gap-3 px-3 py-2.5 border-b ${t.divider}`}>
+                                      <div className="min-w-0 flex-1">
+                                          <div className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Tramline routing</div>
+                                          <div className="mt-0.5 flex min-w-0 items-center gap-2">
+                                              <span className={`text-[11px] font-black ${t.textMain}`}>Every {tramlineIntervalPasses} passes</span>
+                                              <span className={`truncate text-[8px] font-bold ${t.textDim}`}>· {(activeTrackSpacingM * tramlineIntervalPasses).toFixed(2)} m</span>
+                                          </div>
+                                      </div>
+                                      <span className={`text-[8px] font-black uppercase ${activeTramline.enabled ? 'text-fuchsia-500' : t.textDim}`}>{activeTramline.enabled ? 'On' : 'Off'}</span>
+                                      <button aria-label="Enable Tramline routing" aria-pressed={activeTramline.enabled} onClick={() => updateActiveTramline({ enabled: !activeTramline.enabled })} className={`shrink-0 w-11 h-6 rounded-full p-0.5 transition-colors ${activeTramline.enabled ? 'bg-fuchsia-500' : 'bg-slate-400'}`}>
+                                          <span className={`block w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${activeTramline.enabled ? 'translate-x-5' : ''}`} />
+                                      </button>
                                   </div>
-                                  <button aria-label="Enable Tramline routing" aria-pressed={activeTramline.enabled} onClick={() => updateActiveTramline({ enabled: !activeTramline.enabled })} className={`shrink-0 w-12 h-7 rounded-full p-1 ${activeTramline.enabled ? 'bg-yellow-500' : 'bg-slate-400'}`}>
-                                      <span className={`block w-5 h-5 rounded-full bg-white shadow transform transition-transform ${activeTramline.enabled ? 'translate-x-5' : ''}`} />
-                                  </button>
-                              </div>
 
-                              <div>
-                                  <div className={`mb-1.5 flex items-center justify-between text-[9px] font-black uppercase ${t.textSub}`}><span>Interval</span><span className="text-yellow-500">{activeTrackSpacingM.toFixed(2)} m × {Math.max(2, Number(activeTramline.intervalPasses) || 4)} = {(activeTrackSpacingM * Math.max(2, Number(activeTramline.intervalPasses) || 4)).toFixed(2)} m</span></div>
-                                  <div className="grid grid-cols-5 gap-1.5">
-                                      {[3, 4, 6, 8].map(interval => <button key={interval} onClick={() => updateActiveTramline({ intervalPasses: interval })} className={`h-9 rounded-lg border text-[10px] font-black ${activeTramline.intervalPasses === interval ? 'border-yellow-500 bg-yellow-500 text-slate-950' : `${t.borderCard} ${t.textMain}`}`}>{interval}</button>)}
-                                      <input aria-label="Custom Tramline interval" type="number" min="2" max="50" value={Math.max(2, Number(activeTramline.intervalPasses) || 4)} onChange={(event) => updateActiveTramline({ intervalPasses: Math.max(2, Math.min(50, Math.round(Number(event.target.value) || 2))) })} className={`h-9 min-w-0 rounded-lg border px-1 text-center text-[10px] font-black ${t.borderCard} ${t.bgInput} ${t.textMain}`} />
+                                  <div className={`px-3 py-2.5 border-b ${t.divider}`}>
+                                      <div className={`mb-1.5 flex items-center justify-between text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>
+                                          <span>Spacing</span>
+                                          <span>{activeTrackSpacingM.toFixed(2)} m working pass</span>
+                                      </div>
+                                      <div className="grid grid-cols-5 gap-1">
+                                          {[3, 4, 6, 8].map(interval => (
+                                              <button key={interval} aria-label={`Set a tramline every ${interval} passes`} aria-pressed={tramlineIntervalPasses === interval} onClick={() => updateActiveTramline({ intervalPasses: interval })} className={`h-9 rounded-lg border text-[10px] font-black ${tramlineIntervalPasses === interval ? 'border-fuchsia-600 bg-fuchsia-600 text-white shadow-sm' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} ${t.textMain}`}`}>
+                                                  {interval}
+                                              </button>
+                                          ))}
+                                          <label className={`h-9 min-w-0 rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} flex flex-col items-center justify-center`}>
+                                              <input aria-label="Custom Tramline interval in passes" type="number" min="2" max="50" placeholder="—" value={[3, 4, 6, 8].includes(tramlineIntervalPasses) ? '' : tramlineIntervalPasses} onChange={(event) => { if (event.target.value !== '') updateActiveTramline({ intervalPasses: Math.max(2, Math.min(50, Math.round(Number(event.target.value) || 2))) }); }} className={`w-full min-w-0 bg-transparent text-center text-[10px] font-black leading-none outline-none placeholder:${t.textDim} ${t.textMain}`} />
+                                              <span className={`mt-0.5 text-[6px] font-black uppercase leading-none ${t.textDim}`}>Other</span>
+                                          </label>
+                                      </div>
+                                  </div>
+
+                                  <div className="px-3 py-2.5">
+                                      <div className="flex items-center justify-between gap-2">
+                                          <span className={`text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>First tramline</span>
+                                          <span className={`text-[8px] font-black ${currentMatchesTramlinePattern ? 'text-fuchsia-500' : t.textSub}`}>
+                                              Pass {currentPass >= 0 ? '+' : ''}{currentPass} · {currentMatchesTramlinePattern ? 'TRAMLINE' : 'WORK'}
+                                          </span>
+                                      </div>
+                                      <div
+                                          data-tramline-preview="true"
+                                          data-tramline-interval={tramlineIntervalPasses}
+                                          className={`mt-1.5 h-[64px] rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} grid gap-0.5 px-2 py-1.5`}
+                                          style={{ gridTemplateColumns: `repeat(${tramlinePreviewOffsets.length}, minmax(0, 1fr))` }}
+                                      >
+                                          {tramlinePreviewOffsets.map(index => {
+                                              const pass = currentPass + index;
+                                              const tram = isTramlinePatternPass(pass);
+                                              const current = index === 0;
+                                              return (
+                                                  <span key={pass} data-tramline-pass={pass} data-tramline-rail={tram ? 'true' : 'false'} className={`min-w-0 rounded flex flex-col items-center justify-end gap-1 transition-colors ${current ? 'ring-1 ring-blue-500/60 bg-blue-500/5' : ''}`}>
+                                                      <span className={`min-h-[7px] text-[6px] font-black tabular-nums ${current ? 'text-blue-500' : tram ? 'text-fuchsia-500' : t.textDim}`}>{tram || current ? (pass >= 0 ? `+${pass}` : pass) : ''}</span>
+                                                      <span className={`w-[3px] rounded-full transition-all duration-200 ${tram ? 'h-8 bg-fuchsia-500' : `h-3 ${theme === 'dark' ? 'bg-slate-600' : 'bg-slate-300'}`}`} />
+                                                  </span>
+                                              );
+                                          })}
+                                      </div>
+                                      <div className={`mt-1.5 text-center text-[8px] font-bold ${t.textSub}`}>
+                                          {nextTramlineDelta === 0 ? 'Pattern is aligned with the current pass' : `Next tramline in ${nextTramlineDelta} pass${nextTramlineDelta === 1 ? '' : 'es'}`}
+                                      </div>
+                                      <div className="mt-1.5 grid grid-cols-[40px_minmax(0,1fr)_40px] gap-1.5">
+                                          <button aria-label="Move Tramline pattern one pass left" onClick={() => updateActiveTramline({ anchorPassIndex: (Number(activeTramline.anchorPassIndex) || 0) - 1 })} className={`h-10 rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} ${t.textMain} text-sm font-black`}>←</button>
+                                          <button onClick={setCurrentPassAsTramline} className={`h-10 min-w-0 rounded-lg border text-[9px] font-black ${activeTramline.enabled ? `border-fuchsia-500/40 ${theme === 'dark' ? 'bg-fuchsia-500/10 text-fuchsia-300' : 'bg-fuchsia-50 text-fuchsia-700'}` : 'border-fuchsia-500 bg-fuchsia-600 text-white'}`}>{activeTramline.enabled ? 'USE CURRENT PASS' : 'USE CURRENT & TURN ON'}</button>
+                                          <button aria-label="Move Tramline pattern one pass right" onClick={() => updateActiveTramline({ anchorPassIndex: (Number(activeTramline.anchorPassIndex) || 0) + 1 })} className={`h-10 rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} ${t.textMain} text-sm font-black`}>→</button>
+                                      </div>
                                   </div>
                               </div>
-
-                              <div className={`h-12 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-slate-50'} flex items-end justify-center gap-4 px-4 pb-2`}>
-                                  {[-3, -2, -1, 0, 1, 2, 3].map(index => {
-                                      const pass = (Number(activeTramline.anchorPassIndex) || 0) + index;
-                                      const tram = isTramlinePass(pass);
-                                      return <span key={pass} className={`w-[2px] rounded-full ${tram ? 'h-8 bg-yellow-400' : 'h-6 bg-blue-400'} ${pass === currentPass ? 'ring-2 ring-white ring-offset-1 ring-offset-slate-700' : ''}`} />;
-                                  })}
-                              </div>
-
-                              <div className="grid grid-cols-3 gap-2">
-                                  <button onClick={() => updateActiveTramline({ anchorPassIndex: (Number(activeTramline.anchorPassIndex) || 0) - 1 })} className={`h-10 rounded-xl border ${t.borderCard} ${t.textMain} text-[9px] font-black`}>SHIFT −1</button>
-                                  <button onClick={setCurrentPassAsTramline} className="h-10 rounded-xl bg-yellow-500 text-slate-950 text-[9px] font-black">SET CURRENT</button>
-                                  <button onClick={() => updateActiveTramline({ anchorPassIndex: (Number(activeTramline.anchorPassIndex) || 0) + 1 })} className={`h-10 rounded-xl border ${t.borderCard} ${t.textMain} text-[9px] font-black`}>SHIFT +1</button>
-                              </div>
-
-                              <div className={`rounded-lg px-2.5 py-2 text-[9px] font-bold ${currentIsTramline ? 'bg-yellow-500/12 text-yellow-500' : theme === 'dark' ? 'bg-blue-500/10 text-blue-300' : 'bg-blue-50 text-blue-700'}`}>
-                                  Pass {currentPass >= 0 ? '+' : ''}{currentPass} · {currentIsTramline ? 'TRAMLINE' : 'WORK'} · routing only / no row shutoff
-                              </div>
+                              <div className={`px-2 pt-1.5 text-center text-[8px] font-bold ${t.textDim}`}>Live preview · Saved automatically · ISOBUS required for row shutoff</div>
                           </>
                       )}
-                      <div className={`mt-auto text-[8px] font-bold text-center ${t.textDim}`}>Automatic row shutoff requires live ISOBUS section control.</div>
                   </div>
               )}
           </div>
@@ -6469,6 +6513,7 @@ const App = () => {
                   strokeLinecap={options.cap || 'round'}
                   strokeLinejoin="round"
                   strokeOpacity={options.opacity ?? 1}
+                  strokeDasharray={options.dash}
                   vectorEffect="non-scaling-stroke"
               />
           );
@@ -6705,6 +6750,7 @@ const App = () => {
               strokeLinecap={options.cap || 'butt'}
               strokeLinejoin="round"
               strokeOpacity={options.opacity ?? 1}
+              strokeDasharray={options.dash}
               vectorEffect="non-scaling-stroke"
           />
       );
@@ -7082,9 +7128,9 @@ const App = () => {
       const tramline = passIndex !== null && isTramlinePass(passIndex);
       if (tramline) {
           return {
-              stroke: theme === 'dark' ? '#fde047' : '#eab308',
+              stroke: theme === 'dark' ? '#f0abfc' : '#d946ef',
               width: isActive ? 4.2 : 1.8,
-              opacity: isActive ? 1 : laneDistance <= 3 ? 0.88 : 0.68
+              opacity: isActive ? 1 : laneDistance <= 3 ? 0.92 : 0.74
           };
       }
       if (isActive) {
@@ -7156,7 +7202,7 @@ const App = () => {
               elements.push(renderProjected3DPath(
                   `boundary-${bIdx}`,
                   [...pts, pts[0]],
-                  bIdx === activeBoundaryIdx ? '#eab308' : boundaryStroke,
+                  bIdx === activeBoundaryIdx ? '#f97316' : boundaryStroke,
                   bIdx === activeBoundaryIdx ? 2.8 : 2,
                   {
                       anchoredDash: true,
@@ -7302,7 +7348,7 @@ const App = () => {
                       (i * laneSpacingPx) + effectiveGuidanceOffset,
                       visual.stroke,
                       visual.width,
-                      { opacity: visual.opacity }
+                      { opacity: visual.opacity, dash: visual.dash }
                   ));
               }
           } else {
@@ -7338,7 +7384,7 @@ const App = () => {
                       (i * laneSpacingPx) + effectiveGuidanceOffset,
                       visual.stroke,
                       visual.width,
-                      { opacity: visual.opacity }
+                      { opacity: visual.opacity, dash: visual.dash }
                   ));
               }
           } else {
@@ -7359,7 +7405,7 @@ const App = () => {
                       sampleCirclePoints(pivotCenter, radius),
                       visual.stroke,
                       visual.width,
-                      { opacity: visual.opacity, maxStep: 34, projection: guidanceProjection }
+                      { opacity: visual.opacity, maxStep: 34, projection: guidanceProjection, dash: visual.dash }
                   ));
               }
           } else {
@@ -7383,7 +7429,7 @@ const App = () => {
                       points,
                       visual.stroke,
                       visual.width,
-                      { opacity: visual.opacity, maxStep: 34, projection: guidanceProjection }
+                      { opacity: visual.opacity, maxStep: 34, projection: guidanceProjection, dash: visual.dash }
                   ));
               }
           } else {
@@ -7393,6 +7439,56 @@ const App = () => {
                   activeStroke,
                   3.4,
                   { maxStep: 34, projection: guidanceProjection }
+              ));
+          }
+      }
+
+      if (lineShiftPreviewActive) {
+          const shiftPreviewStroke = theme === 'dark' ? '#38bdf8' : '#0284c7';
+          const shiftPreviewOptions = { opacity: 1, dash: '12 7', maxStep: 34, projection: guidanceProjection };
+          const previewOffsetPx = (isMultiLineMode ? highlightedLane * activeTrackSpacingM * PIXELS_PER_METER : 0)
+              + lineShiftPreviewOffsetPx;
+          if (activeGuidanceType === 'STRAIGHT_AB' && pointA && pointB) {
+              const dx = pointB.x - pointA.x;
+              const dy = pointB.y - pointA.y;
+              const length = Math.hypot(dx, dy);
+              if (length > 0.001) {
+                  elements.push(render3DProjectedLaneLine(
+                      'line-shift-preview-3d',
+                      pointA,
+                      { x: dx / length, y: dy / length },
+                      previewOffsetPx,
+                      shiftPreviewStroke,
+                      4.8,
+                      shiftPreviewOptions
+                  ));
+              }
+          } else if (activeGuidanceType === 'A_PLUS' && aPlusPoint && aPlusHeading !== null && aPlusHeading !== undefined) {
+              const rad = aPlusHeading * Math.PI / 180;
+              elements.push(render3DProjectedLaneLine(
+                  'line-shift-preview-3d',
+                  aPlusPoint,
+                  { x: Math.sin(rad), y: -Math.cos(rad) },
+                  previewOffsetPx,
+                  shiftPreviewStroke,
+                  4.8,
+                  shiftPreviewOptions
+              ));
+          } else if (activeGuidanceType === 'PIVOT' && pivotCenter && pivotRadius + previewOffsetPx > 1) {
+              elements.push(renderProjected3DPath(
+                  'line-shift-preview-3d',
+                  sampleCirclePoints(pivotCenter, pivotRadius + previewOffsetPx),
+                  shiftPreviewStroke,
+                  4.8,
+                  shiftPreviewOptions
+              ));
+          } else if ((activeGuidanceType === 'CURVE' || activeGuidanceType === 'COMBINATION') && curvePoints.length > 1) {
+              elements.push(renderProjected3DPath(
+                  'line-shift-preview-3d',
+                  parsePolylinePoints(getOffsetPolyline(curvePoints, previewOffsetPx)),
+                  shiftPreviewStroke,
+                  4.8,
+                  shiftPreviewOptions
               ));
           }
       }
@@ -7525,6 +7621,52 @@ const App = () => {
          }
     }
 
+    const renderLineShiftPreview2D = () => {
+        if (!lineShiftPreviewActive) return null;
+        const shiftStroke = theme === 'dark' ? '#38bdf8' : '#0284c7';
+        const shiftUnderlay = theme === 'dark' ? '#020617' : '#ffffff';
+        const previewLaneIndex = isMultiLineMode
+            ? (activeLaneRef.current ?? manualLaneRef.current ?? currentLaneIndex)
+            : 0;
+        const previewOffsetPx = (previewLaneIndex * activeTrackSpacingM * PIXELS_PER_METER) + lineShiftPreviewOffsetPx;
+        const lineLayers = (segment) => (
+            <g key="line-shift-preview-2d" data-line-shift-preview-2d="true">
+                <line x1={segment.start.x} y1={segment.start.y} x2={segment.end.x} y2={segment.end.y} stroke={shiftUnderlay} strokeWidth="8" strokeOpacity="0.88" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+                <line x1={segment.start.x} y1={segment.start.y} x2={segment.end.x} y2={segment.end.y} stroke={shiftStroke} strokeWidth="4.5" strokeDasharray="12 7" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+            </g>
+        );
+        if (activeGuidanceType === 'STRAIGHT_AB' && pointA && pointB) {
+            const dx = pointB.x - pointA.x;
+            const dy = pointB.y - pointA.y;
+            const length = Math.hypot(dx, dy);
+            if (length <= 0.001) return null;
+            return lineLayers(getGuidanceLineSegmentAroundVehicle(pointA, { x: dx / length, y: dy / length }, previewOffsetPx));
+        }
+        if (activeGuidanceType === 'A_PLUS' && aPlusPoint && aPlusHeading !== null && aPlusHeading !== undefined) {
+            const rad = aPlusHeading * Math.PI / 180;
+            return lineLayers(getGuidanceLineSegmentAroundVehicle(aPlusPoint, { x: Math.sin(rad), y: -Math.cos(rad) }, previewOffsetPx));
+        }
+        if (activeGuidanceType === 'PIVOT' && pivotCenter && pivotRadius + previewOffsetPx > 1) {
+            const radius = pivotRadius + previewOffsetPx;
+            return (
+                <g key="line-shift-preview-2d" data-line-shift-preview-2d="true">
+                    <circle cx={pivotCenter.x} cy={pivotCenter.y} r={radius} fill="none" stroke={shiftUnderlay} strokeWidth="8" strokeOpacity="0.88" vectorEffect="non-scaling-stroke" />
+                    <circle cx={pivotCenter.x} cy={pivotCenter.y} r={radius} fill="none" stroke={shiftStroke} strokeWidth="4.5" strokeDasharray="12 7" vectorEffect="non-scaling-stroke" />
+                </g>
+            );
+        }
+        if ((activeGuidanceType === 'CURVE' || activeGuidanceType === 'COMBINATION') && curvePoints.length > 1) {
+            const points = getOffsetPolyline(curvePoints, previewOffsetPx);
+            return (
+                <g key="line-shift-preview-2d" data-line-shift-preview-2d="true">
+                    <polyline points={points} fill="none" stroke={shiftUnderlay} strokeWidth="8" strokeOpacity="0.88" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+                    <polyline points={points} fill="none" stroke={shiftStroke} strokeWidth="4.5" strokeDasharray="12 7" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+                </g>
+            );
+        }
+        return null;
+    };
+
 
     if (activeGuidanceType === 'STRAIGHT_AB' && pointA && pointB) {
       const dx = pointB.x - pointA.x; const dy = pointB.y - pointA.y; const length = Math.sqrt(dx*dx + dy*dy); const ux = dx / length; const uy = dy / length;
@@ -7551,6 +7693,7 @@ const App = () => {
                     stroke={visual.stroke}
                     strokeWidth={visual.width}
                     strokeOpacity={visual.opacity}
+                    strokeDasharray={visual.dash}
                     strokeLinecap="round"
                     vectorEffect="non-scaling-stroke"
                 />
@@ -7574,6 +7717,7 @@ const App = () => {
                />
            );
       }
+      elements.push(renderLineShiftPreview2D());
       return elements;
     }
 
@@ -7609,6 +7753,7 @@ const App = () => {
                             stroke={visual.stroke}
                             strokeWidth={visual.width}
                             strokeOpacity={visual.opacity}
+                            strokeDasharray={visual.dash}
                             strokeLinecap="round"
                             vectorEffect="non-scaling-stroke"
                         />
@@ -7631,6 +7776,7 @@ const App = () => {
                );
              }
         }
+        elements.push(renderLineShiftPreview2D());
         return elements;
     }
 
@@ -7655,6 +7801,7 @@ const App = () => {
                             stroke={visual.stroke}
                             strokeWidth={visual.width}
                             strokeOpacity={visual.opacity}
+                            strokeDasharray={visual.dash}
                             vectorEffect="non-scaling-stroke"
                         />
                     );
@@ -7678,6 +7825,7 @@ const App = () => {
                 );
             }
         }
+        elements.push(renderLineShiftPreview2D());
         return elements;
     }
 
@@ -7705,6 +7853,7 @@ const App = () => {
                         stroke={visual.stroke}
                         strokeWidth={visual.width}
                         strokeOpacity={visual.opacity}
+                        strokeDasharray={visual.dash}
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         vectorEffect="non-scaling-stroke"
@@ -7727,6 +7876,7 @@ const App = () => {
                 />
             );
         }
+        elements.push(renderLineShiftPreview2D());
         return elements;
     }
 
@@ -7738,7 +7888,7 @@ const App = () => {
       const dockSurface = isDarkDock
           ? 'bg-slate-950/90 border-slate-700/90 shadow-black/40'
           : 'bg-white/90 border-slate-200 shadow-slate-900/15';
-      const dockWidth = 'w-[192px] xl:w-[200px]';
+      const dockWidth = 'w-[216px] xl:w-[224px]';
       const solidTone = {
           blue: 'bg-blue-600 text-white shadow-md shadow-blue-900/20 hover:bg-blue-500',
           green: 'bg-green-600 text-white shadow-md shadow-green-900/20 hover:bg-green-500',
@@ -7753,6 +7903,9 @@ const App = () => {
           red: isDarkDock ? 'text-red-300 hover:bg-red-500/10' : 'text-red-700 hover:bg-red-500/10',
           gray: `${t.textDim} hover:bg-blue-500/5`
       };
+      const destructiveSecondaryTone = isDarkDock
+          ? 'border-red-500/40 bg-red-500/10 text-red-300 hover:border-red-400/60 hover:bg-red-500/18'
+          : 'border-red-200 bg-red-50 text-red-700 hover:border-red-300 hover:bg-red-100';
       const statusTone = {
           blue: isDarkDock ? 'text-blue-300' : 'text-blue-700',
           green: isDarkDock ? 'text-green-300' : 'text-green-700',
@@ -7806,6 +7959,10 @@ const App = () => {
       );
       const renderTinyButton = ({ icon: Icon, label, color = 'gray', onClick, hidden = false, active = false, disabled = false, ariaExpanded, ariaPressed }) => {
           if (hidden) return null;
+          const destructive = color === 'red';
+          const buttonTone = destructive
+              ? destructiveSecondaryTone
+              : `${active ? (isDarkDock ? 'bg-blue-500/20 border-blue-400/50' : 'bg-blue-50 border-blue-400') : `${isDarkDock ? 'bg-slate-900/60' : 'bg-white/70'} ${t.borderCard}`} ${ghostTone[color] || ghostTone.gray}`;
           return (
               <button
                   type="button"
@@ -7817,7 +7974,7 @@ const App = () => {
                   aria-expanded={ariaExpanded}
                   aria-pressed={ariaPressed}
                   disabled={disabled}
-                  className={`w-full min-h-[50px] rounded-xl ${active ? (isDarkDock ? 'bg-blue-500/20 border-blue-400/50' : 'bg-blue-50 border-blue-400') : (isDarkDock ? 'bg-slate-900/60' : 'bg-white/70')} ${ghostTone[color] || ghostTone.gray} border ${active ? '' : t.borderCard} flex items-center justify-start gap-2 px-2 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/40 touch-manipulation disabled:opacity-40 disabled:cursor-not-allowed`}
+                  className={`w-full min-h-[50px] rounded-xl border ${buttonTone} flex items-center justify-start gap-2 px-2 shadow-sm active:scale-[0.98] transition-all focus:outline-none focus:ring-2 ${destructive ? 'focus:ring-red-500/40' : 'focus:ring-blue-500/40'} touch-manipulation disabled:opacity-40 disabled:cursor-not-allowed`}
               >
                   <Icon className="w-4 h-4 shrink-0" />
                   <span className="min-w-0 text-left text-[11px] xl:text-xs font-black leading-none truncate">{label}</span>
@@ -7849,6 +8006,13 @@ const App = () => {
        const runtimeButton = isDarkDock
            ? 'border-slate-700 bg-slate-950 text-slate-100 hover:bg-slate-800'
            : 'border-slate-200 bg-white text-slate-700 hover:bg-blue-50';
+       const railDivide = isDarkDock ? 'divide-slate-800' : 'divide-slate-200';
+       const manualActionTray = isDarkDock
+           ? 'border-slate-800 bg-slate-900/70 divide-slate-800'
+           : 'border-slate-200 bg-slate-50 divide-slate-200';
+       const manualActionTone = isDarkDock
+           ? 'text-slate-200 hover:bg-slate-800/90'
+           : 'text-slate-700 hover:bg-white';
        const activeDockBoundaryIndex = Math.min(
            Math.max(Number(activeBoundaryIdx) || 0, 0),
            Math.max((activeFieldRecord?.boundaries || []).length - 1, 0)
@@ -7935,6 +8099,7 @@ const App = () => {
 
            const nextShiftMeters = Math.round(draftShiftMeters * 1000) / 1000;
            const nextShiftPixels = nextShiftMeters * PIXELS_PER_METER;
+           const savedLineShiftMeters = Number(activeLineRecord.translationOffsetM) || 0;
            if (activeShiftType === 'PIVOT' && Number(pivotRadius) + nextShiftPixels <= 1) {
                showNotification('Shift would collapse the pivot radius', 'warning');
                return;
@@ -7943,6 +8108,10 @@ const App = () => {
            if (saveCopy) {
                if (Math.abs(nextShiftMeters) < 0.005) {
                    showNotification('Set a non-zero shift before saving a copy', 'warning');
+                   return;
+               }
+               if (Math.abs(nextShiftMeters - savedLineShiftMeters) < 0.005) {
+                   showNotification('The saved line already has this position', 'info');
                    return;
                }
                const createdAt = new Date();
@@ -8072,48 +8241,131 @@ const App = () => {
        };
        const renderDockMiniAction = ({ icon: Icon, label, ariaLabel = label, onClick, tone = 'gray', primary = false, disabled = false, compact = false }) => {
            const primaryClass = tone === 'orange'
-               ? 'bg-orange-500 text-white hover:bg-orange-400'
-               : 'bg-blue-600 text-white hover:bg-blue-500';
+               ? (isDarkDock ? 'border-orange-500/35 bg-orange-500/12 text-orange-300 hover:bg-orange-500/18' : 'border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100')
+               : (isDarkDock ? 'border-blue-500/35 bg-blue-500/12 text-blue-300 hover:bg-blue-500/18' : 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100');
            return (
                <button
                    type="button"
                    aria-label={ariaLabel}
                    disabled={disabled}
                    onClick={disabled ? undefined : runDockAction(onClick)}
-                   className={`w-full min-w-0 rounded-lg border flex items-center justify-center font-black transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35 ${compact ? 'h-11 flex-col gap-0.5 px-0.5 text-[9px]' : 'min-h-11 gap-1 px-1.5 text-[10px]'} ${primary ? `${primaryClass} border-transparent` : `${runtimeButton}`}`}
+                   className={`w-full min-w-0 rounded-lg border flex items-center justify-center font-black transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35 ${compact ? 'h-9 gap-1 px-1 text-[8px]' : 'h-10 gap-1.5 px-1.5 text-[9px]'} ${primary ? primaryClass : runtimeButton}`}
                >
                     <Icon className="w-3.5 h-3.5 shrink-0" />
                     <span className="max-w-full truncate leading-none">{label}</span>
                </button>
            );
        };
-       const renderManualAssetCard = ({ icon: Icon, label, value, detail, tone, actions: cardActions = [] }) => {
-           const toneClasses = tone === 'orange'
-               ? (isDarkDock ? 'border-orange-500/30 bg-orange-500/10 text-orange-300' : 'border-orange-300 bg-orange-50 text-orange-700')
-               : (isDarkDock ? 'border-blue-500/30 bg-blue-500/10 text-blue-300' : 'border-blue-300 bg-blue-50 text-blue-700');
-           return (
-               <div className={`w-full rounded-xl border p-2 text-left ${toneClasses}`}>
-                   <span className="flex items-center gap-2">
-                       <span className={`shrink-0 w-7 h-7 rounded-lg flex items-center justify-center ${tone === 'orange' ? 'bg-orange-500 text-white' : 'bg-blue-600 text-white'}`}>
+       const renderManualAssetCard = ({ icon: Icon, label, value, detail, tone, actions: cardActions = [], afterActions = null }) => {
+           const accentText = tone === 'orange'
+               ? (isDarkDock ? 'text-orange-300' : 'text-orange-600')
+               : (isDarkDock ? 'text-blue-300' : 'text-blue-600');
+           const iconTone = tone === 'orange'
+                ? (isDarkDock ? 'bg-orange-500/14 text-orange-300' : 'bg-orange-100 text-orange-600')
+                : (isDarkDock ? 'bg-blue-500/14 text-blue-300' : 'bg-blue-100 text-blue-600');
+            const actionFocusTone = tone === 'orange' ? 'focus-visible:ring-orange-500/45' : 'focus-visible:ring-blue-500/45';
+            const actionTrayTone = tone === 'orange'
+                ? (isDarkDock ? 'border-orange-500/30 bg-orange-500/10 divide-orange-500/25' : 'border-orange-200 bg-orange-50 divide-orange-200')
+                : (isDarkDock ? 'border-blue-500/30 bg-blue-500/10 divide-blue-500/25' : 'border-blue-200 bg-blue-50 divide-blue-200');
+            const actionButtonTone = tone === 'orange'
+                ? (isDarkDock ? 'text-orange-200 hover:bg-orange-500/15' : 'text-orange-800 hover:bg-orange-100')
+                : (isDarkDock ? 'text-blue-200 hover:bg-blue-500/15' : 'text-blue-800 hover:bg-blue-100');
+            return (
+                <section className="w-full px-3 py-2.5 text-left">
+                    <span className="flex items-center gap-2.5">
+                       <span className={`shrink-0 w-9 h-9 rounded-xl flex items-center justify-center ${iconTone}`}>
                            <Icon className="w-4 h-4" />
                        </span>
                        <span className="min-w-0 flex-1">
-                           <span className="block text-[8px] font-black uppercase tracking-[0.08em] opacity-75">{label}</span>
-                           <span className={`block text-[11px] font-black leading-tight truncate ${t.textMain}`}>{value}</span>
-                           <span className={`block text-[8px] font-bold leading-tight truncate ${t.textSub}`}>{detail}</span>
+                           <span className={`block text-[9px] font-black uppercase tracking-[0.1em] ${accentText}`}>{label}</span>
+                           <span className={`mt-0.5 block truncate text-[12px] font-black leading-tight ${t.textMain}`} title={value}>{value}</span>
+                           <span className={`mt-0.5 block truncate text-[9.5px] font-bold leading-tight ${t.textSub}`} title={detail}>{detail}</span>
                        </span>
                    </span>
-                   <span className={`mt-1.5 grid gap-1.5 ${cardActions.length >= 3 ? 'grid-cols-3' : cardActions.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                        {cardActions.map((action, index) => (
-                            <React.Fragment key={`${label}-${action.label}`}>
-                                {renderDockMiniAction({ ...action, tone, primary: index === 0, compact: cardActions.length >= 3 })}
-                           </React.Fragment>
-                       ))}
+                    <span className={`mt-2 grid overflow-hidden rounded-xl border divide-x shadow-sm ${actionTrayTone} ${cardActions.length >= 3 ? 'grid-cols-3' : cardActions.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                        {cardActions.map((action) => {
+                            const ActionIcon = action.icon;
+                           return (
+                               <button
+                                   type="button"
+                                   key={`${label}-${action.label}`}
+                                   aria-label={action.ariaLabel || action.label}
+                                   disabled={action.disabled}
+                                   onClick={action.disabled ? undefined : runDockAction(action.onClick)}
+                                    className={`h-12 min-w-0 px-1 flex flex-col items-center justify-center gap-1 font-black transition-all active:scale-[0.98] focus:outline-none focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset ${actionFocusTone} disabled:cursor-not-allowed disabled:opacity-35 ${actionButtonTone}`}
+                                >
+                                    <ActionIcon className="h-[18px] w-[18px] shrink-0" />
+                                    <span className="max-w-full truncate text-[10.5px] leading-none">{action.label}</span>
+                               </button>
+                           );
+                       })}
                    </span>
-               </div>
-           );
-       };
-        const renderManualQuickPicker = () => {
+                   {afterActions && <span className={`mt-2 block border-t ${railDivider} pt-2`}>{afterActions}</span>}
+               </section>
+            );
+        };
+         const renderTramlineDockCard = ({ compact = false, embedded = false, flat = false } = {}) => {
+             const interval = Math.max(2, Math.round(Number(activeTramline.intervalPasses) || 4));
+             const patternDistance = (activeTrackSpacingM * interval).toFixed(1);
+             if (flat) {
+                 return (
+                     <button
+                         type="button"
+                         data-tramline-entry="true"
+                         aria-label={`${activeTramline.enabled ? 'Edit' : 'Set up'} Tramline pattern${activeTramline.enabled ? `, every ${interval} passes, ${patternDistance} meters` : ''}`}
+                         aria-expanded={uTurnPanelOpen && uTurnPanelTab === 'TRAMLINE'}
+                         onClick={runDockAction(openTramlinePanel)}
+                         className={`w-full min-h-[68px] px-3 py-2 text-left transition-all active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-fuchsia-500/45 ${isDarkDock ? 'hover:bg-fuchsia-500/[0.06]' : 'hover:bg-fuchsia-50/60'}`}
+                     >
+                         <span className="flex items-center gap-2.5">
+                             <span className={`shrink-0 w-9 h-9 rounded-xl flex items-center justify-center ${isDarkDock ? 'bg-fuchsia-500/14 text-fuchsia-300' : 'bg-fuchsia-100 text-fuchsia-600'}`}>
+                                 <AlignJustify aria-hidden="true" className="w-4 h-4" />
+                             </span>
+                             <span className="min-w-0 flex-1">
+                                 <span className="flex items-center gap-1 text-[8px] font-black uppercase tracking-[0.08em] text-fuchsia-600">
+                                     <span>Tramline</span>
+                                     <span aria-hidden="true">·</span>
+                                     <span className={activeTramline.enabled ? 'text-fuchsia-600' : t.textDim}>{activeTramline.enabled ? 'On' : 'Off'}</span>
+                                 </span>
+                                 <span className={`mt-1 block truncate text-[10.5px] font-black leading-tight ${activeTramline.enabled ? t.textMain : t.textSub}`} title={activeTramline.enabled ? `Every ${interval} passes · ${patternDistance} m` : 'Set spacing and first pass'}>
+                                     {activeTramline.enabled ? `${interval} passes · ${patternDistance} m` : 'Set spacing and first pass'}
+                                 </span>
+                             </span>
+                             <span className={`h-10 min-w-[52px] shrink-0 rounded-xl border px-2.5 flex items-center justify-center text-[9px] font-black shadow-sm ${isDarkDock ? 'border-fuchsia-500/30 bg-fuchsia-500/12 text-fuchsia-300' : 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800'}`}>
+                                 {activeTramline.enabled ? 'EDIT' : 'SET UP'}
+                             </span>
+                         </span>
+                     </button>
+                 );
+             }
+             return (
+                 <button
+                     type="button"
+                     data-tramline-entry="true"
+                     aria-label={`${activeTramline.enabled ? 'Adjust' : 'Set up'} Tramline pattern`}
+                     aria-expanded={uTurnPanelOpen && uTurnPanelTab === 'TRAMLINE'}
+                     onClick={runDockAction(openTramlinePanel)}
+                     className={`w-full ${compact ? 'h-[52px]' : 'h-[56px]'} rounded-2xl px-2 flex items-center gap-2 text-left shadow-sm shadow-fuchsia-900/10 ring-1 ring-inset ring-fuchsia-500/25 transition-all active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-500/55 ${isDarkDock ? 'bg-fuchsia-500/10 hover:bg-fuchsia-500/16' : 'bg-fuchsia-50 hover:bg-fuchsia-100/80'}`}
+                 >
+                     <span className="shrink-0 w-8 h-8 rounded-lg bg-fuchsia-600 text-white shadow-sm shadow-fuchsia-900/20 flex items-center justify-center">
+                         <AlignJustify className="w-4 h-4" />
+                     </span>
+                     <span className="min-w-0 flex-1">
+                         <span className="flex items-center gap-1.5">
+                             <span className={`text-[10px] font-black uppercase tracking-[0.08em] ${t.textMain}`}>Tramline</span>
+                             <span className={`rounded px-1 py-0.5 text-[7px] font-black uppercase leading-none ${activeTramline.enabled ? 'bg-fuchsia-600 text-white' : isDarkDock ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-500'}`}>
+                                 {activeTramline.enabled ? 'On' : 'Off'}
+                             </span>
+                         </span>
+                         <span className={`mt-0.5 block truncate text-[9.5px] font-bold leading-tight ${activeTramline.enabled ? 'text-fuchsia-600' : t.textSub}`}>{activeTramline.enabled ? `${interval} passes · ${patternDistance} m` : 'Set spacing and first pass'}</span>
+                     </span>
+                     <span className="h-8 shrink-0 rounded-lg bg-fuchsia-600 px-2.5 flex items-center justify-center text-[9px] font-black text-white shadow-sm shadow-fuchsia-900/20">
+                         {activeTramline.enabled ? 'EDIT' : 'SET UP'}
+                     </span>
+                </button>
+            );
+        };
+         const renderManualQuickPicker = () => {
            const selectingLines = dockQuickPicker === 'lines';
            const items = selectingLines ? dockLines : dockBoundaries;
            const pickerTone = selectingLines ? 'blue' : 'orange';
@@ -8194,23 +8446,26 @@ const App = () => {
                    </div>
                </section>
             );
-        };
+       };
        const renderManualLineShift = () => {
-           const previewScale = Math.max(0.5, Math.abs(lineShiftMeters), Math.abs(draftShiftDisplayMeters));
-           const previewPosition = 50 + Math.max(-35, Math.min(35, (draftShiftDisplayMeters / previewScale) * 35));
-           const targetChanged = Math.abs(draftShiftDisplayMeters - lineShiftMeters) >= 0.005 || Math.abs(manualOffset) >= PIXELS_PER_METER * 0.005;
+           const targetChanged = Math.abs(draftShiftDisplayMeters - totalOffsetMeters) >= 0.005;
+           const savedShiftDisplayMeters = (Number(activeLineRecord?.translationOffsetM) || 0) * shiftDisplayFactor;
+           const copyTargetChanged = Math.abs(draftShiftDisplayMeters) >= 0.005
+               && Math.abs(draftShiftDisplayMeters - savedShiftDisplayMeters) >= 0.005;
+           const pivotTargetValid = !isPivotShift || Number(pivotRadius) + (draftShiftMeters * PIXELS_PER_METER) > 1;
            const ShiftLineIcon = getLineTypeIcon(activeShiftType);
            const directionOptions = isPivotShift
                ? [
-                   { id: 'left', label: 'Inward', icon: Minus },
-                   { id: 'right', label: 'Outward', icon: Plus }
+                   { id: 'left', label: 'Move inward', glyph: '−' },
+                   { id: 'right', label: 'Move outward', glyph: '+' }
                ]
                : [
-                   { id: 'left', label: 'Left', icon: Minus },
-                   { id: 'right', label: 'Right', icon: Plus }
+                   { id: 'left', label: 'Move left', glyph: '←' },
+                   { id: 'right', label: 'Move right', glyph: '→' }
                ];
-           const axisStart = isPivotShift ? 'IN' : 'L';
-           const axisEnd = isPivotShift ? 'OUT' : 'R';
+           const formatShiftPosition = (value) => Math.abs(value) < 0.005
+               ? 'Original'
+               : `${Math.abs(value).toFixed(2)} m ${shiftDirectionLabel(value)}`;
 
            return (
                <section
@@ -8240,30 +8495,27 @@ const App = () => {
                        </span>
                    </div>
 
-                    <div className="min-h-0 flex-1 overflow-hidden p-1.5 space-y-1.5">
+                   <div className="min-h-0 flex-1 overflow-hidden p-1.5 space-y-1.5">
                        <div className={`rounded-xl border ${runtimeSection} p-2`}>
                            <div className="grid grid-cols-2 gap-2">
                                <span className="min-w-0">
-                                   <span className={`block text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Current</span>
-                                   <span className={`block text-[11px] font-black tabular-nums ${Math.abs(lineShiftMeters) >= 0.005 ? 'text-blue-500' : t.textMain}`}>{formatSignedMeters(lineShiftMeters)}</span>
+                                   <span className={`block text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Current run</span>
+                                   <span className={`block text-[10px] font-black truncate ${Math.abs(totalOffsetMeters) >= 0.005 ? 'text-slate-500' : t.textMain}`}>{formatShiftPosition(totalOffsetMeters)}</span>
                                </span>
                                <span className="min-w-0 text-right">
                                    <span className={`block text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Preview</span>
-                                   <span aria-live="polite" className="block text-[11px] font-black tabular-nums text-blue-500">{formatSignedMeters(draftShiftDisplayMeters)}</span>
+                                   <span aria-live="polite" className="block text-[10px] font-black truncate text-blue-500">{formatShiftPosition(draftShiftDisplayMeters)}</span>
                                </span>
                            </div>
-                           <div className={`relative mt-1.5 h-4 overflow-hidden rounded-md ${isDarkDock ? 'bg-slate-950' : 'bg-white'} border ${t.borderCard}`}>
-                               <span className={`absolute left-1/2 top-0.5 bottom-0.5 border-l border-dashed ${isDarkDock ? 'border-slate-600' : 'border-slate-300'}`} />
-                               <span className="absolute top-0.5 bottom-0.5 w-0.5 rounded bg-blue-500 transition-all" style={{ left: `${previewPosition}%` }} />
-                               <span className={`absolute left-1 top-0.5 text-[6px] font-black ${t.textDim}`}>{axisStart}</span>
-                               <span className={`absolute right-1 top-0.5 text-[6px] font-black ${t.textDim}`}>{axisEnd}</span>
-                           </div>
-                           {Math.abs(offsetCm) >= 0.05 && <span className="sr-only">Fine trim {offsetCm > 0 ? '+' : ''}{offsetCm.toFixed(1)} centimeters</span>}
                        </div>
 
                        <div className={`rounded-xl border ${runtimeSection} p-1.5`}>
+                           <div className={`mb-1.5 flex items-center justify-between px-0.5 text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>
+                               <span>Direction</span>
+                               <span>{isPivotShift ? 'Radius' : 'Relative to travel'}</span>
+                           </div>
                            <div className="grid grid-cols-2 gap-1.5">
-                               {directionOptions.map(({ id, label, icon: Icon }) => {
+                               {directionOptions.map(({ id, label, glyph }) => {
                                    const active = dockShiftDirection === id;
                                    return (
                                        <button
@@ -8272,10 +8524,10 @@ const App = () => {
                                            aria-label={`Set shift direction ${label.toLowerCase()}`}
                                            aria-pressed={active}
                                            onClick={runDockAction(() => setDockShiftDirection(id))}
-                                           className={`h-11 rounded-lg border flex items-center justify-center gap-1 text-[9px] font-black ${active ? 'border-blue-500 bg-blue-500/12 text-blue-500' : runtimeButton}`}
+                                           className={`h-11 rounded-lg border flex items-center justify-center gap-1.5 px-1 text-[9px] font-black ${active ? 'border-blue-500 bg-blue-500/12 text-blue-500' : runtimeButton}`}
                                        >
-                                           <Icon className="w-3.5 h-3.5" />
-                                           {label}
+                                           <span aria-hidden="true" className="text-sm leading-none">{glyph}</span>
+                                           <span className="leading-tight">{label}</span>
                                        </button>
                                    );
                                })}
@@ -8283,7 +8535,7 @@ const App = () => {
 
                            <label className={`mt-1.5 flex items-center justify-between text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`} htmlFor="dock-shift-distance">
                                <span>{isPivotShift ? 'Radius offset' : 'Distance'}</span>
-                               <span>From original</span>
+                               <span>From source line</span>
                            </label>
                            <div className={`mt-1 flex h-11 items-center overflow-hidden rounded-lg border ${t.borderCard} ${isDarkDock ? 'bg-slate-950' : 'bg-white'}`}>
                                <input
@@ -8302,40 +8554,50 @@ const App = () => {
                            </div>
 
                            <div className="mt-1.5 grid grid-cols-3 gap-1">
-                               {[0.10, 0.50, 1.00].map((value) => (
+                               {[
+                                   { value: 0.10, label: '10 cm' },
+                                   { value: 0.50, label: '50 cm' },
+                                   { value: 1.00, label: '1.00 m' }
+                               ].map(({ value, label }) => (
                                    <button
                                        key={value}
                                        type="button"
                                        aria-label={`Set shift distance to ${value.toFixed(2)} meters`}
                                        aria-pressed={Math.abs(draftShiftDistanceMeters - value) < 0.005}
                                        onClick={runDockAction(() => setDockShiftDistanceM(value.toFixed(2)))}
-                                       className={`h-11 rounded-md border text-[9px] font-black ${Math.abs(draftShiftDistanceMeters - value) < 0.005 ? 'border-blue-500 bg-blue-500/12 text-blue-500' : runtimeButton}`}
+                                       className={`h-10 rounded-md border text-[9px] font-black ${Math.abs(draftShiftDistanceMeters - value) < 0.005 ? 'border-blue-500 bg-blue-500/12 text-blue-500' : runtimeButton}`}
                                    >
-                                       {value.toFixed(2)}
+                                       {label}
                                    </button>
                                ))}
                            </div>
+
+                           <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                               <button
+                                   type="button"
+                                   aria-label="Align the nearest guidance pass to the vehicle"
+                                   onClick={runDockAction(setDockShiftToVehicle)}
+                                   className={`h-10 min-w-0 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 px-1 text-[8px] font-black`}
+                               >
+                                   <LocateFixed className="w-3.5 h-3.5 shrink-0 text-blue-500" />
+                                   <span className="truncate">Align vehicle</span>
+                               </button>
+                               <button
+                                   type="button"
+                                   aria-label="Reset shift preview to the source line at zero meters"
+                                   onClick={runDockAction(() => setDockShiftDraftFromSignedMeters(0))}
+                                   className={`h-10 min-w-0 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 px-1 text-[8px] font-black`}
+                               >
+                                   <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                                   <span className="truncate">Reset source</span>
+                               </button>
+                           </div>
                        </div>
 
-                       <div className="grid grid-cols-2 gap-1.5">
-                           <button
-                               type="button"
-                               aria-label="Center shift preview on vehicle"
-                               onClick={runDockAction(setDockShiftToVehicle)}
-                               className={`h-11 min-w-0 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 px-1 text-[9px] font-black`}
-                           >
-                               <LocateFixed className="w-3.5 h-3.5 shrink-0 text-blue-500" />
-                               <span className="min-w-0 truncate text-[9px]">Center here</span>
-                           </button>
-                           <button
-                               type="button"
-                               aria-label="Reset shift preview to original position"
-                               onClick={runDockAction(() => setDockShiftDraftFromSignedMeters(0))}
-                               className={`h-11 min-w-0 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 px-1 text-[9px] font-black`}
-                           >
-                               <RotateCcw className="w-3.5 h-3.5 shrink-0" />
-                               <span className="min-w-0 truncate text-[9px]">Original</span>
-                           </button>
+                       <div className={`rounded-lg px-2 py-1.5 text-[8px] font-bold leading-snug ${!pivotTargetValid ? 'bg-red-500/10 text-red-500' : isDarkDock ? 'bg-blue-500/10 text-blue-300' : 'bg-blue-50 text-blue-700'}`}>
+                           {!pivotTargetValid
+                               ? 'This inward shift would collapse the pivot radius. Choose a smaller distance.'
+                               : <><span className="font-black">Blue dashed line</span> is the live preview. {isPivotShift ? 'In / out changes radius.' : 'Left / right follows travel direction.'}{Math.abs(offsetCm) >= 0.05 ? ` Current includes a ${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(1)} cm fine nudge.` : ''}</>}
                        </div>
                    </div>
 
@@ -8343,20 +8605,20 @@ const App = () => {
                        <button
                            type="button"
                            aria-label="Apply shifted line to this run"
-                           disabled={!targetChanged}
+                           disabled={!targetChanged || !pivotTargetValid}
                            onClick={runDockAction(() => applyDockLineShift())}
-                           className="h-11 min-w-0 rounded-lg bg-blue-600 text-white flex items-center justify-center gap-1 text-[9px] font-black hover:bg-blue-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35"
+                           className="h-11 min-w-0 rounded-lg bg-blue-600 text-white flex items-center justify-center gap-1 px-1 text-[9px] font-black hover:bg-blue-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35"
                        >
                            <Check className="w-3.5 h-3.5 shrink-0" />
-                           <span className="truncate">Apply</span>
+                           <span className="truncate">Apply run</span>
                        </button>
                        <button
                            type="button"
                            title="Save a shifted copy; the source line stays unchanged"
                            aria-label="Save shifted copy as a new line; source line stays unchanged"
-                           disabled={Math.abs(draftShiftDisplayMeters) < 0.005}
+                           disabled={!copyTargetChanged || !pivotTargetValid}
                            onClick={runDockAction(() => applyDockLineShift({ saveCopy: true }))}
-                           className={`h-11 min-w-0 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 text-[9px] font-black disabled:cursor-not-allowed disabled:opacity-35`}
+                           className={`h-11 min-w-0 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 px-1 text-[9px] font-black disabled:cursor-not-allowed disabled:opacity-35`}
                        >
                            <Copy className="w-3.5 h-3.5 shrink-0" />
                            <span className="truncate">Save copy</span>
@@ -8542,43 +8804,39 @@ const App = () => {
            );
        };
        const renderDockViewControls = () => (
-           <div className={`rounded-xl border ${runtimeSection} p-2`}>
-               <div className="mb-1.5 flex h-5 items-center justify-between gap-2 px-1">
-                   <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>View</span>
-                   <span aria-live="polite" className={`text-xs font-black tabular-nums ${t.textMain}`}>{zoomPercent}%</span>
-               </div>
-               <div className="grid grid-cols-3 gap-1.5">
+            <div aria-label={`Map view ${zoomPercent}%`} className={`h-14 shrink-0 border-t ${railDivider} px-2 py-1.5 ${isDarkDock ? 'bg-slate-950/45' : 'bg-slate-50/80'}`}>
+                <div className={`h-full grid grid-cols-[44px_minmax(0,1fr)_44px] overflow-hidden rounded-xl border divide-x ${manualActionTray}`}>
+                    <button
+                        type="button"
+                        aria-label="Zoom out"
+                        disabled={zoomLevel <= MIN_MAP_ZOOM}
+                        onClick={runDockAction(() => handleZoom('out'))}
+                        className={`flex items-center justify-center ${manualActionTone} active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-35`}
+                    >
+                        <Minus className="h-4 w-4" />
+                    </button>
                    <button
                        type="button"
-                       aria-label="Zoom out"
-                       disabled={zoomLevel <= MIN_MAP_ZOOM}
-                       onClick={runDockAction(() => handleZoom('out'))}
-                       className={`h-11 rounded-lg border ${runtimeButton} flex items-center justify-center active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
-                   >
-                       <Minus className="h-5 w-5" />
-                   </button>
+                        aria-label="Reset map zoom"
+                        disabled={Math.abs(zoomLevel - DEFAULT_MAP_ZOOM) < 0.01}
+                        onClick={runDockAction(() => handleZoom('reset'))}
+                        className={`flex items-center justify-center gap-1.5 ${manualActionTone} active:scale-[0.98] disabled:cursor-default`}
+                    >
+                        <RotateCcw className={`h-3.5 w-3.5 ${Math.abs(zoomLevel - DEFAULT_MAP_ZOOM) < 0.01 ? 'opacity-40' : ''}`} />
+                        <span aria-live="polite" className={`text-[10px] font-black tabular-nums ${t.textMain}`}>{zoomPercent}%</span>
+                    </button>
                    <button
                        type="button"
-                       aria-label="Reset map zoom"
-                       disabled={Math.abs(zoomLevel - DEFAULT_MAP_ZOOM) < 0.01}
-                       onClick={runDockAction(() => handleZoom('reset'))}
-                       className={`h-11 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-default disabled:opacity-45`}
-                   >
-                       <RotateCcw className="h-4 w-4" />
-                       <span className="text-[9px] font-black">100%</span>
-                   </button>
-                   <button
-                       type="button"
-                       aria-label="Zoom in"
-                       disabled={zoomLevel >= MAX_MAP_ZOOM}
-                       onClick={runDockAction(() => handleZoom('in'))}
-                       className={`h-11 rounded-lg border ${runtimeButton} flex items-center justify-center active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
-                   >
-                       <Plus className="h-5 w-5" />
-                   </button>
-               </div>
-           </div>
-       );
+                        aria-label="Zoom in"
+                        disabled={zoomLevel >= MAX_MAP_ZOOM}
+                        onClick={runDockAction(() => handleZoom('in'))}
+                        className={`flex items-center justify-center ${manualActionTone} active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-35`}
+                    >
+                        <Plus className="h-4 w-4" />
+                    </button>
+                </div>
+            </div>
+        );
        const renderManualDock = () => (
            <section
                data-dock-mode="manual"
@@ -8589,19 +8847,19 @@ const App = () => {
                onPointerUp={stopDockPointer}
                onClick={stopDockPointer}
            >
-               <div className={`h-9 shrink-0 border-b ${railDivider} px-3 flex items-center justify-between gap-2`}>
-                   <span className="min-w-0 flex items-center gap-2">
-                       <span className="h-4 w-1 rounded-full bg-orange-500" />
-                       <span className={`truncate text-[10px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Run setup</span>
-                   </span>
-                   <span className="shrink-0 rounded-md bg-orange-500/12 px-1.5 py-1 text-[8px] font-black uppercase text-orange-500">Manual</span>
-               </div>
+                <div title="Run-only edits. Manage saved data from the left rail." className={`h-10 shrink-0 border-b ${railDivider} px-3 flex items-center justify-between gap-2`}>
+                    <span className="min-w-0 flex items-center gap-2">
+                        <span className="h-5 w-1 rounded-full bg-orange-500" />
+                        <span className={`truncate text-[10px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Run setup</span>
+                    </span>
+                    <span className="shrink-0 rounded-full bg-orange-500/12 px-2 py-1 text-[8px] font-black uppercase text-orange-600">Manual</span>
+                </div>
 
-               <div className="run-dock-body min-h-0 flex-1 space-y-1.5 overflow-hidden p-2">
-                   {renderManualAssetCard({
-                       icon: getLineTypeIcon(activeShiftType),
-                        label: 'Guidance line',
-                        value: activeDockLineLabel,
+                 <div className={`run-dock-body min-h-0 flex-1 overflow-y-auto overscroll-contain divide-y ${railDivide} ${isDarkDock ? 'bg-slate-950/25' : 'bg-white/70'} [scrollbar-width:thin]`}>
+                    {renderManualAssetCard({
+                        icon: getLineTypeIcon(activeShiftType),
+                         label: 'Active line',
+                         value: activeDockLineLabel,
                         detail: unsavedGuidance
                              ? 'Geometry ready / not saved'
                              : activeLineRecord
@@ -8613,31 +8871,20 @@ const App = () => {
                         actions: unsavedGuidance
                             ? [{ icon: Save, label: 'Save line', onClick: openSaveLineModal }]
                              : dockLines.length > 0
-                                 ? [
-                                     { icon: Ruler, label: 'Shift', ariaLabel: 'Shift active guidance line', onClick: openDockLineShift, disabled: !activeLineRecord },
-                                     { icon: ArrowLeftRight, label: 'Switch', ariaLabel: 'Switch active guidance line', onClick: () => openDockPicker('lines') },
-                                     { icon: Plus, label: 'New', ariaLabel: 'Create new guidance line', onClick: openDockLineCreator }
-                                 ]
+                                  ? [
+                                      { icon: Ruler, label: 'Shift', ariaLabel: 'Shift active guidance line', onClick: openDockLineShift, disabled: !activeLineRecord },
+                                      { icon: ArrowLeftRight, label: 'Change', ariaLabel: 'Switch active guidance line', onClick: () => openDockPicker('lines') },
+                                      { icon: Plus, label: 'Create', ariaLabel: 'Create new guidance line', onClick: openDockLineCreator }
+                                  ]
                                 : [
                                     { icon: Target, label: 'Start AB', onClick: startDockStraightLine },
                                     { icon: Plus, label: 'Other', onClick: openDockLineCreator }
-                                ]
+                                 ]
                     })}
-                   {activeLineRecord && tramlineSupported && (
-                       <button
-                           type="button"
-                           onClick={runDockAction(openTramlinePanel)}
-                           className={`w-full h-11 rounded-xl border px-2.5 flex items-center gap-2 text-left ${activeTramline.enabled ? 'border-yellow-500/45 bg-yellow-500/10 text-yellow-500' : runtimeButton}`}
-                       >
-                           <AlignJustify className="w-4 h-4 shrink-0" />
-                           <span className="min-w-0 flex-1">
-                               <span className="block text-[9px] font-black uppercase">Tramline</span>
-                               <span className={`block text-[8px] font-bold truncate ${activeTramline.enabled ? 'text-yellow-500/80' : t.textSub}`}>{activeTramline.enabled ? `Every ${activeTramline.intervalPasses} passes · set current / shift` : 'Configure repeating traffic passes'}</span>
-                           </span>
-                           <ChevronRight className="w-3.5 h-3.5 shrink-0" />
-                       </button>
-                   )}
-                   {renderManualAssetCard({
+                    {activeLineRecord && tramlineSupported && (
+                        renderTramlineDockCard({ flat: true })
+                    )}
+                    {renderManualAssetCard({
                        icon: MapPin,
                        label: 'Boundary',
                        value: activeDockBoundaryLabel,
@@ -8645,19 +8892,16 @@ const App = () => {
                            ? `${activeDockBoundaryPointCount} points${boundaryOverrideMatchesActive ? ` / ${boundaryRunOverride.label}` : ''}`
                            : `${(activeFieldRecord?.boundaries || []).length} saved`,
                        tone: 'orange',
-                       actions: dockBoundaries.length > 0
-                           ? [
-                               { icon: Ruler, label: 'Shift', ariaLabel: 'Shift active boundary', onClick: openDockBoundaryShift, disabled: !activeDockBoundary },
-                               { icon: ArrowLeftRight, label: 'Switch', onClick: () => openDockPicker('boundaries') },
-                               { icon: Radio, label: 'Record', onClick: startDockBoundaryCapture }
-                           ]
+                        actions: dockBoundaries.length > 0
+                            ? [
+                                { icon: Ruler, label: 'Adjust', ariaLabel: 'Shift active boundary', onClick: openDockBoundaryShift, disabled: !activeDockBoundary },
+                                { icon: ArrowLeftRight, label: 'Change', ariaLabel: 'Switch active boundary', onClick: () => openDockPicker('boundaries') },
+                                { icon: Radio, label: 'Record', onClick: startDockBoundaryCapture }
+                            ]
                            : [{ icon: Radio, label: 'Record', onClick: startDockBoundaryCapture }]
                    })}
-                   {renderDockViewControls()}
-                   <div title="Run-only edits. Manage saved data from the left rail." className={`h-7 rounded-lg px-2 text-[8px] font-bold flex items-center truncate ${isDarkDock ? 'bg-slate-900/70 text-slate-400' : 'bg-slate-100 text-slate-500'}`}>
-                       Run-only edits · Saved data on left
-                   </div>
                </div>
+               {renderDockViewControls()}
            </section>
        );
        const renderRuntimeDock = () => (
@@ -8670,21 +8914,21 @@ const App = () => {
               onPointerUp={stopDockPointer}
               onClick={stopDockPointer}
           >
-               <div className={`h-9 shrink-0 border-b ${railDivider} px-3 flex items-center justify-between gap-2`}>
+               <div className={`h-8 shrink-0 border-b ${railDivider} px-2.5 flex items-center justify-between gap-2`}>
                    <span className="min-w-0 flex items-center gap-2">
                        <span className="h-4 w-1 rounded-full bg-blue-500" />
                        <span className={`truncate text-[10px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Quick adjust</span>
                    </span>
-                   <span className="shrink-0 rounded-md bg-blue-500/12 px-1.5 py-1 text-[8px] font-black uppercase text-blue-500">Auto</span>
+                   <span className="shrink-0 rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black uppercase text-blue-500">Auto</span>
                </div>
 
-              <div className="run-dock-body min-h-0 flex-1 space-y-1.5 overflow-hidden p-2">
-                  <div className={`rounded-xl border ${runtimeSection} p-2.5`}>
+              <div className="run-dock-body min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-1.5 [scrollbar-width:thin]">
+                  <div className={`rounded-xl border ${runtimeSection} p-2`}>
                       <div className="flex items-center justify-between gap-2">
                           <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Run assets</span>
                           <span className="rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black uppercase text-blue-500">Locked</span>
                       </div>
-                      <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
+                      <div className="mt-1 flex min-w-0 items-center gap-1.5">
                           <span className={`min-w-0 flex-1 text-[11px] font-black truncate ${t.textMain}`}>{activeDockLineLabel}</span>
                           {Math.abs(lineShiftMeters) >= 0.005 && <span className="shrink-0 rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black text-blue-500">{shiftDirectionLabel(lineShiftMeters, { short: true })} {Math.abs(lineShiftMeters).toFixed(2)}m</span>}
                       </div>
@@ -8698,24 +8942,14 @@ const App = () => {
                               LINE {activeTrackSpacingM.toFixed(2)} m LOCKED · TOOL {currentImplementTrackSpacingM.toFixed(2)} m
                           </div>
                       )}
-                  </div>
-                  {activeLineRecord && tramlineSupported && (
-                      <button
-                          type="button"
-                          onClick={runDockAction(openTramlinePanel)}
-                          className={`w-full h-11 rounded-xl border px-2.5 flex items-center gap-2 text-left ${activeTramline.enabled ? 'border-yellow-500/45 bg-yellow-500/10 text-yellow-500' : runtimeButton}`}
-                      >
-                          <AlignJustify className="w-4 h-4 shrink-0" />
-                          <span className="min-w-0 flex-1 text-[9px] font-black truncate">
-                              {activeTramline.enabled
-                                  ? `Pass ${currentRunKpi.passIndex >= 0 ? '+' : ''}${currentRunKpi.passIndex} · ${isTramlinePass(currentRunKpi.passIndex) ? 'TRAMLINE' : 'WORK'}`
-                                  : 'Set Tramline pattern'}
-                          </span>
-                          <ChevronRight className="w-3.5 h-3.5 shrink-0" />
-                      </button>
-                  )}
-                  <div className={`rounded-xl border ${runtimeSection} p-2`}>
-                      <div className="mb-2 flex h-10 items-center justify-between gap-2 px-1">
+                      {activeLineRecord && tramlineSupported && (
+                          <div className={`mt-1 border-t ${railDivider} pt-1`}>
+                              {renderTramlineDockCard({ compact: true, embedded: true })}
+                          </div>
+                      )}
+                   </div>
+                  <div className={`rounded-xl border ${runtimeSection} p-1.5`}>
+                      <div className="mb-1 flex h-7 items-center justify-between gap-2 px-1">
                           <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Nudge</span>
                            <span aria-live="polite" className={`min-w-[66px] text-right text-sm font-black tabular-nums ${autoTrimEnabled && Math.abs(offsetCm) > 0.05 ? 'text-blue-500' : t.textMain}`}>
                                {hasGuidanceToEngage ? `${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(1)} cm` : 'No line'}
@@ -8727,7 +8961,7 @@ const App = () => {
                               aria-label={`Nudge guidance ${isPivotShift ? 'inward' : 'left'} 1 centimeter`}
                               disabled={!autoTrimEnabled}
                               onClick={runDockAction(() => handleTrim('left'))}
-                              className={`h-12 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
+                              className={`h-11 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
                           >
                               <Minus className="h-4 w-4 text-blue-500" />
                               <span className="text-[9px] font-black">{isPivotShift ? 'IN 1CM' : '1 CM'}</span>
@@ -8737,7 +8971,7 @@ const App = () => {
                               aria-label="Reset guidance offset to zero"
                               disabled={!autoTrimEnabled || Math.abs(offsetCm) <= 0.05}
                               onClick={runDockAction(() => actions.setManualOffset(0))}
-                              className={`h-12 rounded-lg border flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35 ${Math.abs(offsetCm) > 0.05 ? 'border-blue-500/40 bg-blue-500/10 text-blue-500' : runtimeButton}`}
+                              className={`h-11 rounded-lg border flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35 ${Math.abs(offsetCm) > 0.05 ? 'border-blue-500/40 bg-blue-500/10 text-blue-500' : runtimeButton}`}
                           >
                               <RotateCcw className="h-4 w-4" />
                               <span className="text-[9px] font-black">ZERO</span>
@@ -8747,7 +8981,7 @@ const App = () => {
                               aria-label={`Nudge guidance ${isPivotShift ? 'outward' : 'right'} 1 centimeter`}
                               disabled={!autoTrimEnabled}
                               onClick={runDockAction(() => handleTrim('right'))}
-                              className={`h-12 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
+                              className={`h-11 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
                           >
                               <Plus className="h-4 w-4 text-blue-500" />
                               <span className="text-[9px] font-black">{isPivotShift ? 'OUT 1CM' : '1 CM'}</span>
@@ -8755,8 +8989,8 @@ const App = () => {
                       </div>
                   </div>
 
-                   {renderDockViewControls()}
                </div>
+               {renderDockViewControls()}
           </section>
       );
       const renderDockLayout = (dock, centered = false) => (
@@ -8862,10 +9096,13 @@ const App = () => {
                   <div className={`px-2.5 py-2 border-t ${railDivider}`}>
                       <button
                           type="button"
+                          aria-label="Cancel boundary capture"
                           onClick={runDockAction(cancelBoundaryRecording)}
-                          className={`w-full h-10 rounded-lg flex items-center justify-center gap-2 text-[11px] font-black ${ghostTone.red}`}
+                          className={`w-full h-11 rounded-xl border ${destructiveSecondaryTone} flex items-center justify-center gap-2 text-[11px] font-black shadow-sm transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-red-500/40`}
                       >
-                          <X className="w-4 h-4" />
+                          <span className="h-7 w-7 rounded-lg bg-red-500/10 flex items-center justify-center">
+                              <X className="w-4 h-4" />
+                          </span>
                           Cancel capture
                       </button>
                   </div>
@@ -12589,7 +12826,7 @@ const App = () => {
 
                             <SetupRow number="3" title="Which row is next?" detail="Next row is the normal choice." last>
                                 {activeTramline.enabled ? (
-                                    <div className="rounded-xl border border-yellow-500/35 bg-yellow-500/10 px-3 py-3 text-sm font-black text-yellow-600">Tramline routing chooses the target row automatically.</div>
+                                    <div className="rounded-xl border border-fuchsia-500/35 bg-fuchsia-500/10 px-3 py-3 text-sm font-black text-fuchsia-600">Tramline routing chooses the target row automatically.</div>
                                 ) : (
                                     <>
                                         <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
@@ -16619,7 +16856,7 @@ const renderLinesPanel = () => {
                                                 data-boundary-2d={bIdx}
                                                 points={points.map(p => `${p.x},${p.y}`).join(' ')}
                                                 fill="none"
-                                                stroke={bIdx === activeBoundaryIdx ? "#eab308" : "#64748b"}
+                                                stroke={bIdx === activeBoundaryIdx ? "#f97316" : "#64748b"}
                                                 strokeWidth={bIdx === activeBoundaryIdx ? 2.8 : 2}
                                                 strokeOpacity={bIdx === activeBoundaryIdx ? 0.9 : 0.55}
                                                 strokeDasharray="5,5"
@@ -16774,27 +17011,27 @@ const renderLinesPanel = () => {
                 </div>
 
                 {/* ... rest of the app ... */}
-                <header data-top-bar data-screen-header="run" className={`relative h-[88px] min-h-[88px] ${t.bgHeader} backdrop-blur-md flex items-center justify-between gap-3 px-3 xl:px-[3%] z-20 border-b ${t.border}`}>
-                    <div className="relative z-20 min-w-0 max-w-[34%] flex items-center gap-3">
+                <header data-top-bar data-screen-header="run" className={`relative h-[88px] min-h-[88px] ${t.bgHeader} backdrop-blur-md grid grid-cols-[minmax(240px,1fr)_minmax(300px,480px)_minmax(240px,1fr)] items-center gap-3 px-3 xl:px-[3%] z-20 border-b ${t.border}`}>
+                    <div data-run-context className="min-w-0 w-full overflow-hidden flex items-center gap-3">
                         <div className={`shrink-0 w-10 h-10 rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-gray-100'} flex items-center justify-center`}>
                             <MapIcon className="w-5 h-5 text-blue-500" />
                         </div>
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1 overflow-hidden">
                             <div className={`flex items-center gap-1.5 text-[10px] ${t.textSub} uppercase tracking-[0.06em] font-bold leading-none`}>
                                 <Layers className="w-3 h-3 shrink-0" />
-                                <span className="truncate">Run / {activeTaskRecord?.name || 'No Task'} / {Number(implementSettings.width || 0).toFixed(1)} m</span>
+                                <span className="min-w-0 flex-1 truncate">Run / {activeTaskRecord?.name || 'No Task'} / {Number(implementSettings.width || 0).toFixed(1)} m</span>
                             </div>
-                            <div className="mt-1 min-w-0 flex items-center gap-1.5 text-sm leading-none">
-                                <span className={`${t.textMain} font-bold truncate`}>{activeFieldRecord?.name || 'No Field Loaded'}</span>
+                            <div className="mt-1 min-w-0 overflow-hidden flex items-center gap-1.5 text-sm leading-none">
+                                <span className={`min-w-0 max-w-[42%] ${t.textMain} font-bold truncate`}>{activeFieldRecord?.name || 'No Field Loaded'}</span>
                                 <span className={`${t.textDim} shrink-0 font-medium`}>/</span>
-                                <span className="text-blue-500 font-bold truncate">{activeLineRecord?.name || getGuidanceModeLabel()}</span>
+                                <span className="min-w-0 flex-1 text-blue-500 font-bold truncate">{activeLineRecord?.name || getGuidanceModeLabel()}</span>
                             </div>
                         </div>
                     </div>
-                    <div className="absolute left-1/2 top-0 z-10 h-full w-[480px] max-w-[46%] -translate-x-1/2">
+                    <div data-guidance-hud-slot className="relative min-w-0 h-full w-full">
                         {renderGuidanceLightbar()}
                     </div>
-                    <div className="relative z-20 min-w-0 ml-auto">
+                    <div data-run-safety className="min-w-0 w-full overflow-hidden flex justify-end">
                         {renderRunSafetyCluster()}
                     </div>
                 </header>
