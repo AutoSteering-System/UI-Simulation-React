@@ -5296,7 +5296,7 @@ const App = () => {
 
               <div className="min-w-0 flex flex-col items-center justify-center text-center">
                   <span className={`text-base font-black leading-none tabular-nums ${t.textMain}`}>{offsetValue}</span>
-                  <span className={`mt-1 text-[9px] uppercase font-black tracking-wider leading-none ${t.textSub}`}>Offset</span>
+                  <span className={`mt-1 text-[9px] uppercase font-black tracking-wider leading-none ${t.textSub}`}>Total offset</span>
               </div>
           </div>
       );
@@ -8360,16 +8360,23 @@ const App = () => {
                </button>
            );
        };
-       const renderDockColumnSeparators = (columnCount = 3) => {
-           if (columnCount <= 1) return null;
-           if (columnCount === 2) {
-               return <span aria-hidden="true" className={`pointer-events-none absolute top-2.5 bottom-2.5 left-1/2 w-px ${railSeparator}`} />;
-           }
+       const renderDockColumnSeparators = (columnCount = 3, wideFirst = false, showTop = true, showBottom = true) => {
+           const safeColumnCount = Math.max(1, Math.min(3, columnCount));
            return (
-               <>
-                   <span aria-hidden="true" className={`pointer-events-none absolute top-2.5 bottom-2.5 left-1/3 w-px ${railSeparator}`} />
-                   <span aria-hidden="true" className={`pointer-events-none absolute top-2.5 bottom-2.5 left-2/3 w-px ${railSeparator}`} />
-               </>
+               <span aria-hidden="true" className="pointer-events-none absolute inset-0">
+                   {showTop && <span className={`absolute inset-x-0 top-0 h-px ${railSeparator}`} />}
+                   {showBottom && <span className={`absolute inset-x-0 bottom-0 h-px ${railSeparator}`} />}
+                   {wideFirst ? (
+                       <span className={`absolute bottom-1.5 left-2/3 top-1.5 w-px ${railSeparator}`} />
+                   ) : safeColumnCount === 3 ? (
+                       <>
+                           <span className={`absolute bottom-1.5 left-1/3 top-1.5 w-px ${railSeparator}`} />
+                           <span className={`absolute bottom-1.5 left-2/3 top-1.5 w-px ${railSeparator}`} />
+                       </>
+                   ) : safeColumnCount === 2 ? (
+                       <span className={`absolute bottom-1.5 left-1/2 top-1.5 w-px ${railSeparator}`} />
+                   ) : null}
+               </span>
            );
        };
        const renderManualAssetCard = ({ icon: Icon, label, value, detail, tone, actions: cardActions = [], afterActions = null }) => {
@@ -8380,8 +8387,8 @@ const App = () => {
                 ? (isDarkDock ? 'bg-orange-500/14 text-orange-300' : 'bg-orange-100 text-orange-600')
                 : (isDarkDock ? 'bg-blue-500/14 text-blue-300' : 'bg-blue-100 text-blue-600');
             return (
-                <section className="w-full px-3 pt-2.5 text-left">
-                    <span className="flex items-center gap-2.5">
+               <section className={`mx-3 w-auto overflow-hidden rounded-xl border ${railDivider} text-left`}>
+                    <span className="flex items-center gap-2.5 px-3 pt-2.5">
                        <span className={`shrink-0 w-9 h-9 rounded-xl flex items-center justify-center ${iconTone}`}>
                            <Icon className="w-4 h-4" />
                        </span>
@@ -8391,7 +8398,7 @@ const App = () => {
                            <span className={`mt-0.5 block truncate text-[9.5px] font-bold leading-tight ${t.textSub}`} title={detail}>{detail}</span>
                        </span>
                    </span>
-                    <span className={`relative mt-1.5 -mx-3 grid ${cardActions.length >= 3 ? 'grid-cols-3' : cardActions.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                    <span className={`relative mt-1.5 grid ${cardActions.length >= 3 ? 'grid-cols-3' : cardActions.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
                         {cardActions.map((action) => {
                             const ActionIcon = action.icon;
                            return (
@@ -8408,9 +8415,9 @@ const App = () => {
                                </button>
                            );
                        })}
-                       {renderDockColumnSeparators(cardActions.length)}
+                       {renderDockColumnSeparators(cardActions.length, false, true, false)}
                    </span>
-                   {afterActions && <span className={`mt-2 block border-t ${railDivider} pt-2`}>{afterActions}</span>}
+                   {afterActions && <span className={`mx-3 mt-2 block border-t ${railDivider} pb-2 pt-2`}>{afterActions}</span>}
                </section>
             );
         };
@@ -8426,14 +8433,15 @@ const App = () => {
              const tramlineActionLabel = activeTramline.enabled ? 'EDIT' : 'SET UP';
              const tramlineActionTone = isDarkDock ? 'text-fuchsia-300' : 'text-fuchsia-700';
              return (
-                 <button
-                     type="button"
-                     data-tramline-entry="true"
-                     aria-label={`${activeTramline.enabled ? 'Edit' : 'Set up'} Tramline pattern, status ${tramlineStatus}${activeTramline.enabled ? `, every ${interval} passes, ${patternDistance} meters` : ''}`}
-                     aria-expanded={uTurnPanelOpen && uTurnPanelTab === 'TRAMLINE'}
-                     onClick={runDockAction(openTramlinePanel)}
-                     className={`w-full min-h-[56px] text-left transition-colors active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-fuchsia-500/45 ${activeTramline.enabled ? isDarkDock ? 'bg-fuchsia-500/[0.06] hover:bg-fuchsia-500/10' : 'bg-fuchsia-50/60 hover:bg-fuchsia-50' : isDarkDock ? 'hover:bg-white/[0.04]' : 'bg-white hover:bg-slate-50'}`}
-                 >
+                 <div className="px-3">
+                  <button
+                      type="button"
+                      data-tramline-entry="true"
+                      aria-label={`${activeTramline.enabled ? 'Edit' : 'Set up'} Tramline pattern, status ${tramlineStatus}${activeTramline.enabled ? `, every ${interval} passes, ${patternDistance} meters` : ''}`}
+                      aria-expanded={uTurnPanelOpen && uTurnPanelTab === 'TRAMLINE'}
+                      onClick={runDockAction(openTramlinePanel)}
+                      className={`block w-full min-h-[56px] overflow-hidden rounded-xl border ${railDivider} text-left transition-colors active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-fuchsia-500/45 ${activeTramline.enabled ? isDarkDock ? 'bg-fuchsia-500/[0.06] hover:bg-fuchsia-500/10' : 'bg-fuchsia-50/60 hover:bg-fuchsia-50' : isDarkDock ? 'hover:bg-white/[0.04]' : 'bg-white hover:bg-slate-50'}`}
+                  >
                     <span className="relative grid min-h-[56px] w-full grid-cols-3 items-stretch">
                         <span className="col-span-2 flex min-w-0 items-center">
                             <span className="flex w-12 shrink-0 items-center justify-center">
@@ -8450,9 +8458,10 @@ const App = () => {
                             <span className="text-[7px] font-black uppercase tracking-[0.04em] opacity-80">{tramlineStatus}</span>
                             <span className="mt-0.5 whitespace-nowrap text-[9px] font-black">{tramlineActionLabel}</span>
                         </span>
-                        <span aria-hidden="true" className={`pointer-events-none absolute top-2.5 bottom-2.5 left-2/3 w-px ${railSeparator}`} />
+                        {renderDockColumnSeparators(2, true, false, false)}
                     </span>
-                </button>
+                  </button>
+                 </div>
              );
          };
          const renderManualQuickPicker = () => {
@@ -8894,8 +8903,8 @@ const App = () => {
            );
        };
        const renderDockViewControls = () => (
-            <div aria-label={`Map view ${zoomPercent}%`} className={`h-11 shrink-0 border-t ${railDivider} ${isDarkDock ? 'bg-slate-950/45' : 'bg-slate-50/80'}`}>
-                <div className="relative grid h-full grid-cols-3">
+            <div aria-label={`Map view ${zoomPercent}%`} className={`mb-1.5 mt-1.5 h-11 shrink-0 px-3 ${isDarkDock ? 'bg-slate-950/25' : 'bg-white/70'}`}>
+                <div className={`relative grid h-full grid-cols-3 overflow-hidden rounded-xl border ${railDivider}`}>
                     <button
                         type="button"
                         aria-label="Zoom out"
@@ -8924,7 +8933,7 @@ const App = () => {
                    >
                         <Plus className="h-4 w-4" />
                     </button>
-                    {renderDockColumnSeparators(3)}
+                    {renderDockColumnSeparators(3, false, false, false)}
                 </div>
             </div>
         );
@@ -8946,7 +8955,7 @@ const App = () => {
                     <span className="shrink-0 rounded-full bg-orange-500/12 px-2 py-1 text-[8px] font-black uppercase text-orange-600">Manual</span>
                 </div>
 
-                 <div className={`run-dock-body min-h-0 flex-1 overflow-y-auto overscroll-contain divide-y ${railDivide} ${isDarkDock ? 'bg-slate-950/25' : 'bg-white/70'} [scrollbar-width:thin]`}>
+                 <div className={`run-dock-body min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pt-1.5 ${isDarkDock ? 'bg-slate-950/25' : 'bg-white/70'} [scrollbar-width:thin]`}>
                     {renderManualAssetCard({
                         icon: getLineTypeIcon(activeShiftType),
                          label: 'Active line',
@@ -8982,7 +8991,7 @@ const App = () => {
                        tone: 'orange',
                         actions: dockBoundaries.length > 0
                             ? [
-                                { icon: Ruler, label: 'Adjust', ariaLabel: 'Shift active boundary', onClick: openDockBoundaryShift, disabled: !activeDockBoundary },
+                                { icon: Ruler, label: 'Shift', ariaLabel: 'Shift active boundary', onClick: openDockBoundaryShift, disabled: !activeDockBoundary },
                                 { icon: ArrowLeftRight, label: 'Change', ariaLabel: 'Switch active boundary', onClick: () => openDockPicker('boundaries') },
                                 { icon: Radio, label: 'Record', onClick: startDockBoundaryCapture }
                             ]
@@ -9013,8 +9022,8 @@ const App = () => {
                    <span className="shrink-0 rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black uppercase text-blue-500">Auto</span>
                </div>
 
-              <div className={`run-dock-body min-h-0 flex-1 overflow-y-auto overscroll-contain divide-y ${railDivide} ${isDarkDock ? 'bg-slate-950/25' : 'bg-white/70'} [scrollbar-width:thin]`}>
-                  <div className="px-3 py-2.5">
+              <div className={`run-dock-body min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pt-1.5 ${isDarkDock ? 'bg-slate-950/25' : 'bg-white/70'} [scrollbar-width:thin]`}>
+                  <div className={`mx-3 rounded-xl border px-3 py-2.5 ${railDivider}`}>
                       <div className="flex items-center justify-between gap-2">
                           <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Run assets</span>
                           <span className="rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black uppercase text-blue-500">Locked</span>
@@ -9035,7 +9044,7 @@ const App = () => {
                       )}
                    </div>
                   {activeLineRecord && tramlineSupported && renderTramlineDockCard()}
-                  <div className="pt-2">
+                  <div className={`mx-3 overflow-hidden rounded-xl border pt-2 ${railDivider}`}>
                       <div className="flex h-7 items-center justify-between gap-2 px-3">
                           <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Nudge</span>
                            <span aria-live="polite" className={`min-w-[66px] text-right text-sm font-black tabular-nums ${autoTrimEnabled && Math.abs(offsetCm) > 0.05 ? 'text-blue-500' : t.textMain}`}>
@@ -9073,7 +9082,7 @@ const App = () => {
                               <Plus className="h-4 w-4 text-blue-500" />
                               <span className="text-[9px] font-black">{isPivotShift ? 'OUT 1CM' : '1 CM'}</span>
                           </button>
-                          {renderDockColumnSeparators(3)}
+                          {renderDockColumnSeparators(3, false, true, false)}
                       </div>
                   </div>
 
@@ -17527,6 +17536,7 @@ const renderLinesPanel = () => {
                     {notification.msg}
                 </div>
             )}
+            <TouchKeyboard theme={theme} />
         </div>
     </div>
   );

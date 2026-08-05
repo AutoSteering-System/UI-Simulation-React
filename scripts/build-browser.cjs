@@ -12,6 +12,7 @@ const entries = [
   'src/components/SteeringWheelIcon.jsx',
   'src/components/TractorVehicle.jsx',
   'src/components/ui.jsx',
+  'src/components/TouchKeyboard.jsx',
   'src/app.jsx',
   'src/bootstrap.jsx'
 ];
