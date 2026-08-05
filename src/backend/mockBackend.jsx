@@ -287,7 +287,7 @@ const MockBackend = (() => {
               enabled: false,
               intervalPasses: 4,
               anchorPassIndex: 0,
-              visualOnly: true
+              followOnUTurn: true
             },
             date: '2023-10-01',
             points: { a: { x: 0, y: -200 }, b: { x: 0, y: 200 } }
@@ -526,6 +526,13 @@ const MockBackend = (() => {
             ? profileOverallWidthM
             : sourceWorkingWidthM
       );
+      const sourceTramline = line.tramline || {};
+      // Before Follow/Mark-only was explicit, Tramline always affected Basic
+      // U-turn routing at runtime. Preserve that behavior for legacy records,
+      // then keep the compatibility flag canonical for external readers.
+      const followOnUTurn = Object.prototype.hasOwnProperty.call(sourceTramline, 'followOnUTurn')
+        ? sourceTramline.followOnUTurn !== false
+        : true;
       return {
         ...line,
         trackSpacingM,
@@ -538,8 +545,9 @@ const MockBackend = (() => {
           enabled: false,
           intervalPasses: 4,
           anchorPassIndex: 0,
-          visualOnly: true,
-          ...(line.tramline || {})
+          ...sourceTramline,
+          followOnUTurn,
+          visualOnly: !followOnUTurn
         }
       };
     };

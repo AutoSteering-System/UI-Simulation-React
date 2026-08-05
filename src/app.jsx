@@ -2336,7 +2336,7 @@ const App = () => {
             enabled: false,
             intervalPasses: 4,
             anchorPassIndex: 0,
-            visualOnly: true
+            followOnUTurn: true
         },
         date: createdAt.toISOString().split('T')[0],
         createdAt: createdAt.toISOString(),
@@ -2991,14 +2991,24 @@ const App = () => {
       enabled: false,
       intervalPasses: 4,
       anchorPassIndex: 0,
-      visualOnly: true
+      followOnUTurn: true
   };
+  const activeTramlineFollowOnUTurn = activeTramline.followOnUTurn !== false;
+  const tramlineRoutingEnabled = activeTramline.enabled && activeTramlineFollowOnUTurn;
   const guidanceLaneRenderRadius = activeTramline.enabled
       ? Math.min(12, Math.max(4, Math.round(Number(activeTramline.intervalPasses) || 4)))
       : 4;
   useEffect(() => {
       if (activeTramline.enabled && !isMultiLineMode) actions.setIsMultiLineMode(true);
   }, [activeLineId, activeTramline.enabled, isMultiLineMode]);
+  useEffect(() => {
+      if (!tramlineRoutingEnabled || uTurnSettings?.mode !== 'SMART') return;
+      // A passive field/line load must not overwrite the operator's global
+      // Smart Field choice. Follow stays configured but pauses until the user
+      // explicitly selects One Turn/Auto (explicit Follow activation below
+      // still makes that choice for the user and explains it).
+      showNotification('Tramline Follow is paused while Smart Field is active', 'info');
+  }, [activeLineId, tramlineRoutingEnabled, uTurnSettings?.mode]);
   const normalizedModulo = (value, modulus) => {
       const safeModulus = Math.max(1, Math.round(Number(modulus) || 1));
       return ((Math.round(Number(value) || 0) % safeModulus) + safeModulus) % safeModulus;
@@ -3740,7 +3750,7 @@ const App = () => {
           ? Math.min(50, Math.max(1, Number(config.skipPasses || 0) + 1))
           : 1;
       let targetPolicy = config.nextPass === 'Skip' ? 'SKIP' : 'ADJACENT';
-      const tramlineRouting = activeTramline.enabled && config.mode !== 'SMART';
+      const tramlineRouting = tramlineRoutingEnabled && config.mode !== 'SMART';
       const currentPassIsTramline = tramlineRouting && isTramlinePass(currentLaneIndex);
       const tramlineInterval = Math.max(2, Math.round(Number(activeTramline.intervalPasses) || 4));
 
@@ -3755,9 +3765,8 @@ const App = () => {
           }
       }
 
-      // Adjacent and Skip are explicit operator policies. Coverage status can
-      // warn about the selected lane, but must never silently move the target.
-      // Smart Field owns coverage-aware routing in its separate planner.
+      // Mark-only Tramline keeps Adjacent/Skip authoritative. Follow mode owns
+      // the F200-style class routing above, while Smart Field uses its planner.
       const targetLaneIndex = currentLaneIndex + laneDirection * passDelta;
       const targetPassAlreadyWorked = config.mode !== 'SMART' && isWorkedPass(targetLaneIndex);
 
@@ -4841,28 +4850,56 @@ const App = () => {
   const updateActiveTramline = (patch) => {
       if (!activeLineRecord) {
           showNotification('Save and load a guidance line first', 'warning');
-          return;
+          return false;
       }
       if (turnAssistRef.current) {
           showNotification('Finish or cancel the active turn before changing Tramline', 'warning');
-          return;
+          return false;
       }
       const enabling = patch.enabled === true && !activeTramline.enabled;
+      const nextFollowOnUTurn = Object.prototype.hasOwnProperty.call(patch, 'followOnUTurn')
+          ? patch.followOnUTurn !== false
+          : activeTramlineFollowOnUTurn;
+      const nextTramline = {
+          ...activeTramline,
+          ...patch,
+          followOnUTurn: nextFollowOnUTurn,
+          visualOnly: !nextFollowOnUTurn
+      };
+      const patternChanged = ['enabled', 'intervalPasses', 'anchorPassIndex', 'followOnUTurn'].some(key => (
+          Object.prototype.hasOwnProperty.call(patch, key)
+          && nextTramline[key] !== activeTramline[key]
+      ));
+      const nextRoutingEnabled = nextTramline.enabled && nextFollowOnUTurn;
+      const routingGeometryChanged = ['intervalPasses', 'anchorPassIndex'].some(key => (
+          Object.prototype.hasOwnProperty.call(patch, key)
+          && nextTramline[key] !== activeTramline[key]
+      ));
+      const turnRoutingChanged = patternChanged && (
+          tramlineRoutingEnabled !== nextRoutingEnabled
+          || (nextRoutingEnabled && routingGeometryChanged)
+      );
+      const activatingFollowRouting = nextRoutingEnabled && !tramlineRoutingEnabled;
       if (enabling && !isMultiLineMode) {
           actions.setIsMultiLineMode(true);
-          showNotification('Parallel passes enabled for Tramline routing', 'info');
+          showNotification('Parallel passes enabled for the Tramline pattern', 'info');
       }
-      if (enabling && autoUTurnArmed) {
-          setAutoUTurnArmed(false);
-          autoLaneStepRef.current = null;
-          autoArmSafetySignatureRef.current = null;
-          if (autoApproachPreviousSpeedRef.current != null) {
-              physics.current.targetSpeed = autoApproachPreviousSpeedRef.current;
-              setManualTargetSpeed(autoApproachPreviousSpeedRef.current);
-          }
-          autoApproachPreviousSpeedRef.current = null;
-          setUTurnStage('IDLE');
-          showNotification('Auto U-turn disarmed because Tramline routing is active', 'info');
+      if (activatingFollowRouting && getNormalizedTurnConfig().mode === 'SMART') {
+          actions.setUTurnSettings(previous => ({
+              ...previous,
+              mode: 'ONE_KEY',
+              targetSelectionVersion: 2
+          }));
+          showNotification('Smart Field changed to One Turn because Tramline Follow is active', 'info');
+      }
+      if (turnRoutingChanged) {
+          autoTriggerEvaluationRef.current = 0;
+          setUTurnPreview(null);
+          setUTurnDistanceToTriggerM(null);
+      }
+      if (autoUTurnArmed && turnRoutingChanged) {
+          setUTurnStage('ARMED');
+          showNotification('Tramline updated / Auto U-turn recalculating', 'info');
       }
       updateSelectedFieldLines(lines => lines.map(line => line.id === activeLineRecord.id
           ? {
@@ -4870,10 +4907,11 @@ const App = () => {
               isMulti: enabling ? true : line.isMulti,
               trackSpacingM: Number(line.trackSpacingM) || activeTrackSpacingM,
               sourceImplementProfileId: line.sourceImplementProfileId || implementSettings.profileId || null,
-              tramline: { ...activeTramline, ...patch },
+              tramline: nextTramline,
               updatedAt: new Date().toISOString()
           }
           : line));
+      return true;
   };
   const setCurrentPassAsTramline = () => {
       if (!tramlineSupported || !activeLineRecord) {
@@ -4881,8 +4919,14 @@ const App = () => {
           return;
       }
       const passIndex = activeLaneRef.current ?? manualLaneRef.current ?? livePassIndex;
-      updateActiveTramline({ enabled: true, anchorPassIndex: passIndex });
-      showNotification(`Pass ${passIndex >= 0 ? '+' : ''}${passIndex} set as Tramline start`, 'success');
+      if (updateActiveTramline({ enabled: true, anchorPassIndex: passIndex })) {
+          showNotification(
+              activeTramlineFollowOnUTurn
+                  ? `Pass ${passIndex >= 0 ? '+' : ''}${passIndex} aligned as the Tramline reference / used on the next U-turn`
+                  : `Pass ${passIndex >= 0 ? '+' : ''}${passIndex} aligned as the Tramline reference`,
+              'success'
+          );
+      }
   };
   const openTramlinePanel = () => {
       setUTurnPanelTab('TRAMLINE');
@@ -5024,7 +5068,7 @@ const App = () => {
           return;
       }
       executeUTurnPlan(candidate);
-  }, [autoUTurnArmed, worldPos.x, worldPos.y, heading, steeringMode, rtkGuidanceReady, activeBoundaryIdx, activeLineId, activeTrackSpacingM, liveGuidanceMetrics.lineHeading, liveGuidanceDirectionFactor]);
+  }, [autoUTurnArmed, worldPos.x, worldPos.y, heading, steeringMode, rtkGuidanceReady, activeBoundaryIdx, activeLineId, activeTrackSpacingM, liveGuidanceMetrics.lineHeading, liveGuidanceDirectionFactor, activeTramline.enabled, activeTramline.intervalPasses, activeTramline.anchorPassIndex, activeTramlineFollowOnUTurn]);
 
   useEffect(() => {
       if (!autoUTurnArmed) {
@@ -5501,10 +5545,26 @@ const App = () => {
       const plan = displayedUTurnPlan;
       const currentPass = activeLaneRef.current ?? manualLaneRef.current ?? livePassIndex;
       const currentMatchesTramlinePattern = isTramlinePatternPass(currentPass);
+      const tramlinePassClass = currentMatchesTramlinePattern ? 'TRAMLINE' : 'WORK';
       const tramlineIntervalPasses = Math.max(2, Math.round(Number(activeTramline.intervalPasses) || 4));
       const tramlinePreviewOffsets = Array.from({ length: 17 }, (_, index) => index - 8);
-      const nextTramlineDelta = Array.from({ length: tramlineIntervalPasses }, (_, index) => index)
-          .find(delta => isTramlinePatternPass(currentPass + delta));
+      const tramlinePausedForSmart = tramlineRoutingEnabled && turnConfig.mode === 'SMART';
+      const tramlineRoutingActive = tramlineRoutingEnabled && !tramlinePausedForSmart;
+      const tramlineMarkOnly = activeTramline.enabled && !activeTramlineFollowOnUTurn;
+      const tramlineTarget = (selectedDirection === -1 || selectedDirection === 1)
+          ? getTurnPassTarget(selectedDirection, turnConfig)
+          : null;
+      const formatPassIndex = (passIndex) => {
+          const normalizedPass = Number(passIndex);
+          return Number.isFinite(normalizedPass)
+              ? `${normalizedPass >= 0 ? '+' : ''}${normalizedPass}`
+              : null;
+      };
+      const tramlineCurrentLabel = formatPassIndex(tramlineTarget?.currentLaneIndex ?? currentPass);
+      const tramlineTargetLabel = formatPassIndex(tramlineTarget?.targetLaneIndex);
+      const tramlineTransition = tramlineCurrentLabel && tramlineTargetLabel
+          ? `${tramlineCurrentLabel} → ${tramlineTargetLabel}`
+          : null;
       const smartRoutePartial = turnConfig.mode === 'SMART'
           && plan?.feasible
           && plan?.routeCompleteness === 'PARTIAL';
@@ -5544,8 +5604,8 @@ const App = () => {
                   : turnConfig.pattern === 'FISH_TAIL'
                       ? '3-POINT'
                       : 'AUTO FIT';
-      const targetTitle = activeTramline.enabled
-          ? 'TRAMLINE'
+      const targetTitle = tramlineRoutingActive
+          ? (tramlineTargetLabel ? `PASS ${tramlineTargetLabel}` : 'TRAMLINE')
           : turnConfig.nextPass === 'Skip'
               ? `SKIP ${Math.max(1, Number(turnConfig.skipPasses) || 1)}`
               : 'NEXT PASS';
@@ -5589,6 +5649,10 @@ const App = () => {
           : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'} ${t.textMain} hover:bg-blue-500/5`;
       const changeTurnSettings = (changes, requestedDirection) => {
           const versionedChanges = { ...changes, targetSelectionVersion: 2 };
+          if (changes.mode === 'SMART' && turnConfig.mode !== 'SMART' && tramlineRoutingEnabled) {
+              showNotification('Turn off Tramline Follow on U-turn before using Smart Field', 'warning');
+              return;
+          }
           actions.setUTurnSettings(previous => ({ ...previous, ...versionedChanges }));
           refreshUTurnPreview({ ...versionedChanges, allowAutoEngage }, requestedDirection);
       };
@@ -5713,7 +5777,7 @@ const App = () => {
                           <button aria-label="Auto U-turn at the headland boundary" aria-pressed={turnConfig.mode === 'AUTO'} disabled={manualHeadlandRecommendation || autoUTurnArmed || turnAssistActive} onClick={() => changeTurnSetting('mode', 'AUTO')} className={`h-11 rounded-xl border px-2 text-[9px] font-black disabled:opacity-40 ${panelButton(turnConfig.mode === 'AUTO')}`}>
                               AUTO
                           </button>
-                          <button aria-label="Smart Field route planning" aria-pressed={turnConfig.mode === 'SMART'} disabled={manualHeadlandRecommendation || autoUTurnArmed || turnAssistActive} onClick={() => changeTurnSetting('mode', 'SMART')} className={`h-11 rounded-xl border px-2 text-[9px] font-black disabled:opacity-40 ${panelButton(turnConfig.mode === 'SMART')}`}>
+                          <button aria-label="Smart Field route planning" aria-pressed={turnConfig.mode === 'SMART'} title={tramlineRoutingEnabled ? 'Turn off Tramline Follow on U-turn first' : undefined} disabled={manualHeadlandRecommendation || autoUTurnArmed || turnAssistActive || tramlineRoutingEnabled} onClick={() => changeTurnSetting('mode', 'SMART')} className={`h-11 rounded-xl border px-2 text-[9px] font-black disabled:opacity-40 ${panelButton(turnConfig.mode === 'SMART')}`}>
                               FIELD PLAN
                           </button>
                       </div>
@@ -5754,6 +5818,17 @@ const App = () => {
                               <div className="mt-1.5 text-[8px] font-black text-amber-600">{plan.routeCoveragePercent || 0}% planned · {plan.omittedWorkSegments?.length || 0} manual zones</div>
                           )}
                           {plan?.openFieldPreview && <div className="mt-1.5 text-[8px] font-black text-amber-600">Boundary clearance is not checked.</div>}
+                          {activeTramline.enabled && (
+                              <div className={`mt-1.5 rounded-lg px-2 py-1.5 text-[9px] font-black leading-snug ${tramlinePausedForSmart ? 'bg-amber-500/10 text-amber-600' : 'bg-fuchsia-500/10 text-fuchsia-600'}`}>
+                                  {tramlinePausedForSmart
+                                      ? 'Tramline Follow is unavailable in Smart Field.'
+                                      : tramlineMarkOnly
+                                          ? (turnConfig.mode === 'SMART'
+                                              ? 'Tramline is Mark only; Smart Field keeps its normal row plan.'
+                                              : 'Tramline is Mark only; this U-turn follows the normal Next/Skip row setting.')
+                                          : `Tramline${tramlineTransition ? ` ${tramlineTransition}` : ''} keeps the ${tramlinePassClass} pass class on the next U-turn. Steering Engage stays on the nearest pass. Turn off Follow to use Smart Field.`}
+                              </div>
+                          )}
                       </div>
 
                       <div className="mt-1 flex gap-2">
@@ -5796,47 +5871,69 @@ const App = () => {
                               <div className={`overflow-hidden rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900/55' : 'bg-slate-50/70'}`}>
                                   <div className={`flex items-center gap-3 px-3 py-2.5 border-b ${t.divider}`}>
                                       <div className="min-w-0 flex-1">
-                                          <div className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Tramline routing</div>
-                                          <div className="mt-0.5 flex min-w-0 items-center gap-2">
-                                              <span className={`text-[11px] font-black ${t.textMain}`}>Every {tramlineIntervalPasses} passes</span>
-                                              <span className={`truncate text-[8px] font-bold ${t.textDim}`}>· {(activeTrackSpacingM * tramlineIntervalPasses).toFixed(2)} m</span>
+                                          <div className={`text-[10px] font-black uppercase tracking-[0.06em] ${t.textSub}`}>Tramline pattern</div>
+                                          <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                                              <span className={`text-[12px] font-black ${t.textMain}`}>Every {tramlineIntervalPasses} passes</span>
+                                              <span className={`text-[10px] font-bold ${t.textSub}`}>· {(activeTrackSpacingM * tramlineIntervalPasses).toFixed(1)} m</span>
                                           </div>
                                       </div>
-                                      <span className={`text-[8px] font-black uppercase ${activeTramline.enabled ? 'text-fuchsia-500' : t.textDim}`}>{activeTramline.enabled ? 'On' : 'Off'}</span>
-                                      <button aria-label="Enable Tramline routing" aria-pressed={activeTramline.enabled} onClick={() => updateActiveTramline({ enabled: !activeTramline.enabled })} className={`shrink-0 w-11 h-6 rounded-full p-0.5 transition-colors ${activeTramline.enabled ? 'bg-fuchsia-500' : 'bg-slate-400'}`}>
+                                      <span className={`text-[9px] font-black uppercase ${activeTramline.enabled ? 'text-fuchsia-600' : t.textSub}`}>{activeTramline.enabled ? 'On' : 'Off'}</span>
+                                      <button aria-label="Enable Tramline pattern" aria-pressed={activeTramline.enabled} onClick={() => updateActiveTramline({ enabled: !activeTramline.enabled })} className={`shrink-0 w-11 h-6 rounded-full p-0.5 transition-colors ${activeTramline.enabled ? 'bg-fuchsia-600' : 'bg-slate-400'}`}>
                                           <span className={`block w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${activeTramline.enabled ? 'translate-x-5' : ''}`} />
                                       </button>
                                   </div>
 
+                                  <div className={`px-3 py-2 text-[10px] font-bold leading-snug border-b ${t.divider} ${tramlinePausedForSmart ? 'bg-amber-500/10 text-amber-700' : activeTramline.enabled ? 'bg-fuchsia-500/[0.07] text-fuchsia-700' : t.textSub}`}>
+                                      {tramlinePausedForSmart
+                                          ? 'Follow is paused while Field Plan is active.'
+                                          : activeTramline.enabled
+                                              ? tramlineMarkOnly
+                                                  ? 'Mark only · U-turn uses the normal Next / Skip target.'
+                                                  : tramlineTransition
+                                                      ? `Next U-turn: ${tramlineTransition} · keeps ${tramlinePassClass.toLowerCase()} passes.`
+                                                      : 'Follow on · U-turn keeps the tramline/work pattern.'
+                                              : 'Preview only · turn Tramline on when ready.'}
+                                  </div>
+
+                                  <div className={`flex items-center gap-3 px-3 py-2.5 border-b ${t.divider}`}>
+                                      <div className="min-w-0 flex-1">
+                                          <div className={`text-[11px] font-black ${t.textMain}`}>Follow on U-turn</div>
+                                          <div className={`mt-0.5 text-[10px] font-bold ${t.textSub}`}>{activeTramlineFollowOnUTurn ? 'Tramline → tramline · Work → work' : 'Off · Tramline is mark only'}</div>
+                                      </div>
+                                      <button aria-label="Follow Tramline pattern on U-turn" aria-pressed={activeTramlineFollowOnUTurn} onClick={() => updateActiveTramline({ followOnUTurn: !activeTramlineFollowOnUTurn })} className={`shrink-0 w-11 h-6 rounded-full p-0.5 transition-colors ${activeTramlineFollowOnUTurn ? 'bg-fuchsia-600' : 'bg-slate-400'}`}>
+                                          <span className={`block w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${activeTramlineFollowOnUTurn ? 'translate-x-5' : ''}`} />
+                                      </button>
+                                  </div>
+
                                   <div className={`px-3 py-2.5 border-b ${t.divider}`}>
-                                      <div className={`mb-1.5 flex items-center justify-between text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>
+                                      <div className={`mb-2 flex items-center justify-between text-[10px] font-black uppercase tracking-[0.05em] ${t.textSub}`}>
                                           <span>Spacing</span>
                                           <span>{activeTrackSpacingM.toFixed(2)} m working pass</span>
                                       </div>
-                                      <div className="grid grid-cols-5 gap-1">
+                                      <div className="grid grid-cols-5 gap-1.5">
                                           {[3, 4, 6, 8].map(interval => (
-                                              <button key={interval} aria-label={`Set a tramline every ${interval} passes`} aria-pressed={tramlineIntervalPasses === interval} onClick={() => updateActiveTramline({ intervalPasses: interval })} className={`h-9 rounded-lg border text-[10px] font-black ${tramlineIntervalPasses === interval ? 'border-fuchsia-600 bg-fuchsia-600 text-white shadow-sm' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} ${t.textMain}`}`}>
+                                              <button key={interval} aria-label={`Set a tramline every ${interval} passes`} aria-pressed={tramlineIntervalPasses === interval} onClick={() => updateActiveTramline({ intervalPasses: interval })} className={`h-10 rounded-lg border text-[12px] font-black ${tramlineIntervalPasses === interval ? 'border-fuchsia-600 bg-fuchsia-600 text-white' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} ${t.textMain}`}`}>
                                                   {interval}
                                               </button>
                                           ))}
-                                          <label className={`h-9 min-w-0 rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} flex flex-col items-center justify-center`}>
-                                              <input aria-label="Custom Tramline interval in passes" type="number" min="2" max="50" placeholder="—" value={[3, 4, 6, 8].includes(tramlineIntervalPasses) ? '' : tramlineIntervalPasses} onChange={(event) => { if (event.target.value !== '') updateActiveTramline({ intervalPasses: Math.max(2, Math.min(50, Math.round(Number(event.target.value) || 2))) }); }} className={`w-full min-w-0 bg-transparent text-center text-[10px] font-black leading-none outline-none placeholder:${t.textDim} ${t.textMain}`} />
-                                              <span className={`mt-0.5 text-[6px] font-black uppercase leading-none ${t.textDim}`}>Other</span>
+                                          <label className={`h-10 min-w-0 rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} flex flex-col items-center justify-center`}>
+                                              <input aria-label="Custom Tramline interval in passes" type="number" min="2" max="50" placeholder="—" value={[3, 4, 6, 8].includes(tramlineIntervalPasses) ? '' : tramlineIntervalPasses} onChange={(event) => { if (event.target.value !== '') updateActiveTramline({ intervalPasses: Math.max(2, Math.min(50, Math.round(Number(event.target.value) || 2))) }); }} className={`w-full min-w-0 bg-transparent text-center text-[12px] font-black leading-none outline-none ${t.textMain}`} />
+                                              <span className={`mt-0.5 text-[8px] font-black uppercase leading-none ${t.textSub}`}>Other</span>
                                           </label>
                                       </div>
                                   </div>
 
                                   <div className="px-3 py-2.5">
                                       <div className="flex items-center justify-between gap-2">
-                                          <span className={`text-[8px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>First tramline</span>
-                                          <span className={`text-[8px] font-black ${currentMatchesTramlinePattern ? 'text-fuchsia-500' : t.textSub}`}>
-                                              Pass {currentPass >= 0 ? '+' : ''}{currentPass} · {currentMatchesTramlinePattern ? 'TRAMLINE' : 'WORK'}
+                                          <span className={`text-[10px] font-black uppercase tracking-[0.05em] ${t.textSub}`}>Pattern reference</span>
+                                          <span className={`text-[10px] font-black ${activeTramline.enabled && currentMatchesTramlinePattern ? 'text-fuchsia-600' : t.textSub}`}>
+                                              Pass {currentPass >= 0 ? '+' : ''}{currentPass} · {!activeTramline.enabled ? 'PREVIEW' : currentMatchesTramlinePattern ? 'TRAMLINE' : 'WORK'}
                                           </span>
                                       </div>
                                       <div
                                           data-tramline-preview="true"
                                           data-tramline-interval={tramlineIntervalPasses}
-                                          className={`mt-1.5 h-[64px] rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} grid gap-0.5 px-2 py-1.5`}
+                                          className={`mt-2 h-[66px] rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} grid gap-0.5 px-2 py-1.5`}
                                           style={{ gridTemplateColumns: `repeat(${tramlinePreviewOffsets.length}, minmax(0, 1fr))` }}
                                       >
                                           {tramlinePreviewOffsets.map(index => {
@@ -5844,25 +5941,31 @@ const App = () => {
                                               const tram = isTramlinePatternPass(pass);
                                               const current = index === 0;
                                               return (
-                                                  <span key={pass} data-tramline-pass={pass} data-tramline-rail={tram ? 'true' : 'false'} className={`min-w-0 rounded flex flex-col items-center justify-end gap-1 transition-colors ${current ? 'ring-1 ring-blue-500/60 bg-blue-500/5' : ''}`}>
-                                                      <span className={`min-h-[7px] text-[6px] font-black tabular-nums ${current ? 'text-blue-500' : tram ? 'text-fuchsia-500' : t.textDim}`}>{tram || current ? (pass >= 0 ? `+${pass}` : pass) : ''}</span>
-                                                      <span className={`w-[3px] rounded-full transition-all duration-200 ${tram ? 'h-8 bg-fuchsia-500' : `h-3 ${theme === 'dark' ? 'bg-slate-600' : 'bg-slate-300'}`}`} />
+                                                  <span key={pass} data-tramline-pass={pass} data-tramline-rail={tram ? 'true' : 'false'} className={`min-w-0 rounded flex flex-col items-center justify-end gap-1 ${current ? 'ring-1 ring-blue-500/70 bg-blue-500/5' : ''}`}>
+                                                      <span className={`min-h-[10px] text-[8px] font-black tabular-nums ${current ? 'text-blue-600' : tram ? (activeTramline.enabled ? 'text-fuchsia-600' : 'text-fuchsia-500/45') : t.textSub}`}>{tram || current ? (pass >= 0 ? `+${pass}` : pass) : ''}</span>
+                                                      <span className={`w-[3px] rounded-full ${tram ? `h-8 ${activeTramline.enabled ? 'bg-fuchsia-600' : 'bg-fuchsia-500/35'}` : `h-3 ${theme === 'dark' ? 'bg-slate-600' : 'bg-slate-300'}`}`} />
                                                   </span>
                                               );
                                           })}
                                       </div>
-                                      <div className={`mt-1.5 text-center text-[8px] font-bold ${t.textSub}`}>
-                                          {nextTramlineDelta === 0 ? 'Pattern is aligned with the current pass' : `Next tramline in ${nextTramlineDelta} pass${nextTramlineDelta === 1 ? '' : 'es'}`}
+                                      <div className={`mt-1.5 text-center text-[10px] font-bold ${t.textSub}`}>
+                                          {!activeTramline.enabled
+                                              ? 'Saved pattern preview · turn Tramline on to use it'
+                                              : tramlineMarkOnly
+                                                  ? 'Mark only · U-turn uses the normal target'
+                                                  : tramlineTransition
+                                                      ? `Next U-turn target: ${tramlineTransition}`
+                                                      : 'Choose a turn side to preview the target pass'}
                                       </div>
-                                      <div className="mt-1.5 grid grid-cols-[40px_minmax(0,1fr)_40px] gap-1.5">
+                                      <div className="mt-2 grid grid-cols-[42px_minmax(0,1fr)_42px] gap-2">
                                           <button aria-label="Move Tramline pattern one pass left" onClick={() => updateActiveTramline({ anchorPassIndex: (Number(activeTramline.anchorPassIndex) || 0) - 1 })} className={`h-10 rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} ${t.textMain} text-sm font-black`}>←</button>
-                                          <button onClick={setCurrentPassAsTramline} className={`h-10 min-w-0 rounded-lg border text-[9px] font-black ${activeTramline.enabled ? `border-fuchsia-500/40 ${theme === 'dark' ? 'bg-fuchsia-500/10 text-fuchsia-300' : 'bg-fuchsia-50 text-fuchsia-700'}` : 'border-fuchsia-500 bg-fuchsia-600 text-white'}`}>{activeTramline.enabled ? 'USE CURRENT PASS' : 'USE CURRENT & TURN ON'}</button>
+                                          <button onClick={setCurrentPassAsTramline} className={`h-10 min-w-0 rounded-lg border text-[10px] font-black ${activeTramline.enabled ? `border-fuchsia-500/40 ${theme === 'dark' ? 'bg-fuchsia-500/10 text-fuchsia-300' : 'bg-fuchsia-50 text-fuchsia-700'}` : 'border-fuchsia-600 bg-fuchsia-600 text-white'}`}>{activeTramline.enabled ? 'ALIGN TO CURRENT PASS' : 'ALIGN CURRENT & TURN ON'}</button>
                                           <button aria-label="Move Tramline pattern one pass right" onClick={() => updateActiveTramline({ anchorPassIndex: (Number(activeTramline.anchorPassIndex) || 0) + 1 })} className={`h-10 rounded-lg border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950' : 'bg-white'} ${t.textMain} text-sm font-black`}>→</button>
                                       </div>
                                   </div>
                               </div>
-                              <div className={`px-2 pt-1.5 text-center text-[8px] font-bold ${t.textDim}`}>Live preview · Saved automatically · ISOBUS required for row shutoff</div>
-                          </>
+                              <div className={`px-2 pt-1.5 text-center text-[9px] font-bold ${t.textSub}`}>Saved automatically · Row shutoff requires ISOBUS</div>
+                           </>
                       )}
                   </div>
               )}
@@ -7999,6 +8102,7 @@ const App = () => {
       const shiftDisplayFactor = isPivotShift ? 1 : liveGuidanceDirectionFactor;
       const offsetCm = manualOffset / PIXELS_PER_METER * 100 * shiftDisplayFactor;
       const railDivider = isDarkDock ? 'border-slate-800' : 'border-slate-200';
+      const railSeparator = isDarkDock ? 'bg-slate-800' : 'bg-slate-200';
       const zoomPercent = Math.round(zoomLevel / DEFAULT_MAP_ZOOM * 100);
       const runtimeSection = isDarkDock
           ? 'border-slate-800 bg-slate-900/75'
@@ -8256,6 +8360,18 @@ const App = () => {
                </button>
            );
        };
+       const renderDockColumnSeparators = (columnCount = 3) => {
+           if (columnCount <= 1) return null;
+           if (columnCount === 2) {
+               return <span aria-hidden="true" className={`pointer-events-none absolute top-2.5 bottom-2.5 left-1/2 w-px ${railSeparator}`} />;
+           }
+           return (
+               <>
+                   <span aria-hidden="true" className={`pointer-events-none absolute top-2.5 bottom-2.5 left-1/3 w-px ${railSeparator}`} />
+                   <span aria-hidden="true" className={`pointer-events-none absolute top-2.5 bottom-2.5 left-2/3 w-px ${railSeparator}`} />
+               </>
+           );
+       };
        const renderManualAssetCard = ({ icon: Icon, label, value, detail, tone, actions: cardActions = [], afterActions = null }) => {
            const accentText = tone === 'orange'
                ? (isDarkDock ? 'text-orange-300' : 'text-orange-600')
@@ -8263,15 +8379,8 @@ const App = () => {
            const iconTone = tone === 'orange'
                 ? (isDarkDock ? 'bg-orange-500/14 text-orange-300' : 'bg-orange-100 text-orange-600')
                 : (isDarkDock ? 'bg-blue-500/14 text-blue-300' : 'bg-blue-100 text-blue-600');
-            const actionFocusTone = tone === 'orange' ? 'focus-visible:ring-orange-500/45' : 'focus-visible:ring-blue-500/45';
-            const actionTrayTone = tone === 'orange'
-                ? (isDarkDock ? 'border-orange-500/30 bg-orange-500/10 divide-orange-500/25' : 'border-orange-200 bg-orange-50 divide-orange-200')
-                : (isDarkDock ? 'border-blue-500/30 bg-blue-500/10 divide-blue-500/25' : 'border-blue-200 bg-blue-50 divide-blue-200');
-            const actionButtonTone = tone === 'orange'
-                ? (isDarkDock ? 'text-orange-200 hover:bg-orange-500/15' : 'text-orange-800 hover:bg-orange-100')
-                : (isDarkDock ? 'text-blue-200 hover:bg-blue-500/15' : 'text-blue-800 hover:bg-blue-100');
             return (
-                <section className="w-full px-3 py-2.5 text-left">
+                <section className="w-full px-3 pt-2.5 text-left">
                     <span className="flex items-center gap-2.5">
                        <span className={`shrink-0 w-9 h-9 rounded-xl flex items-center justify-center ${iconTone}`}>
                            <Icon className="w-4 h-4" />
@@ -8282,7 +8391,7 @@ const App = () => {
                            <span className={`mt-0.5 block truncate text-[9.5px] font-bold leading-tight ${t.textSub}`} title={detail}>{detail}</span>
                        </span>
                    </span>
-                    <span className={`mt-2 grid overflow-hidden rounded-xl border divide-x shadow-sm ${actionTrayTone} ${cardActions.length >= 3 ? 'grid-cols-3' : cardActions.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                    <span className={`relative mt-1.5 -mx-3 grid ${cardActions.length >= 3 ? 'grid-cols-3' : cardActions.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
                         {cardActions.map((action) => {
                             const ActionIcon = action.icon;
                            return (
@@ -8292,79 +8401,60 @@ const App = () => {
                                    aria-label={action.ariaLabel || action.label}
                                    disabled={action.disabled}
                                    onClick={action.disabled ? undefined : runDockAction(action.onClick)}
-                                    className={`h-12 min-w-0 px-1 flex flex-col items-center justify-center gap-1 font-black transition-all active:scale-[0.98] focus:outline-none focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset ${actionFocusTone} disabled:cursor-not-allowed disabled:opacity-35 ${actionButtonTone}`}
+                                    className={`h-11 min-w-0 px-1 flex flex-col items-center justify-center gap-1 overflow-hidden font-black transition-colors active:opacity-70 focus:outline-none focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/45 disabled:cursor-not-allowed disabled:opacity-35 ${isDarkDock ? 'text-slate-200 hover:bg-white/[0.05]' : 'text-slate-700 hover:bg-slate-100/70'}`}
                                 >
                                     <ActionIcon className="h-[18px] w-[18px] shrink-0" />
-                                    <span className="max-w-full truncate text-[10.5px] leading-none">{action.label}</span>
+                                    <span className="max-w-full whitespace-nowrap text-[10px] leading-none">{action.label}</span>
                                </button>
                            );
                        })}
+                       {renderDockColumnSeparators(cardActions.length)}
                    </span>
                    {afterActions && <span className={`mt-2 block border-t ${railDivider} pt-2`}>{afterActions}</span>}
                </section>
             );
         };
-         const renderTramlineDockCard = ({ compact = false, embedded = false, flat = false } = {}) => {
+         const renderTramlineDockCard = () => {
              const interval = Math.max(2, Math.round(Number(activeTramline.intervalPasses) || 4));
              const patternDistance = (activeTrackSpacingM * interval).toFixed(1);
-             if (flat) {
-                 return (
-                     <button
-                         type="button"
-                         data-tramline-entry="true"
-                         aria-label={`${activeTramline.enabled ? 'Edit' : 'Set up'} Tramline pattern${activeTramline.enabled ? `, every ${interval} passes, ${patternDistance} meters` : ''}`}
-                         aria-expanded={uTurnPanelOpen && uTurnPanelTab === 'TRAMLINE'}
-                         onClick={runDockAction(openTramlinePanel)}
-                         className={`w-full min-h-[68px] px-3 py-2 text-left transition-all active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-fuchsia-500/45 ${isDarkDock ? 'hover:bg-fuchsia-500/[0.06]' : 'hover:bg-fuchsia-50/60'}`}
-                     >
-                         <span className="flex items-center gap-2.5">
-                             <span className={`shrink-0 w-9 h-9 rounded-xl flex items-center justify-center ${isDarkDock ? 'bg-fuchsia-500/14 text-fuchsia-300' : 'bg-fuchsia-100 text-fuchsia-600'}`}>
-                                 <AlignJustify aria-hidden="true" className="w-4 h-4" />
-                             </span>
-                             <span className="min-w-0 flex-1">
-                                 <span className="flex items-center gap-1 text-[8px] font-black uppercase tracking-[0.08em] text-fuchsia-600">
-                                     <span>Tramline</span>
-                                     <span aria-hidden="true">·</span>
-                                     <span className={activeTramline.enabled ? 'text-fuchsia-600' : t.textDim}>{activeTramline.enabled ? 'On' : 'Off'}</span>
-                                 </span>
-                                 <span className={`mt-1 block truncate text-[10.5px] font-black leading-tight ${activeTramline.enabled ? t.textMain : t.textSub}`} title={activeTramline.enabled ? `Every ${interval} passes · ${patternDistance} m` : 'Set spacing and first pass'}>
-                                     {activeTramline.enabled ? `${interval} passes · ${patternDistance} m` : 'Set spacing and first pass'}
-                                 </span>
-                             </span>
-                             <span className={`h-10 min-w-[52px] shrink-0 rounded-xl border px-2.5 flex items-center justify-center text-[9px] font-black shadow-sm ${isDarkDock ? 'border-fuchsia-500/30 bg-fuchsia-500/12 text-fuchsia-300' : 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800'}`}>
-                                 {activeTramline.enabled ? 'EDIT' : 'SET UP'}
-                             </span>
-                         </span>
-                     </button>
-                 );
-             }
+             const tramlineStatus = !activeTramline.enabled
+                 ? 'Off'
+                 : activeTramlineFollowOnUTurn ? 'Follow' : 'Mark';
+             const tramlineDetail = activeTramline.enabled
+                 ? `Every ${interval} passes`
+                 : 'Set up pattern';
+             const tramlineActionLabel = activeTramline.enabled ? 'EDIT' : 'SET UP';
+             const tramlineActionTone = isDarkDock ? 'text-fuchsia-300' : 'text-fuchsia-700';
              return (
                  <button
                      type="button"
                      data-tramline-entry="true"
-                     aria-label={`${activeTramline.enabled ? 'Adjust' : 'Set up'} Tramline pattern`}
+                     aria-label={`${activeTramline.enabled ? 'Edit' : 'Set up'} Tramline pattern, status ${tramlineStatus}${activeTramline.enabled ? `, every ${interval} passes, ${patternDistance} meters` : ''}`}
                      aria-expanded={uTurnPanelOpen && uTurnPanelTab === 'TRAMLINE'}
                      onClick={runDockAction(openTramlinePanel)}
-                     className={`w-full ${compact ? 'h-[52px]' : 'h-[56px]'} rounded-2xl px-2 flex items-center gap-2 text-left shadow-sm shadow-fuchsia-900/10 ring-1 ring-inset ring-fuchsia-500/25 transition-all active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-500/55 ${isDarkDock ? 'bg-fuchsia-500/10 hover:bg-fuchsia-500/16' : 'bg-fuchsia-50 hover:bg-fuchsia-100/80'}`}
+                     className={`w-full min-h-[56px] text-left transition-colors active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-fuchsia-500/45 ${activeTramline.enabled ? isDarkDock ? 'bg-fuchsia-500/[0.06] hover:bg-fuchsia-500/10' : 'bg-fuchsia-50/60 hover:bg-fuchsia-50' : isDarkDock ? 'hover:bg-white/[0.04]' : 'bg-white hover:bg-slate-50'}`}
                  >
-                     <span className="shrink-0 w-8 h-8 rounded-lg bg-fuchsia-600 text-white shadow-sm shadow-fuchsia-900/20 flex items-center justify-center">
-                         <AlignJustify className="w-4 h-4" />
-                     </span>
-                     <span className="min-w-0 flex-1">
-                         <span className="flex items-center gap-1.5">
-                             <span className={`text-[10px] font-black uppercase tracking-[0.08em] ${t.textMain}`}>Tramline</span>
-                             <span className={`rounded px-1 py-0.5 text-[7px] font-black uppercase leading-none ${activeTramline.enabled ? 'bg-fuchsia-600 text-white' : isDarkDock ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-500'}`}>
-                                 {activeTramline.enabled ? 'On' : 'Off'}
-                             </span>
-                         </span>
-                         <span className={`mt-0.5 block truncate text-[9.5px] font-bold leading-tight ${activeTramline.enabled ? 'text-fuchsia-600' : t.textSub}`}>{activeTramline.enabled ? `${interval} passes · ${patternDistance} m` : 'Set spacing and first pass'}</span>
-                     </span>
-                     <span className="h-8 shrink-0 rounded-lg bg-fuchsia-600 px-2.5 flex items-center justify-center text-[9px] font-black text-white shadow-sm shadow-fuchsia-900/20">
-                         {activeTramline.enabled ? 'EDIT' : 'SET UP'}
-                     </span>
+                    <span className="relative grid min-h-[56px] w-full grid-cols-3 items-stretch">
+                        <span className="col-span-2 flex min-w-0 items-center">
+                            <span className="flex w-12 shrink-0 items-center justify-center">
+                            <span className={`h-8 w-8 rounded-lg flex items-center justify-center ${activeTramline.enabled ? 'bg-fuchsia-600 text-white' : isDarkDock ? 'bg-fuchsia-500/14 text-fuchsia-300' : 'bg-fuchsia-100 text-fuchsia-600'}`}>
+                                <AlignJustify aria-hidden="true" className="h-4 w-4" />
+                            </span>
+                            </span>
+                            <span className="min-w-0 flex flex-1 flex-col justify-center pr-2">
+                                <span className={`block truncate text-[11px] font-black uppercase tracking-[0.05em] ${t.textMain}`}>Tramline</span>
+                                <span className={`mt-0.5 block truncate text-[10px] font-bold leading-none ${activeTramline.enabled ? 'text-fuchsia-700' : t.textSub}`} title={tramlineDetail}>{tramlineDetail}</span>
+                            </span>
+                        </span>
+                        <span className={`flex flex-col items-center justify-center leading-none ${tramlineActionTone}`}>
+                            <span className="text-[7px] font-black uppercase tracking-[0.04em] opacity-80">{tramlineStatus}</span>
+                            <span className="mt-0.5 whitespace-nowrap text-[9px] font-black">{tramlineActionLabel}</span>
+                        </span>
+                        <span aria-hidden="true" className={`pointer-events-none absolute top-2.5 bottom-2.5 left-2/3 w-px ${railSeparator}`} />
+                    </span>
                 </button>
-            );
-        };
+             );
+         };
          const renderManualQuickPicker = () => {
            const selectingLines = dockQuickPicker === 'lines';
            const items = selectingLines ? dockLines : dockBoundaries;
@@ -8804,8 +8894,8 @@ const App = () => {
            );
        };
        const renderDockViewControls = () => (
-            <div aria-label={`Map view ${zoomPercent}%`} className={`h-14 shrink-0 border-t ${railDivider} px-2 py-1.5 ${isDarkDock ? 'bg-slate-950/45' : 'bg-slate-50/80'}`}>
-                <div className={`h-full grid grid-cols-[44px_minmax(0,1fr)_44px] overflow-hidden rounded-xl border divide-x ${manualActionTray}`}>
+            <div aria-label={`Map view ${zoomPercent}%`} className={`h-11 shrink-0 border-t ${railDivider} ${isDarkDock ? 'bg-slate-950/45' : 'bg-slate-50/80'}`}>
+                <div className="relative grid h-full grid-cols-3">
                     <button
                         type="button"
                         aria-label="Zoom out"
@@ -8823,7 +8913,7 @@ const App = () => {
                         className={`flex items-center justify-center gap-1.5 ${manualActionTone} active:scale-[0.98] disabled:cursor-default`}
                     >
                         <RotateCcw className={`h-3.5 w-3.5 ${Math.abs(zoomLevel - DEFAULT_MAP_ZOOM) < 0.01 ? 'opacity-40' : ''}`} />
-                        <span aria-live="polite" className={`text-[10px] font-black tabular-nums ${t.textMain}`}>{zoomPercent}%</span>
+                        <span aria-live="polite" className={`text-[11px] font-black tabular-nums ${t.textMain}`}>{zoomPercent}%</span>
                     </button>
                    <button
                        type="button"
@@ -8831,9 +8921,10 @@ const App = () => {
                         disabled={zoomLevel >= MAX_MAP_ZOOM}
                         onClick={runDockAction(() => handleZoom('in'))}
                         className={`flex items-center justify-center ${manualActionTone} active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-35`}
-                    >
+                   >
                         <Plus className="h-4 w-4" />
                     </button>
+                    {renderDockColumnSeparators(3)}
                 </div>
             </div>
         );
@@ -8881,9 +8972,6 @@ const App = () => {
                                     { icon: Plus, label: 'Other', onClick: openDockLineCreator }
                                  ]
                     })}
-                    {activeLineRecord && tramlineSupported && (
-                        renderTramlineDockCard({ flat: true })
-                    )}
                     {renderManualAssetCard({
                        icon: MapPin,
                        label: 'Boundary',
@@ -8900,6 +8988,9 @@ const App = () => {
                             ]
                            : [{ icon: Radio, label: 'Record', onClick: startDockBoundaryCapture }]
                    })}
+                    {activeLineRecord && tramlineSupported && (
+                        renderTramlineDockCard()
+                    )}
                </div>
                {renderDockViewControls()}
            </section>
@@ -8922,8 +9013,8 @@ const App = () => {
                    <span className="shrink-0 rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black uppercase text-blue-500">Auto</span>
                </div>
 
-              <div className="run-dock-body min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-1.5 [scrollbar-width:thin]">
-                  <div className={`rounded-xl border ${runtimeSection} p-2`}>
+              <div className={`run-dock-body min-h-0 flex-1 overflow-y-auto overscroll-contain divide-y ${railDivide} ${isDarkDock ? 'bg-slate-950/25' : 'bg-white/70'} [scrollbar-width:thin]`}>
+                  <div className="px-3 py-2.5">
                       <div className="flex items-center justify-between gap-2">
                           <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Run assets</span>
                           <span className="rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black uppercase text-blue-500">Locked</span>
@@ -8942,26 +9033,22 @@ const App = () => {
                               LINE {activeTrackSpacingM.toFixed(2)} m LOCKED · TOOL {currentImplementTrackSpacingM.toFixed(2)} m
                           </div>
                       )}
-                      {activeLineRecord && tramlineSupported && (
-                          <div className={`mt-1 border-t ${railDivider} pt-1`}>
-                              {renderTramlineDockCard({ compact: true, embedded: true })}
-                          </div>
-                      )}
                    </div>
-                  <div className={`rounded-xl border ${runtimeSection} p-1.5`}>
-                      <div className="mb-1 flex h-7 items-center justify-between gap-2 px-1">
+                  {activeLineRecord && tramlineSupported && renderTramlineDockCard()}
+                  <div className="pt-2">
+                      <div className="flex h-7 items-center justify-between gap-2 px-3">
                           <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Nudge</span>
                            <span aria-live="polite" className={`min-w-[66px] text-right text-sm font-black tabular-nums ${autoTrimEnabled && Math.abs(offsetCm) > 0.05 ? 'text-blue-500' : t.textMain}`}>
                                {hasGuidanceToEngage ? `${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(1)} cm` : 'No line'}
                            </span>
                       </div>
-                      <div className="grid grid-cols-3 gap-1.5">
+                      <div className="relative mt-1 grid grid-cols-3">
                           <button
                               type="button"
                               aria-label={`Nudge guidance ${isPivotShift ? 'inward' : 'left'} 1 centimeter`}
                               disabled={!autoTrimEnabled}
                               onClick={runDockAction(() => handleTrim('left'))}
-                              className={`h-11 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
+                              className={`h-11 flex flex-col items-center justify-center gap-0.5 transition-colors active:opacity-70 focus:outline-none focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/45 disabled:cursor-not-allowed disabled:opacity-35 ${manualActionTone}`}
                           >
                               <Minus className="h-4 w-4 text-blue-500" />
                               <span className="text-[9px] font-black">{isPivotShift ? 'IN 1CM' : '1 CM'}</span>
@@ -8971,7 +9058,7 @@ const App = () => {
                               aria-label="Reset guidance offset to zero"
                               disabled={!autoTrimEnabled || Math.abs(offsetCm) <= 0.05}
                               onClick={runDockAction(() => actions.setManualOffset(0))}
-                              className={`h-11 rounded-lg border flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35 ${Math.abs(offsetCm) > 0.05 ? 'border-blue-500/40 bg-blue-500/10 text-blue-500' : runtimeButton}`}
+                              className={`h-11 flex flex-col items-center justify-center gap-0.5 transition-colors active:opacity-70 focus:outline-none focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/45 disabled:cursor-not-allowed disabled:opacity-35 ${Math.abs(offsetCm) > 0.05 ? 'bg-blue-500/10 text-blue-500' : manualActionTone}`}
                           >
                               <RotateCcw className="h-4 w-4" />
                               <span className="text-[9px] font-black">ZERO</span>
@@ -8981,11 +9068,12 @@ const App = () => {
                               aria-label={`Nudge guidance ${isPivotShift ? 'outward' : 'right'} 1 centimeter`}
                               disabled={!autoTrimEnabled}
                               onClick={runDockAction(() => handleTrim('right'))}
-                              className={`h-11 rounded-lg border ${runtimeButton} flex flex-col items-center justify-center gap-0.5 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35`}
+                              className={`h-11 flex flex-col items-center justify-center gap-0.5 transition-colors active:opacity-70 focus:outline-none focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/45 disabled:cursor-not-allowed disabled:opacity-35 ${manualActionTone}`}
                           >
                               <Plus className="h-4 w-4 text-blue-500" />
                               <span className="text-[9px] font-black">{isPivotShift ? 'OUT 1CM' : '1 CM'}</span>
                           </button>
+                          {renderDockColumnSeparators(3)}
                       </div>
                   </div>
 
@@ -9718,6 +9806,10 @@ const App = () => {
       actions.setWifiSettings(prev => ({ ...prev, [key]: value }));
   };
   const handleUTurnSettingChange = (key, value) => {
+      if (key === 'mode' && value === 'SMART' && getNormalizedTurnConfig().mode !== 'SMART' && tramlineRoutingEnabled) {
+          showNotification('Turn off Tramline Follow on U-turn before using Smart Field', 'warning');
+          return;
+      }
       actions.setUTurnSettings(previous => {
           const next = {
               ...previous,
@@ -12714,7 +12806,7 @@ const App = () => {
                     ? 'Every headland'
                     : 'This turn only';
             const pathLabel = turnConfig.pattern === 'FISH_TAIL' ? '3-point' : 'Auto fit';
-            const targetLabel = activeTramline.enabled
+            const targetLabel = tramlineRoutingEnabled && turnConfig.mode !== 'SMART'
                 ? 'Tramline routing'
                 : turnConfig.nextPass === 'Skip'
                     ? `Skip ${skipCount}`
@@ -12788,9 +12880,10 @@ const App = () => {
                         <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
                             {workflowOptions.map((option) => {
                                 const active = turnConfig.mode === option.id;
+                                const blockedByTramline = option.id === 'SMART' && tramlineRoutingEnabled;
                                 const Icon = option.icon;
                                 return (
-                                    <button type="button" key={option.id} aria-pressed={active} onClick={() => handleUTurnSettingChange('mode', option.id)} className={`min-h-[64px] rounded-xl border px-3 py-2 text-left transition-colors ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput} hover:bg-blue-500/5`}`}>
+                                    <button type="button" key={option.id} aria-pressed={active} title={blockedByTramline ? 'Turn off Tramline Follow on U-turn first' : undefined} disabled={blockedByTramline} onClick={() => handleUTurnSettingChange('mode', option.id)} className={`min-h-[64px] rounded-xl border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${active ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput} hover:bg-blue-500/5`}`}>
                                         <span className="flex items-center gap-2">
                                             <Icon className={`h-4 w-4 ${active ? 'text-blue-600' : t.textDim}`} />
                                             <span className={`text-sm font-black ${t.textMain}`}>{option.title}</span>
@@ -12801,6 +12894,11 @@ const App = () => {
                                 );
                             })}
                         </div>
+                        {tramlineRoutingEnabled && (
+                            <div className="mt-2 rounded-lg bg-fuchsia-500/10 px-2.5 py-1.5 text-[10px] font-bold text-fuchsia-600">
+                                Smart Field is unavailable while Tramline “Follow on U-turn” is on.
+                            </div>
+                        )}
                         {turnConfig.mode !== 'ONE_KEY' && (
                             <div className={`mt-2 flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[10px] font-bold ${activeBoundarySourcePoints.length >= 3 ? 'bg-green-500/10 text-green-600' : 'bg-amber-500/10 text-amber-600'}`}>
                                 <MapPin className="h-3.5 w-3.5 shrink-0" />
@@ -12825,10 +12923,18 @@ const App = () => {
                             </SetupRow>
 
                             <SetupRow number="3" title="Which row is next?" detail="Next row is the normal choice." last>
-                                {activeTramline.enabled ? (
-                                    <div className="rounded-xl border border-fuchsia-500/35 bg-fuchsia-500/10 px-3 py-3 text-sm font-black text-fuchsia-600">Tramline routing chooses the target row automatically.</div>
+                                {tramlineRoutingEnabled ? (
+                                    <div className="rounded-xl border border-fuchsia-500/35 bg-fuchsia-500/10 px-3 py-3">
+                                        <span className="block text-sm font-black text-fuchsia-600">Tramline applies on One Turn and Auto U-turn.</span>
+                                        <span className={`mt-1 block text-[10px] font-bold ${t.textSub}`}>Marked pass → next marked pass; work pass → next work pass. Steering Engage alone stays on the nearest row.</span>
+                                    </div>
                                 ) : (
                                     <>
+                                        {activeTramline.enabled && (
+                                            <div className="mb-2 rounded-xl border border-fuchsia-500/25 bg-fuchsia-500/5 px-3 py-2 text-[10px] font-bold text-fuchsia-600">
+                                                Tramline is Mark only, so the normal row target below remains in control.
+                                            </div>
+                                        )}
                                         <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                                             <button type="button" aria-pressed={turnConfig.nextPass !== 'Skip'} onClick={() => handleUTurnSettingChange('nextPass', 'Adjacent')} className={`min-h-[58px] rounded-xl border px-3 py-2 text-left ${turnConfig.nextPass !== 'Skip' ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}>
                                                 <span className={`block text-sm font-black ${t.textMain}`}>Next row</span>
