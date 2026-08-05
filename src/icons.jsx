@@ -46,6 +46,22 @@ const CheckCircle2 = makeIconComponent('check-circle-2');
 const Gauge = makeIconComponent('gauge');
 const RotateCcw = makeIconComponent('rotate-ccw');
 const RotateCw = makeIconComponent('rotate-cw');
+const Power = ({ className, ...rest }) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+    {...rest}
+  >
+    <path d="M12 2v10" />
+    <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+  </svg>
+);
 const Flag = makeIconComponent('flag');
 const Calendar = makeIconComponent('calendar');
 const Clock = makeIconComponent('clock');

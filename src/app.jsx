@@ -6,6 +6,195 @@ const MIN_MAP_ZOOM = 0.6;
 const MAX_MAP_ZOOM = 2.4;
 const MAP_ZOOM_STEP = 0.2;
 
+const REGION_OPTIONS = [
+    { code: 'VN', name: 'Vietnam', locale: 'vi-VN', units: 'Metric', dateFormat: 'DD/MM/YYYY', timeZones: ['Asia/Ho_Chi_Minh'] },
+    { code: 'TH', name: 'Thailand', locale: 'th-TH', units: 'Metric', dateFormat: 'DD/MM/YYYY', timeZones: ['Asia/Bangkok'] },
+    { code: 'ID', name: 'Indonesia', locale: 'id-ID', units: 'Metric', dateFormat: 'DD/MM/YYYY', timeZones: ['Asia/Jakarta', 'Asia/Makassar', 'Asia/Jayapura'] },
+    { code: 'AU', name: 'Australia', locale: 'en-AU', units: 'Metric', dateFormat: 'DD/MM/YYYY', timeZones: ['Australia/Perth', 'Australia/Adelaide', 'Australia/Brisbane', 'Australia/Sydney'] },
+    { code: 'JP', name: 'Japan', locale: 'ja-JP', units: 'Metric', dateFormat: 'YYYY/MM/DD', timeZones: ['Asia/Tokyo'] },
+    { code: 'KR', name: 'South Korea', locale: 'ko-KR', units: 'Metric', dateFormat: 'YYYY/MM/DD', timeZones: ['Asia/Seoul'] },
+    { code: 'IN', name: 'India', locale: 'en-IN', units: 'Metric', dateFormat: 'DD/MM/YYYY', timeZones: ['Asia/Kolkata'] },
+    { code: 'GB', name: 'United Kingdom', locale: 'en-GB', units: 'Metric', dateFormat: 'DD/MM/YYYY', timeZones: ['Europe/London'] },
+    { code: 'DE', name: 'Germany', locale: 'de-DE', units: 'Metric', dateFormat: 'DD.MM.YYYY', timeZones: ['Europe/Berlin'] },
+    { code: 'US', name: 'United States', locale: 'en-US', units: 'US customary', dateFormat: 'MM/DD/YYYY', timeZones: ['America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles'] },
+    { code: 'CA', name: 'Canada', locale: 'en-CA', units: 'Metric', dateFormat: 'YYYY-MM-DD', timeZones: ['America/Toronto', 'America/Winnipeg', 'America/Edmonton', 'America/Vancouver'] }
+];
+
+const LANGUAGE_OPTIONS = [
+    { code: 'en', name: 'English', nativeName: 'English' },
+    { code: 'vi', name: 'Vietnamese', nativeName: 'Tiếng Việt' },
+    { code: 'id', name: 'Indonesian', nativeName: 'Bahasa Indonesia' },
+    { code: 'th', name: 'Thai', nativeName: 'ไทย' },
+    { code: 'ja', name: 'Japanese', nativeName: '日本語' },
+    { code: 'ko', name: 'Korean', nativeName: '한국어' },
+    { code: 'de', name: 'German', nativeName: 'Deutsch' },
+    { code: 'fr', name: 'French', nativeName: 'Français' },
+    { code: 'es', name: 'Spanish', nativeName: 'Español' },
+    { code: 'pt', name: 'Portuguese', nativeName: 'Português' }
+];
+
+const UNIT_SYSTEM_OPTIONS = [
+    { id: 'METRIC', label: 'Metric', detail: 'cm / m, km/h, ha', secondary: 'kg, L, °C' },
+    { id: 'IMPERIAL', label: 'Imperial', detail: 'in / ft, mph, ac', secondary: 'lb, US gal, °F' },
+    { id: 'MIXED', label: 'Mixed', detail: 'in / ft, mph, ac', secondary: 'kg, L, °C' }
+];
+
+const M_TO_FT = 3.280839895;
+const M_TO_IN = 39.37007874;
+const KM_TO_MI = 0.621371192;
+const KMH_TO_MPH = 0.621371192;
+const HA_TO_AC = 2.471053814;
+const KG_TO_LB = 2.204622622;
+const L_TO_US_GAL = 0.264172052;
+const M3_TO_CU_YD = 1.30795062;
+
+const usesEnglishDistance = (unitSystem) => unitSystem !== 'METRIC';
+const getDistanceParts = (meters, unitSystem, { kind = 'standard', digits } = {}) => {
+    const source = Number(meters) || 0;
+    const english = usesEnglishDistance(unitSystem);
+    const factor = kind === 'fine' ? (english ? M_TO_IN : 100) : kind === 'long' ? (english ? KM_TO_MI / 1000 : 0.001) : (english ? M_TO_FT : 1);
+    const unit = kind === 'fine' ? (english ? 'in' : 'cm') : kind === 'long' ? (english ? 'mi' : 'km') : (english ? 'ft' : 'm');
+    const precision = digits ?? (kind === 'fine' ? 1 : kind === 'long' ? 2 : 2);
+    const numeric = source * factor;
+    return { numeric, value: (Math.abs(numeric) < (0.5 * 10 ** -precision) ? 0 : numeric).toFixed(precision), unit };
+};
+const formatDistanceMeters = (meters, unitSystem, options = {}) => {
+    const parts = getDistanceParts(meters, unitSystem, options);
+    return `${options.signed && parts.numeric > 0 ? '+' : ''}${parts.value}${options.compact ? '' : ' '}${parts.unit}`;
+};
+const getAreaParts = (hectares, unitSystem, digits = 2) => {
+    const numeric = (Number(hectares) || 0) * (usesEnglishDistance(unitSystem) ? HA_TO_AC : 1);
+    return { numeric, value: numeric.toFixed(digits), unit: usesEnglishDistance(unitSystem) ? 'ac' : 'ha' };
+};
+const formatAreaHa = (hectares, unitSystem, digits = 2) => {
+    const parts = getAreaParts(hectares, unitSystem, digits);
+    return `${parts.value} ${parts.unit}`;
+};
+const formatAreaRateHa = (hectaresPerHour, unitSystem, digits = 2) => `${formatAreaHa(hectaresPerHour, unitSystem, digits)}/h`;
+const getSpeedParts = (kmh, unitSystem, digits = 1) => {
+    const numeric = (Number(kmh) || 0) * (usesEnglishDistance(unitSystem) ? KMH_TO_MPH : 1);
+    return { numeric, value: numeric.toFixed(digits), unit: usesEnglishDistance(unitSystem) ? 'mph' : 'km/h' };
+};
+const formatSpeedKmh = (kmh, unitSystem, digits = 1) => {
+    const parts = getSpeedParts(kmh, unitSystem, digits);
+    return `${parts.value} ${parts.unit}`;
+};
+const toLengthDisplayValue = (meters, unitSystem) => (Number(meters) || 0) * (usesEnglishDistance(unitSystem) ? M_TO_FT : 1);
+const fromLengthDisplayValue = (value, unitSystem) => (Number(value) || 0) / (usesEnglishDistance(unitSystem) ? M_TO_FT : 1);
+const getLengthInputUnit = (unitSystem) => usesEnglishDistance(unitSystem) ? 'ft' : 'm';
+const toSpeedDisplayValue = (kmh, unitSystem) => (Number(kmh) || 0) * (usesEnglishDistance(unitSystem) ? KMH_TO_MPH : 1);
+const fromSpeedDisplayValue = (value, unitSystem) => (Number(value) || 0) / (usesEnglishDistance(unitSystem) ? KMH_TO_MPH : 1);
+const getSpeedInputUnit = (unitSystem) => usesEnglishDistance(unitSystem) ? 'mph' : 'km/h';
+const getInputMeasurement = (value, sourceUnit, unitSystem) => {
+    const source = Number(value) || 0;
+    const imperial = unitSystem === 'IMPERIAL';
+    const englishLength = usesEnglishDistance(unitSystem);
+    if (sourceUnit === 'm') return { value: source * (englishLength ? M_TO_FT : 1), unit: englishLength ? 'ft' : 'm', factor: englishLength ? M_TO_FT : 1 };
+    if (sourceUnit === 'kg') return { value: source * (imperial ? KG_TO_LB : 1), unit: imperial ? 'lb' : 'kg', factor: imperial ? KG_TO_LB : 1 };
+    if (sourceUnit === 'L') return { value: source * (imperial ? L_TO_US_GAL : 1), unit: imperial ? 'US gal' : 'L', factor: imperial ? L_TO_US_GAL : 1 };
+    if (sourceUnit === 'm3') return { value: source * (imperial ? M3_TO_CU_YD : 1), unit: imperial ? 'cu yd' : 'm³', factor: imperial ? M3_TO_CU_YD : 1 };
+    return { value: source, unit: sourceUnit, factor: 1 };
+};
+const formatMassKg = (kg, unitSystem, digits = 0) => { const measure = getInputMeasurement(kg, 'kg', unitSystem); return `${measure.value.toFixed(digits)} ${measure.unit}`; };
+const formatVolumeL = (liters, unitSystem, digits = 0) => { const measure = getInputMeasurement(liters, 'L', unitSystem); return `${measure.value.toFixed(digits)} ${measure.unit}`; };
+const formatCubicMeters = (cubicMeters, unitSystem, digits = 1) => { const measure = getInputMeasurement(cubicMeters, 'm3', unitSystem); return `${measure.value.toFixed(digits)} ${measure.unit}`; };
+
+const createDefaultRegionalSettings = () => ({
+    country: 'VN',
+    locale: 'vi-VN',
+    language: 'en',
+    unitSystem: 'METRIC',
+    timeZone: 'Asia/Ho_Chi_Minh',
+    timeMode: 'AUTO',
+    hourFormat: '24',
+    manualEpochMs: null,
+    manualSetAtMs: null
+});
+
+const getRegionalDateParts = (date = new Date(), timeZone = 'Asia/Ho_Chi_Minh') => {
+    try {
+        const values = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+            timeZone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hourCycle: 'h23'
+        }).formatToParts(date).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+        return {
+            date: `${values.year}-${values.month}-${values.day}`,
+            hour: Number(values.hour) || 0,
+            minute: Number(values.minute) || 0
+        };
+    } catch (error) {
+        const fallback = new Date(date);
+        return {
+            date: `${fallback.getFullYear()}-${String(fallback.getMonth() + 1).padStart(2, '0')}-${String(fallback.getDate()).padStart(2, '0')}`,
+            hour: fallback.getHours(),
+            minute: fallback.getMinutes()
+        };
+    }
+};
+
+const getRegionalClockDate = (settings) => {
+    if (settings?.timeMode !== 'MANUAL' || !Number.isFinite(Number(settings.manualEpochMs))) return new Date();
+    const elapsed = Math.max(0, Date.now() - (Number(settings.manualSetAtMs) || Date.now()));
+    return new Date(Number(settings.manualEpochMs) + elapsed);
+};
+
+const formatRegionalClock = (settings) => {
+    const region = REGION_OPTIONS.find(option => option.code === settings?.country) || REGION_OPTIONS[0];
+    const manual = settings?.timeMode === 'MANUAL';
+    const date = getRegionalClockDate(settings);
+    const formatOptions = { timeZone: manual ? 'UTC' : settings?.timeZone || region.timeZones[0] };
+    try {
+        return {
+            time: new Intl.DateTimeFormat(region.locale, {
+                ...formatOptions,
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: settings?.hourFormat === '12'
+            }).format(date),
+            date: new Intl.DateTimeFormat(region.locale, {
+                ...formatOptions,
+                weekday: 'short',
+                year: 'numeric',
+                month: 'short',
+                day: '2-digit'
+            }).format(date)
+        };
+    } catch (error) {
+        return {
+            time: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
+            date: date.toLocaleDateString()
+        };
+    }
+};
+
+// QML should expose one of these objects through QWebChannel. The browser build
+// intentionally falls back to simulation instead of ever running host commands.
+const invokePiSystemBridge = async (action, payload = undefined) => {
+    const bridge = window.piSystemBridge || window.qmlSystemBridge || window.systemBridge;
+    if (!bridge) return false;
+    const aliases = {
+        applyRegionalSettings: ['applyRegionalSettings', 'setRegionalSettings'],
+        restart: ['restart', 'reboot'],
+        shutdown: ['shutdown', 'powerOff'],
+        factoryReset: ['factoryReset']
+    };
+    const methodName = (aliases[action] || [action]).find(name => typeof bridge[name] === 'function');
+    if (methodName) {
+        await Promise.resolve(payload === undefined ? bridge[methodName]() : bridge[methodName](payload));
+        return true;
+    }
+    if (typeof bridge.requestSystemAction === 'function') {
+        await Promise.resolve(bridge.requestSystemAction(action, payload));
+        return true;
+    }
+    return false;
+};
+
 const EXCLUSION_BOUNDARY_ROLES = new Set(['EXCLUSION', 'OBSTACLE', 'INNER', 'NO_GO']);
 const isExclusionBoundaryRecord = (record) => EXCLUSION_BOUNDARY_ROLES.has(
     String(record?.role || record?.boundaryRole || '')
@@ -356,6 +545,27 @@ const App = () => {
       ...DEFAULT_FEATURE_SETTINGS,
       ...(savedUiLocalState.featureSettings || {})
   }));
+  const [regionalSettings, setRegionalSettings] = useState(() => ({
+      ...createDefaultRegionalSettings(),
+      ...(savedUiLocalState.regionalSettings || {})
+  }));
+  const [manualClockDraft, setManualClockDraft] = useState(() => {
+      const savedRegionalSettings = {
+          ...createDefaultRegionalSettings(),
+          ...(savedUiLocalState.regionalSettings || {})
+      };
+      const manual = savedRegionalSettings.timeMode === 'MANUAL';
+      return getRegionalDateParts(
+          getRegionalClockDate(savedRegionalSettings),
+          manual ? 'UTC' : savedRegionalSettings.timeZone
+      );
+  });
+  const [regionalPicker, setRegionalPicker] = useState(null);
+  const [systemDialog, setSystemDialog] = useState(null);
+  const [systemActionBusy, setSystemActionBusy] = useState(false);
+  const unitSystem = regionalSettings.unitSystem || 'METRIC';
+  const nudgeStepMeters = usesEnglishDistance(unitSystem) ? 0.0254 : 0.01;
+  const nudgeStepLabel = formatDistanceMeters(nudgeStepMeters, unitSystem, { kind: 'fine', digits: 0, compact: true }).toUpperCase();
   const [cameraPanelOpen, setCameraPanelOpen] = useState(false);
   const [diagnosticsPanelOpen, setDiagnosticsPanelOpen] = useState(false);
   const [isCombinationPaused, setIsCombinationPaused] = useState(false);
@@ -501,6 +711,7 @@ const App = () => {
       && (point.lineId || null) === coverageLineId
   );
   const [currentTime, setCurrentTime] = useState('');
+  const [currentDate, setCurrentDate] = useState('');
   const setupOverlayOpen = menuOpen || settingsOpen || cameraPanelOpen || diagnosticsPanelOpen || linesPanelOpen || lineModeModalOpen || lineNameModalOpen || boundaryNameModalOpen || manualHeadingModalOpen || boundaryAlertOpen || deleteModalOpen || (fieldManagerOpen && !isRecordingBoundary);
   const runDockSuppressed = setupOverlayOpen || rtkQualityOpen || eventHistoryOpen || productivityOpen || uTurnPanelOpen || turnAssistActive;
 
@@ -932,19 +1143,24 @@ const App = () => {
   const getCreatedPosition = (entity) => {
       const position = entity?.createdPosition;
       if (!Number.isFinite(position?.x) || !Number.isFinite(position?.y)) return 'Position unavailable';
-      return `X ${position.x.toFixed(1)} m / Y ${position.y.toFixed(1)} m`;
+      return `X ${formatDistanceMeters(position.x, unitSystem, { digits: 1 })} / Y ${formatDistanceMeters(position.y, unitSystem, { digits: 1 })}`;
   };
 
   // --- 1. CLOCK ---
   useEffect(() => {
     const updateTime = () => {
-      const now = new Date();
-      setCurrentTime(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }));
+      const clock = formatRegionalClock(regionalSettings);
+      setCurrentTime(clock.time);
+      setCurrentDate(clock.date);
     };
     updateTime();
     const timer = setInterval(updateTime, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [regionalSettings]);
+
+  useEffect(() => {
+      document.documentElement.lang = regionalSettings.language || 'en';
+  }, [regionalSettings.language]);
 
   useEffect(() => {
       localStorage.setItem('autosteer-theme', theme);
@@ -952,15 +1168,16 @@ const App = () => {
 
   useEffect(() => {
       try {
-          localStorage.setItem('autosteer-ui-settings-v1', JSON.stringify({
-              featureSettings,
-              calibrationStatus,
-              satelliteCount
-          }));
+           localStorage.setItem('autosteer-ui-settings-v1', JSON.stringify({
+               featureSettings,
+               calibrationStatus,
+               satelliteCount,
+               regionalSettings
+           }));
       } catch (error) {
           console.warn('Failed to persist UI settings', error);
       }
-  }, [featureSettings, calibrationStatus, satelliteCount]);
+  }, [featureSettings, calibrationStatus, satelliteCount, regionalSettings]);
 
   useEffect(() => {
       if (bootstrappedLineRef.current || loadedField || activeLineId || guidanceLine) return;
@@ -1796,11 +2013,76 @@ const App = () => {
       }
   };
 
+  const handleRegionChange = (country) => {
+      const region = REGION_OPTIONS.find(option => option.code === country) || REGION_OPTIONS[0];
+      setRegionalSettings(previous => ({
+          ...previous,
+          country: region.code,
+          locale: region.locale,
+          timeZone: region.timeZones[0]
+      }));
+      setManualClockDraft(getRegionalDateParts(new Date(), region.timeZones[0]));
+  };
+
+  const handleTimeModeChange = (timeMode) => {
+      if (timeMode === 'MANUAL') {
+          setManualClockDraft(getRegionalDateParts(new Date(), regionalSettings.timeZone));
+      }
+      setRegionalSettings(previous => ({ ...previous, timeMode }));
+  };
+
+  const adjustManualClock = (field, amount) => {
+      const limit = field === 'hour' ? 24 : 60;
+      setManualClockDraft(previous => ({
+          ...previous,
+          [field]: (Number(previous[field]) + amount + limit) % limit
+      }));
+  };
+
+  const useCurrentRegionalTime = () => {
+      setManualClockDraft(getRegionalDateParts(new Date(), regionalSettings.timeZone));
+  };
+
+  const applyRegionalSettings = async () => {
+      const region = REGION_OPTIONS.find(option => option.code === regionalSettings.country) || REGION_OPTIONS[0];
+      let nextSettings = { ...regionalSettings, locale: region.locale };
+      if (regionalSettings.timeMode === 'MANUAL') {
+          const [year, month, day] = String(manualClockDraft.date || '').split('-').map(Number);
+          if (![year, month, day].every(Number.isFinite)) {
+              showNotification('Choose a valid manual date', 'warning');
+              return;
+          }
+          nextSettings = {
+              ...nextSettings,
+              manualEpochMs: Date.UTC(year, month - 1, day, Number(manualClockDraft.hour) || 0, Number(manualClockDraft.minute) || 0),
+              manualSetAtMs: Date.now()
+          };
+      }
+      setRegionalSettings(nextSettings);
+      try {
+          const bridged = await invokePiSystemBridge('applyRegionalSettings', {
+              country: nextSettings.country,
+              locale: nextSettings.locale,
+              language: nextSettings.language,
+              unitSystem: nextSettings.unitSystem,
+              timeZone: nextSettings.timeZone,
+              automaticTime: nextSettings.timeMode === 'AUTO',
+              manualDate: manualClockDraft.date,
+              manualHour: Number(manualClockDraft.hour) || 0,
+              manualMinute: Number(manualClockDraft.minute) || 0,
+              hourFormat: nextSettings.hourFormat
+          });
+          showNotification(bridged ? 'Region and system time applied' : 'Region and time saved in simulation', 'success');
+          closeSettingsPanel();
+      } catch (error) {
+          showNotification('The Pi did not accept the time settings', 'error');
+      }
+  };
+
   const handleFactoryReset = () => {
-      const confirmed = window.confirm('Factory reset will clear fields, lines, tasks and setup values. Continue?');
-      if (!confirmed) return;
       try {
           localStorage.removeItem('autosteer-ui-settings-v1');
+          localStorage.removeItem('autosteer-theme');
       } catch (error) {
           console.warn('Failed to clear UI local settings', error);
       }
@@ -1872,6 +2154,11 @@ const App = () => {
       turnAssistRef.current = null;
       setTurnAssistActive(false);
       setFeatureSettings(DEFAULT_FEATURE_SETTINGS);
+      const defaultRegionalSettings = createDefaultRegionalSettings();
+      setRegionalSettings(defaultRegionalSettings);
+      setManualClockDraft(getRegionalDateParts(new Date(), defaultRegionalSettings.timeZone));
+      setRegionalPicker(null);
+      setTheme('light');
       setSatelliteCount(12);
       setZoomLevel(DEFAULT_MAP_ZOOM);
       setDragOffset({ x: 0, y: 0 });
@@ -1879,8 +2166,34 @@ const App = () => {
       showNotification('Factory reset complete', 'success');
   };
 
+  const systemPowerLocked = steeringMode === 'AUTO' || speed > 0.05 || isRecording || isRecordingBoundary;
+
+  const handleConfirmedSystemAction = async () => {
+      const action = systemDialog;
+      if (!['restart', 'shutdown', 'factoryReset'].includes(action) || systemActionBusy) return;
+      if ((action === 'restart' || action === 'shutdown') && systemPowerLocked) {
+          showNotification('Stop the vehicle and disengage Auto Steer first', 'warning');
+          return;
+      }
+      setSystemActionBusy(true);
+      try {
+          const bridged = await invokePiSystemBridge(action);
+          if (action === 'factoryReset') {
+              handleFactoryReset();
+          } else {
+              const actionLabel = action === 'restart' ? 'Restart' : 'Shutdown';
+              showNotification(bridged ? `${actionLabel} command sent to Pi` : `${actionLabel} simulated - Pi bridge not connected`, bridged ? 'success' : 'warning');
+          }
+          setSystemDialog(null);
+      } catch (error) {
+          showNotification(`Unable to ${action === 'restart' ? 'restart' : action === 'shutdown' ? 'shut down' : 'reset'} the device`, 'error');
+      } finally {
+          setSystemActionBusy(false);
+      }
+  };
+
   const handleTrim = (direction) => {
-      const trimPixels = PIXELS_PER_METER * 0.01;
+      const trimPixels = PIXELS_PER_METER * nudgeStepMeters;
       const isPivotGuide = guidanceRef.current?.type === 'PIVOT';
       const directionFactor = isPivotGuide ? 1 : getGuidanceDirectionFactor(guidanceRef.current, { ...worldPos, heading });
       const userDirection = direction === 'left' ? -1 : 1;
@@ -1888,7 +2201,7 @@ const App = () => {
       const directionLabel = isPivotGuide
           ? (direction === 'left' ? 'Inward' : 'Outward')
           : (direction === 'left' ? 'Left' : 'Right');
-      showNotification(`Trim ${directionLabel} 1cm`, "info");
+      showNotification(`Trim ${directionLabel} ${nudgeStepLabel}`, "info");
   };
 
   const getLineShiftSide = (line) => {
@@ -2364,7 +2677,7 @@ const App = () => {
       else if (!pointB) {
           const nextPointB = { ...worldPos };
           const dist = Math.hypot(nextPointB.x - pointA.x, nextPointB.y - pointA.y);
-          if (dist < 50) { showNotification(`Too short! Drive ${((50 - dist)/5).toFixed(1)}m more.`, "warning"); return; }
+          if (dist < 50) { showNotification(`Too short! Drive ${formatDistanceMeters((50 - dist) / PIXELS_PER_METER, unitSystem, { digits: 1 })} more.`, "warning"); return; }
           actions.setPointB(nextPointB);
           actions.setGuidanceLine('STRAIGHT_AB');
           actions.setShowGuidanceLines(true);
@@ -2612,7 +2925,7 @@ const App = () => {
           }
       } else if (boundaryAlertType === 'TOO_SHORT') {
           if (choice === 'CANCEL') cancelBoundaryRecording();
-          else showNotification("Continue recording until the boundary is at least 5 m long.", "info");
+          else showNotification(`Continue recording until the boundary is at least ${formatDistanceMeters(5, unitSystem, { kind: 'auto', digits: 1 })} long.`, "info");
       } else if (boundaryAlertType === 'INCOMPLETE') {
           if (choice === 'CONTINUE') {
                showNotification("Continue recording...", "info");
@@ -2923,7 +3236,7 @@ const App = () => {
               points,
               valid: points.length >= 3,
               distanceM,
-              label: `${outward ? 'Outward' : 'Inward'} ${distanceM.toFixed(2)} m`,
+              label: `${outward ? 'Outward' : 'Inward'} ${formatDistanceMeters(distanceM, unitSystem, { digits: 2 })}`,
               reason: points.length >= 3 ? null : 'This buffer would collapse or cross the boundary'
           };
       }
@@ -2941,7 +3254,7 @@ const App = () => {
           })),
           valid: true,
           distanceM,
-          label: `${vector.label} ${distanceM.toFixed(2)} m`,
+          label: `${vector.label} ${formatDistanceMeters(distanceM, unitSystem, { digits: 2 })}`,
           reason: null
       };
   }, [dockQuickPicker, activeFieldRecord?.id, activeBoundaryIndex, activeBoundaryRecord, boundaryShiftMode, boundaryShiftDirection, boundaryShiftDistanceM]);
@@ -3369,7 +3682,7 @@ const App = () => {
               : plan.targetPolicy === 'TRAMLINE'
                   ? 'Tramline target'
                   : 'Selected target';
-          return `${targetLabel} is ${Number(plan.selectedTargetSeparationM || 0).toFixed(1)} m away; a forward-only U needs ${Number(plan.minimumForwardDiameterM || 0).toFixed(1)} m. Target pass +${plan.requiredPassDelta || 1} (skip ${plan.requiredSkipPasses || 0} for now).`;
+          return `${targetLabel} is ${formatDistanceMeters(plan.selectedTargetSeparationM, unitSystem, { digits: 1 })} away; a forward-only U needs ${formatDistanceMeters(plan.minimumForwardDiameterM, unitSystem, { digits: 1 })}. Target pass +${plan.requiredPassDelta || 1} (skip ${plan.requiredSkipPasses || 0} for now).`;
       }
       if (plan?.failReason === 'AUTO_BOUNDARY_REQUIRED') {
           return 'Auto U-turn needs an active field boundary';
@@ -3830,7 +4143,7 @@ const App = () => {
           return { ...baseResult, failReason: 'Engage autosteer before planning a turn' };
       }
       if (!overrides.ignoreSpeedValidation && physics.current.speed < -0.2) return { ...baseResult, failReason: 'Stop reversing before planning a turn' };
-      if (!overrides.ignoreSpeedValidation && Math.abs(physics.current.speed) > 10) return { ...baseResult, failReason: 'Slow below 10 km/h before planning a turn' };
+      if (!overrides.ignoreSpeedValidation && Math.abs(physics.current.speed) > 10) return { ...baseResult, failReason: `Slow below ${formatSpeedKmh(10, unitSystem, 1)} before planning a turn` };
       if (Math.abs(normalizeAngle(alignedStartHeading - physics.current.heading)) > 20) {
           return { ...baseResult, failReason: 'Align within 20° of the active pass first' };
       }
@@ -5058,7 +5371,7 @@ const App = () => {
       }
       if (forwardBoundaryDistancePx > triggerDistancePx) return;
       if (Math.abs(physics.current.speed) > 10) {
-          stopFailedAutoTurn('speed remained above 10 km/h');
+          stopFailedAutoTurn(`speed remained above ${formatSpeedKmh(10, unitSystem, 1)}`);
           return;
       }
 
@@ -5226,11 +5539,12 @@ const App = () => {
       const direction = getXteDirection();
       const barTone = abs >= 10 ? 'bg-red-500' : abs >= 4 ? 'bg-yellow-500' : 'bg-blue-500';
       const offsetCm = effectiveGuidanceOffset / PIXELS_PER_METER * 100 * liveGuidanceDisplayFactor;
-      const offsetValue = `${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(0)}cm`;
+      const offsetValue = formatDistanceMeters(offsetCm / 100, unitSystem, { kind: 'fine', digits: 0, signed: true, compact: true });
       const passValue = `${currentRunKpi.passIndex >= 0 ? '+' : ''}${currentRunKpi.passIndex}`;
       const errorTextTone = abs >= 10 ? 'text-red-500' : abs >= 4 ? 'text-yellow-600 dark:text-yellow-400' : t.textMain;
       const meterPosition = Math.max(4, Math.min(96, 50 + (crossTrackError / 30) * 46));
-      const crossTrackUnitLabel = 'cm';
+      const crossTrackDisplay = getDistanceParts(abs / 100, unitSystem, { kind: 'fine', digits: abs >= 10 ? 0 : 1 });
+      const crossTrackUnitLabel = crossTrackDisplay.unit;
       const directionArrow = direction === 'LEFT' ? '\u2190' : direction === 'RIGHT' ? '\u2192' : '\u2194';
       const meterTrack = theme === 'dark'
           ? 'linear-gradient(90deg, rgba(239,68,68,.35) 0%, rgba(245,158,11,.25) 28%, rgba(59,130,246,.28) 50%, rgba(245,158,11,.25) 72%, rgba(239,68,68,.35) 100%)'
@@ -5260,7 +5574,7 @@ const App = () => {
                       className={`relative mt-1 h-[27px] w-full ${errorTextTone}`}
                   >
                       <span data-error-value className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[27px] font-black leading-none tabular-nums">
-                          {abs.toFixed(abs >= 10 ? 0 : 1)}
+                          {crossTrackDisplay.value}
                       </span>
                       <span
                           data-error-meta
@@ -5276,7 +5590,7 @@ const App = () => {
                   <div
                       data-error-meter
                       role="meter"
-                      aria-label={`Cross-track error ${abs.toFixed(1)} ${crossTrackUnitLabel} ${direction}`}
+                      aria-label={`Cross-track error ${crossTrackDisplay.value} ${crossTrackUnitLabel} ${direction}`}
                       aria-valuemin="-30"
                       aria-valuemax="30"
                       aria-valuenow={Math.max(-30, Math.min(30, crossTrackError))}
@@ -5375,7 +5689,7 @@ const App = () => {
           stale,
           guidanceGrade,
           correctionLinkOk,
-          accuracyLabel: formatOptionalRtkMetric(accuracyCm, 1, ' cm'),
+          accuracyLabel: accuracyCm === null ? '--' : formatDistanceMeters(accuracyCm / 100, unitSystem, { kind: 'fine', digits: 1 }),
           ageLabel: formatOptionalRtkMetric(ageSec, 1, ' s'),
           hdopLabel: formatOptionalRtkMetric(hdop, 1),
           latencyLabel: formatOptionalRtkMetric(latencyMs, 0, ' ms'),
@@ -5640,9 +5954,9 @@ const App = () => {
                           : 'Press Start Turn when the preview is clear.';
       const statusDistance = !planBlocked && turnConfig.mode === 'AUTO'
           && Number.isFinite(Number(plan?.distanceToTriggerM ?? uTurnDistanceToTriggerM))
-          ? `${Number(plan?.distanceToTriggerM ?? uTurnDistanceToTriggerM).toFixed(1)} m to turn`
+          ? `${formatDistanceMeters(plan?.distanceToTriggerM ?? uTurnDistanceToTriggerM, unitSystem, { digits: 1 })} to turn`
           : turnConfig.mode === 'SMART' && Number(plan?.estimatedDistanceM) > 0
-              ? `${(Number(plan.estimatedDistanceM) / 1000).toFixed(2)} km`
+              ? formatDistanceMeters(plan.estimatedDistanceM, unitSystem, { kind: 'long', digits: 2 })
               : null;
       const panelButton = (active) => active
           ? 'border-blue-500 bg-blue-600 text-white shadow-sm'
@@ -5666,7 +5980,7 @@ const App = () => {
                   : plan?.targetPolicy === 'TRAMLINE'
                       ? 'Tramline target'
                       : 'Selected target';
-              return `${targetLabel}: ${Number(plan?.selectedTargetSeparationM || 0).toFixed(1)} m. Forward-only U diameter: ${Number(plan?.minimumForwardDiameterM || 0).toFixed(1)} m.`;
+              return `${targetLabel}: ${formatDistanceMeters(plan?.selectedTargetSeparationM, unitSystem, { digits: 1 })}. Forward-only U diameter: ${formatDistanceMeters(plan?.minimumForwardDiameterM, unitSystem, { digits: 1 })}.`;
           }
           return ({
            INVALID_BOUNDARY: 'Boundary geometry is invalid',
@@ -5874,7 +6188,7 @@ const App = () => {
                                           <div className={`text-[10px] font-black uppercase tracking-[0.06em] ${t.textSub}`}>Tramline pattern</div>
                                           <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
                                               <span className={`text-[12px] font-black ${t.textMain}`}>Every {tramlineIntervalPasses} passes</span>
-                                              <span className={`text-[10px] font-bold ${t.textSub}`}>· {(activeTrackSpacingM * tramlineIntervalPasses).toFixed(1)} m</span>
+                                              <span className={`text-[10px] font-bold ${t.textSub}`}>· {formatDistanceMeters(activeTrackSpacingM * tramlineIntervalPasses, unitSystem, { digits: 1 })}</span>
                                           </div>
                                       </div>
                                       <span className={`text-[9px] font-black uppercase ${activeTramline.enabled ? 'text-fuchsia-600' : t.textSub}`}>{activeTramline.enabled ? 'On' : 'Off'}</span>
@@ -5908,7 +6222,7 @@ const App = () => {
                                   <div className={`px-3 py-2.5 border-b ${t.divider}`}>
                                       <div className={`mb-2 flex items-center justify-between text-[10px] font-black uppercase tracking-[0.05em] ${t.textSub}`}>
                                           <span>Spacing</span>
-                                          <span>{activeTrackSpacingM.toFixed(2)} m working pass</span>
+                                          <span>{formatDistanceMeters(activeTrackSpacingM, unitSystem, { digits: 2 })} working pass</span>
                                       </div>
                                       <div className="grid grid-cols-5 gap-1.5">
                                           {[3, 4, 6, 8].map(interval => (
@@ -6032,9 +6346,9 @@ const App = () => {
               <div className="p-4 space-y-3">
                   <div className="grid grid-cols-2 gap-2">
                       {[
-                          ['Done', `${currentRunKpi.areaDoneHa.toFixed(2)} ha`, 'text-green-500'],
-                          ['Remaining', `${currentRunKpi.areaRemainingHa.toFixed(2)} ha`, t.textMain],
-                          ['Work rate', `${currentRunKpi.workRateHaHr.toFixed(2)} ha/h`, t.textMain],
+                          ['Done', formatAreaHa(currentRunKpi.areaDoneHa, unitSystem), 'text-green-500'],
+                          ['Remaining', formatAreaHa(currentRunKpi.areaRemainingHa, unitSystem), t.textMain],
+                          ['Work rate', formatAreaRateHa(currentRunKpi.workRateHaHr, unitSystem), t.textMain],
                           ['ETA', etaLabel, t.textMain]
                       ].map(([label, value, tone]) => (
                           <div key={label} className={`rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-slate-50'} p-3 min-w-0`}>
@@ -6049,7 +6363,7 @@ const App = () => {
                               <div className={`text-[10px] uppercase font-black ${t.textSub}`}>Implement</div>
                               <div className={`text-sm font-black ${t.textMain} truncate`}>{implementName}</div>
                           </div>
-                          <span className="shrink-0 text-xs font-black text-blue-500">{Number(implementSettings.width || 0).toFixed(1)} m</span>
+                          <span className="shrink-0 text-xs font-black text-blue-500">{formatDistanceMeters(implementSettings.width, unitSystem, { digits: 1 })}</span>
                       </div>
                       <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${sections}, minmax(0, 1fr))` }}>
                           {Array.from({ length: sections }).map((_, index) => (
@@ -6098,12 +6412,12 @@ const App = () => {
               <div className={`h-[68px] rounded-xl border ${t.borderCard} ${runCardBg} px-3 py-2 min-w-0`}>
                   <div className={`text-[9px] uppercase font-black tracking-wider ${t.textSub}`}>Task / Coverage</div>
                   <div className={`text-sm font-black truncate ${activeTaskRecord ? 'text-green-500' : t.textMain}`}>{activeTaskRecord?.name || 'No Active Task'}</div>
-                  <div className={`text-[10px] font-bold ${t.textSub}`}>{workedArea.toFixed(2)} ha done</div>
+                  <div className={`text-[10px] font-bold ${t.textSub}`}>{formatAreaHa(workedArea, unitSystem)} done</div>
               </div>
               <div className={`h-[68px] rounded-xl border ${t.borderCard} ${runCardBg} px-3 py-2 min-w-0`}>
                   <div className={`text-[9px] uppercase font-black tracking-wider ${t.textSub}`}>Implement</div>
                   <div className={`text-sm font-black truncate ${t.textMain}`}>{implementName}</div>
-                  <div className={`text-[10px] font-bold ${t.textSub}`}>{Number(implementSettings.width || 0).toFixed(1)} m / {implementSettings.sections || 1} sections</div>
+                  <div className={`text-[10px] font-bold ${t.textSub}`}>{formatDistanceMeters(implementSettings.width, unitSystem, { digits: 1 })} / {implementSettings.sections || 1} sections</div>
                   {false && (
                       <>
                   <div className={`text-sm font-black ${t.textMain}`}>{getDisplayHeading()}°</div>
@@ -8139,7 +8453,8 @@ const App = () => {
        const draftShiftDistanceMeters = clampShiftMeters(dockShiftDistanceM);
        const draftShiftDisplayMeters = (dockShiftDirection === 'left' ? -1 : 1) * draftShiftDistanceMeters;
        const draftShiftMeters = draftShiftDisplayMeters * shiftDisplayFactor;
-       const formatSignedMeters = (value) => `${value > 0 ? '+' : ''}${value.toFixed(2)} m`;
+       const formatSignedMeters = (value) => formatDistanceMeters(value, unitSystem, { digits: 2, signed: true });
+       const shiftDistancePresets = usesEnglishDistance(unitSystem) ? [0.1016, 0.3048, 0.9144] : [0.10, 0.50, 1.00];
        const shiftDirectionLabel = (value, { short = false } = {}) => {
            if (isPivotShift) return value < 0 ? (short ? 'IN' : 'inward') : (short ? 'OUT' : 'outward');
            return value < 0 ? (short ? 'L' : 'left') : (short ? 'R' : 'right');
@@ -8224,7 +8539,7 @@ const App = () => {
                const shiftedLine = {
                    ...activeLineRecord,
                    id: Date.now(),
-                   name: `${sourceName} - Shift ${directionLabel} ${Math.abs(nextShiftMeters).toFixed(2)}m`,
+                   name: `${sourceName} - Shift ${directionLabel} ${formatDistanceMeters(Math.abs(nextShiftMeters), unitSystem, { digits: 2, compact: true })}`,
                    date: createdAt.toISOString().split('T')[0],
                    createdAt: createdAt.toISOString(),
                    updatedAt: createdAt.toISOString(),
@@ -8253,7 +8568,7 @@ const App = () => {
 
            const shiftLabel = Math.abs(nextShiftMeters) < 0.005
                ? 'Line shift reset to original'
-               : `Line shifted ${shiftDirectionLabel(draftShiftDisplayMeters)} ${Math.abs(draftShiftDisplayMeters).toFixed(2)} m`;
+               : `Line shifted ${shiftDirectionLabel(draftShiftDisplayMeters)} ${formatDistanceMeters(Math.abs(draftShiftDisplayMeters), unitSystem, { digits: 2 })}`;
            showNotification(saveCopy ? `${shiftLabel} / copy saved` : shiftLabel, 'success');
        };
        const openDockLineCreator = () => {
@@ -8437,7 +8752,7 @@ const App = () => {
                   <button
                       type="button"
                       data-tramline-entry="true"
-                      aria-label={`${activeTramline.enabled ? 'Edit' : 'Set up'} Tramline pattern, status ${tramlineStatus}${activeTramline.enabled ? `, every ${interval} passes, ${patternDistance} meters` : ''}`}
+                      aria-label={`${activeTramline.enabled ? 'Edit' : 'Set up'} Tramline pattern, status ${tramlineStatus}${activeTramline.enabled ? `, every ${interval} passes, ${formatDistanceMeters(patternDistance, unitSystem, { digits: 1 })}` : ''}`}
                       aria-expanded={uTurnPanelOpen && uTurnPanelTab === 'TRAMLINE'}
                       onClick={runDockAction(openTramlinePanel)}
                       className={`block w-full min-h-[56px] overflow-hidden rounded-xl border ${railDivider} text-left transition-colors active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-fuchsia-500/45 ${activeTramline.enabled ? isDarkDock ? 'bg-fuchsia-500/[0.06] hover:bg-fuchsia-500/10' : 'bg-fuchsia-50/60 hover:bg-fuchsia-50' : isDarkDock ? 'hover:bg-white/[0.04]' : 'bg-white hover:bg-slate-50'}`}
@@ -8562,9 +8877,9 @@ const App = () => {
                    { id: 'left', label: 'Move left', glyph: '←' },
                    { id: 'right', label: 'Move right', glyph: '→' }
                ];
-           const formatShiftPosition = (value) => Math.abs(value) < 0.005
-               ? 'Original'
-               : `${Math.abs(value).toFixed(2)} m ${shiftDirectionLabel(value)}`;
+            const formatShiftPosition = (value) => Math.abs(value) < 0.005
+                ? 'Original'
+                : `${formatDistanceMeters(Math.abs(value), unitSystem, { digits: 2 })} ${shiftDirectionLabel(value)}`;
 
            return (
                <section
@@ -8644,29 +8959,25 @@ const App = () => {
                                    min="0"
                                    max="99.99"
                                    step="0.01"
-                                   value={dockShiftDistanceM}
-                                   onChange={(event) => setDockShiftDistanceM(event.target.value)}
+                                    value={toLengthDisplayValue(draftShiftDistanceMeters, unitSystem).toFixed(2)}
+                                    onChange={(event) => setDockShiftDistanceM(String(fromLengthDisplayValue(event.target.value, unitSystem)))}
                                    onBlur={() => setDockShiftDistanceM(draftShiftDistanceMeters.toFixed(2))}
                                    className={`h-full min-w-0 flex-1 bg-transparent px-2 text-right text-sm font-black tabular-nums outline-none ${t.textMain}`}
                                />
-                               <span className={`pr-2 text-[9px] font-black ${t.textSub}`}>m</span>
+                                <span className={`pr-2 text-[9px] font-black ${t.textSub}`}>{getLengthInputUnit(unitSystem)}</span>
                            </div>
 
                            <div className="mt-1.5 grid grid-cols-3 gap-1">
-                               {[
-                                   { value: 0.10, label: '10 cm' },
-                                   { value: 0.50, label: '50 cm' },
-                                   { value: 1.00, label: '1.00 m' }
-                               ].map(({ value, label }) => (
+                                {shiftDistancePresets.map((value) => (
                                    <button
                                        key={value}
                                        type="button"
-                                       aria-label={`Set shift distance to ${value.toFixed(2)} meters`}
+                                        aria-label={`Set shift distance to ${formatDistanceMeters(value, unitSystem, { digits: 2 })}`}
                                        aria-pressed={Math.abs(draftShiftDistanceMeters - value) < 0.005}
                                        onClick={runDockAction(() => setDockShiftDistanceM(value.toFixed(2)))}
                                        className={`h-10 rounded-md border text-[9px] font-black ${Math.abs(draftShiftDistanceMeters - value) < 0.005 ? 'border-blue-500 bg-blue-500/12 text-blue-500' : runtimeButton}`}
                                    >
-                                       {label}
+                                        {formatDistanceMeters(value, unitSystem, { kind: value < 0.2 ? 'fine' : 'standard', digits: value < 0.2 ? 0 : 2 })}
                                    </button>
                                ))}
                            </div>
@@ -8683,7 +8994,7 @@ const App = () => {
                                </button>
                                <button
                                    type="button"
-                                   aria-label="Reset shift preview to the source line at zero meters"
+                                    aria-label="Reset shift preview to the source line"
                                    onClick={runDockAction(() => setDockShiftDraftFromSignedMeters(0))}
                                    className={`h-10 min-w-0 rounded-lg border ${runtimeButton} flex items-center justify-center gap-1 px-1 text-[8px] font-black`}
                                >
@@ -8696,7 +9007,7 @@ const App = () => {
                        <div className={`rounded-lg px-2 py-1.5 text-[8px] font-bold leading-snug ${!pivotTargetValid ? 'bg-red-500/10 text-red-500' : isDarkDock ? 'bg-blue-500/10 text-blue-300' : 'bg-blue-50 text-blue-700'}`}>
                            {!pivotTargetValid
                                ? 'This inward shift would collapse the pivot radius. Choose a smaller distance.'
-                               : <><span className="font-black">Blue dashed line</span> is the live preview. {isPivotShift ? 'In / out changes radius.' : 'Left / right follows travel direction.'}{Math.abs(offsetCm) >= 0.05 ? ` Current includes a ${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(1)} cm fine nudge.` : ''}</>}
+                                : <><span className="font-black">Blue dashed line</span> is the live preview. {isPivotShift ? 'In / out changes radius.' : 'Left / right follows travel direction.'}{Math.abs(offsetCm) >= 0.05 ? ` Current includes a ${formatDistanceMeters(offsetCm / 100, unitSystem, { kind: 'fine', digits: 1, signed: true })} fine nudge.` : ''}</>}
                        </div>
                    </div>
 
@@ -8845,25 +9156,25 @@ const App = () => {
                                    min="0"
                                    max="50"
                                    step="0.01"
-                                   value={boundaryShiftDistanceM}
-                                   onChange={(event) => setBoundaryShiftDistanceM(event.target.value)}
+                                    value={toLengthDisplayValue(distanceM, unitSystem).toFixed(2)}
+                                    onChange={(event) => setBoundaryShiftDistanceM(String(fromLengthDisplayValue(event.target.value, unitSystem)))}
                                    onBlur={() => setBoundaryShiftDistanceM(distanceM.toFixed(2))}
                                    className={`h-full min-w-0 flex-1 bg-transparent px-2 text-right text-sm font-black tabular-nums outline-none ${t.textMain}`}
                                />
-                               <span className={`pr-2 text-[9px] font-black ${t.textSub}`}>m</span>
+                                <span className={`pr-2 text-[9px] font-black ${t.textSub}`}>{getLengthInputUnit(unitSystem)}</span>
                            </div>
 
                            <div className="mt-1.5 grid grid-cols-3 gap-1">
-                               {[0.10, 0.50, 1.00].map((value) => (
+                                {shiftDistancePresets.map((value) => (
                                    <button
                                        key={value}
                                        type="button"
-                                       aria-label={`Set boundary adjustment to ${value.toFixed(2)} meters`}
+                                        aria-label={`Set boundary adjustment to ${formatDistanceMeters(value, unitSystem, { digits: 2 })}`}
                                        aria-pressed={Math.abs(distanceM - value) < 0.005}
                                        onClick={runDockAction(() => setBoundaryShiftDistanceM(value.toFixed(2)))}
                                        className={`h-10 rounded-md border text-[9px] font-black ${Math.abs(distanceM - value) < 0.005 ? 'border-orange-500 bg-orange-500/12 text-orange-500' : runtimeButton}`}
                                    >
-                                       {value.toFixed(2)}
+                                        {formatDistanceMeters(value, unitSystem, { kind: value < 0.2 ? 'fine' : 'standard', digits: value < 0.2 ? 0 : 2 })}
                                    </button>
                                ))}
                            </div>
@@ -8964,8 +9275,8 @@ const App = () => {
                              ? 'Geometry ready / not saved'
                              : activeLineRecord
                                   ? activeTrackSpacingMismatch
-                                      ? `${compactStatus(activeLineRecord.type || guidanceLine)} / LINE ${activeTrackSpacingM.toFixed(2)}m LOCKED / TOOL ${currentImplementTrackSpacingM.toFixed(2)}m`
-                                      : `${compactStatus(activeLineRecord.type || guidanceLine)}${Math.abs(lineShiftMeters) >= 0.005 ? ` / Shift ${shiftDirectionLabel(lineShiftMeters, { short: true })} ${Math.abs(lineShiftMeters).toFixed(2)}m` : ''}`
+                                      ? `${compactStatus(activeLineRecord.type || guidanceLine)} / LINE ${formatDistanceMeters(activeTrackSpacingM, unitSystem, { digits: 2, compact: true })} LOCKED / TOOL ${formatDistanceMeters(currentImplementTrackSpacingM, unitSystem, { digits: 2, compact: true })}`
+                                      : `${compactStatus(activeLineRecord.type || guidanceLine)}${Math.abs(lineShiftMeters) >= 0.005 ? ` / Shift ${shiftDirectionLabel(lineShiftMeters, { short: true })} ${formatDistanceMeters(Math.abs(lineShiftMeters), unitSystem, { digits: 2, compact: true })}` : ''}`
                                   : `${(activeFieldRecord?.lines || []).filter(line => !line.archived).length} saved`,
                         tone: 'blue',
                         actions: unsavedGuidance
@@ -9030,7 +9341,7 @@ const App = () => {
                       </div>
                       <div className="mt-1 flex min-w-0 items-center gap-1.5">
                           <span className={`min-w-0 flex-1 text-[11px] font-black truncate ${t.textMain}`}>{activeDockLineLabel}</span>
-                          {Math.abs(lineShiftMeters) >= 0.005 && <span className="shrink-0 rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black text-blue-500">{shiftDirectionLabel(lineShiftMeters, { short: true })} {Math.abs(lineShiftMeters).toFixed(2)}m</span>}
+                          {Math.abs(lineShiftMeters) >= 0.005 && <span className="shrink-0 rounded-md bg-blue-500/12 px-1.5 py-0.5 text-[8px] font-black text-blue-500">{shiftDirectionLabel(lineShiftMeters, { short: true })} {formatDistanceMeters(Math.abs(lineShiftMeters), unitSystem, { digits: 2, compact: true })}</span>}
                       </div>
                       <div className={`mt-0.5 text-[9px] font-bold truncate ${t.textSub}`}>{activeDockBoundaryLabel}</div>
                       {activeTrackSpacingMismatch && (
@@ -9039,7 +9350,7 @@ const App = () => {
                               className={`mt-1 rounded-md px-1.5 py-1 text-[8px] font-black leading-tight ${theme === 'dark' ? 'bg-amber-400/12 text-amber-300' : 'bg-amber-50 text-amber-700'}`}
                               title="The saved guidance spacing stays fixed when the mounted implement changes. Create a new line to use this tool's swath spacing."
                           >
-                              LINE {activeTrackSpacingM.toFixed(2)} m LOCKED · TOOL {currentImplementTrackSpacingM.toFixed(2)} m
+                              LINE {formatDistanceMeters(activeTrackSpacingM, unitSystem, { digits: 2 })} LOCKED · TOOL {formatDistanceMeters(currentImplementTrackSpacingM, unitSystem, { digits: 2 })}
                           </div>
                       )}
                    </div>
@@ -9048,19 +9359,19 @@ const App = () => {
                       <div className="flex h-7 items-center justify-between gap-2 px-3">
                           <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${t.textSub}`}>Nudge</span>
                            <span aria-live="polite" className={`min-w-[66px] text-right text-sm font-black tabular-nums ${autoTrimEnabled && Math.abs(offsetCm) > 0.05 ? 'text-blue-500' : t.textMain}`}>
-                               {hasGuidanceToEngage ? `${offsetCm > 0 ? '+' : ''}${offsetCm.toFixed(1)} cm` : 'No line'}
+                               {hasGuidanceToEngage ? formatDistanceMeters(offsetCm / 100, unitSystem, { kind: 'fine', digits: 1, signed: true }) : 'No line'}
                            </span>
                       </div>
                       <div className="relative mt-1 grid grid-cols-3">
                           <button
                               type="button"
-                              aria-label={`Nudge guidance ${isPivotShift ? 'inward' : 'left'} 1 centimeter`}
+                              aria-label={`Nudge guidance ${isPivotShift ? 'inward' : 'left'} ${nudgeStepLabel}`}
                               disabled={!autoTrimEnabled}
                               onClick={runDockAction(() => handleTrim('left'))}
                               className={`h-11 flex flex-col items-center justify-center gap-0.5 transition-colors active:opacity-70 focus:outline-none focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/45 disabled:cursor-not-allowed disabled:opacity-35 ${manualActionTone}`}
                           >
                               <Minus className="h-4 w-4 text-blue-500" />
-                              <span className="text-[9px] font-black">{isPivotShift ? 'IN 1CM' : '1 CM'}</span>
+                              <span className="text-[9px] font-black">{isPivotShift ? `IN ${nudgeStepLabel}` : nudgeStepLabel}</span>
                           </button>
                           <button
                               type="button"
@@ -9074,13 +9385,13 @@ const App = () => {
                           </button>
                           <button
                               type="button"
-                              aria-label={`Nudge guidance ${isPivotShift ? 'outward' : 'right'} 1 centimeter`}
+                              aria-label={`Nudge guidance ${isPivotShift ? 'outward' : 'right'} ${nudgeStepLabel}`}
                               disabled={!autoTrimEnabled}
                               onClick={runDockAction(() => handleTrim('right'))}
                               className={`h-11 flex flex-col items-center justify-center gap-0.5 transition-colors active:opacity-70 focus:outline-none focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/45 disabled:cursor-not-allowed disabled:opacity-35 ${manualActionTone}`}
                           >
                               <Plus className="h-4 w-4 text-blue-500" />
-                              <span className="text-[9px] font-black">{isPivotShift ? 'OUT 1CM' : '1 CM'}</span>
+                              <span className="text-[9px] font-black">{isPivotShift ? `OUT ${nudgeStepLabel}` : nudgeStepLabel}</span>
                           </button>
                           {renderDockColumnSeparators(3, false, true, false)}
                       </div>
@@ -9155,7 +9466,7 @@ const App = () => {
                                   </div>
                                   <div className={`rounded-lg ${isDarkDock ? 'bg-slate-900/65' : 'bg-slate-50'} p-2`}>
                                       <div className={`text-[8px] font-black uppercase ${t.textSub}`}>Distance</div>
-                                      <div className={`mt-0.5 text-sm font-black ${t.textMain}`}>{capturedLengthMeters.toFixed(1)} m</div>
+                                      <div className={`mt-0.5 text-sm font-black ${t.textMain}`}>{formatDistanceMeters(capturedLengthMeters, unitSystem, { digits: 1 })}</div>
                                   </div>
                               </div>
 
@@ -9390,8 +9701,8 @@ const App = () => {
   const getImplementAsset = (profile) => `src/assets/implements/${getImplementAssetKey(profile)}.png`;
   const makeProfileId = (prefix, name) => `${prefix}-${String(name || 'profile').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${Date.now().toString(36)}`;
   const cleanProfileLabel = (value, fallback) => String(value || fallback).replace(/_/g, ' ');
-  const getImplementProfileDetail = (profile) => `${profile.sections || 1} sections / ${Number(profile.width || 0).toFixed(1)} m`;
-  const getVehicleProfileDetail = (profile) => `${profile.steeringType || 'Front axle'} / ${Number(profile.wheelbase || 0).toFixed(1)} m wheelbase`;
+  const getImplementProfileDetail = (profile) => `${profile.sections || 1} sections / ${formatDistanceMeters(profile.width, unitSystem, { digits: 1 })}`;
+  const getVehicleProfileDetail = (profile) => `${profile.steeringType || 'Front axle'} / ${formatDistanceMeters(profile.wheelbase, unitSystem, { digits: 1 })} wheelbase`;
   const makeUniqueProfileLabel = (requestedLabel, profiles, excludeId = null) => {
       const base = cleanProfileLabel(requestedLabel, 'Profile').trim() || 'Profile';
       const used = new Set(profiles.filter(profile => profile.id !== excludeId).map(profile => String(profile.label || '').trim().toLowerCase()));
@@ -9731,7 +10042,7 @@ const App = () => {
       const currentProfile = savedImplementProfiles.find(profile => profile.id === implementSettings.profileId);
       const shouldUpdate = currentProfile?.custom === true;
       const isCopy = Boolean(currentProfile && !currentProfile.custom);
-      const requestedLabel = cleanProfileLabel(implementSettings.name, `${implementSettings.type || 'Implement'} ${Number(implementSettings.width || 0).toFixed(1)}m`);
+      const requestedLabel = cleanProfileLabel(implementSettings.name, `${implementSettings.type || 'Implement'} ${formatDistanceMeters(implementSettings.width, unitSystem, { digits: 1, compact: true })}`);
       const copyLabel = isCopy ? `${requestedLabel} Copy` : requestedLabel;
       const label = makeUniqueProfileLabel(copyLabel, savedImplementProfiles, shouldUpdate ? currentProfile.id : null);
       const id = shouldUpdate ? currentProfile.id : makeProfileId('implement', label);
@@ -10078,7 +10389,7 @@ const App = () => {
           onActivate={activateImplementProfile}
           getImage={getImplementAsset}
           getSecondary={(profile) => `${profile.type || 'Implement'} \u00B7 ${profile.connectionType || 'Rear 3-point'}`}
-          getMeta={(profile) => `${Number(profile.width || 0).toFixed(1)} m working width`}
+          getMeta={(profile) => `${formatDistanceMeters(profile.width, unitSystem, { digits: 1 })} working width`}
           onDelete={deleteImplementProfile}
           emptyText="No matching implement"
           entity="implement"
@@ -10107,6 +10418,7 @@ const App = () => {
 
   const VehicleParameterInput = ({ field, label, value, unit = 'm', hint, className = '' }) => {
       const active = vehicleMeasureFocus === field;
+      const measurement = getInputMeasurement(value, unit, unitSystem);
       return (
           <label
               className={`flex min-w-0 cursor-text items-center gap-3 border-b ${t.border} px-3 py-2.5 transition-colors last:border-b-0 ${active ? 'bg-blue-500/7' : ''} ${className}`}
@@ -10121,12 +10433,12 @@ const App = () => {
                   <input
                       type="number"
                       step={unit === '°' ? '0.1' : '0.01'}
-                      value={Number.isFinite(Number(value)) ? Math.round(Number(value) * 1000) / 1000 : 0}
+                      value={Math.round(measurement.value * 1000) / 1000}
                       onFocus={() => setVehicleMeasureFocus(field)}
-                      onChange={(event) => handleVehicleChange(field, parseFloat(event.target.value) || 0)}
+                      onChange={(event) => handleVehicleChange(field, (parseFloat(event.target.value) || 0) / measurement.factor)}
                       className={`h-9 min-w-0 flex-1 bg-transparent text-right text-sm font-black outline-none ${t.textMain}`}
                   />
-                  <span className={`ml-1 text-[9px] font-black uppercase ${t.textDim}`}>{unit}</span>
+                  <span className={`ml-1 text-[9px] font-black uppercase ${t.textDim}`}>{measurement.unit}</span>
               </span>
           </label>
       );
@@ -10134,6 +10446,7 @@ const App = () => {
 
   const ImplementParameterInput = ({ field, label, value, unit = 'm', hint, step = '0.01', className = '' }) => {
       const active = implementMeasureFocus === field;
+      const measurement = getInputMeasurement(value, unit, unitSystem);
       return (
           <label
               className={`flex min-w-0 cursor-text items-center gap-3 border-b ${t.border} px-3 py-2.5 transition-colors last:border-b-0 ${active ? 'bg-blue-500/7' : ''} ${className}`}
@@ -10148,12 +10461,12 @@ const App = () => {
                   <input
                       type="number"
                       step={step}
-                      value={Number.isFinite(Number(value)) ? Math.round(Number(value) * 1000) / 1000 : 0}
+                      value={Math.round(measurement.value * 1000) / 1000}
                       onFocus={() => setImplementMeasureFocus(field)}
-                      onChange={(event) => handleImplementChange(field, parseFloat(event.target.value) || 0)}
+                      onChange={(event) => handleImplementChange(field, (parseFloat(event.target.value) || 0) / measurement.factor)}
                       className={`h-9 min-w-0 flex-1 bg-transparent text-right text-sm font-black outline-none ${t.textMain}`}
                   />
-                  <span className={`ml-1 text-[9px] font-black uppercase ${t.textDim}`}>{unit}</span>
+                  <span className={`ml-1 text-[9px] font-black uppercase ${t.textDim}`}>{measurement.unit}</span>
               </span>
           </label>
       );
@@ -10162,20 +10475,21 @@ const App = () => {
   const RealImplementMeasurementView = () => {
       const implementDisplayType = implementTypeOptions.find(option => option.id === getImplementAssetKey(implementSettings))?.label || implementSettings.type || 'Implement';
       const numberValue = (field, decimals = 2) => Number(implementSettings[field] || 0).toFixed(decimals);
+      const distanceValue = (field, decimals = 2, signed = false) => formatDistanceMeters(implementSettings[field], unitSystem, { digits: decimals, signed });
       const measures = {
-          width: ['Working width', `${numberValue('width')} m`, '#2563eb', 'width'],
-          overallWidth: ['Overall width', `${numberValue('overallWidth')} m`, '#06b6d4', 'overall'],
-          hitchToWorkPoint: ['Hitch to working point', `${numberValue('hitchToWorkPoint')} m`, '#f59e0b', 'length'],
-          hitchToRear: ['Hitch to rear edge', `${numberValue('hitchToRear')} m`, '#f97316', 'length'],
-          offset: ['Lateral offset', `${Number(implementSettings.offset || 0) >= 0 ? '+' : ''}${numberValue('offset')} m`, '#8b5cf6', 'offset'],
-          overlap: ['Skip / overlap', `${numberValue('overlap')} m`, '#ef4444', 'overlap'],
+          width: ['Working width', distanceValue('width'), '#2563eb', 'width'],
+          overallWidth: ['Overall width', distanceValue('overallWidth'), '#06b6d4', 'overall'],
+          hitchToWorkPoint: ['Hitch to working point', distanceValue('hitchToWorkPoint'), '#f59e0b', 'length'],
+          hitchToRear: ['Hitch to rear edge', distanceValue('hitchToRear'), '#f97316', 'length'],
+          offset: ['Lateral offset', distanceValue('offset', 2, true), '#8b5cf6', 'offset'],
+          overlap: ['Skip / overlap', distanceValue('overlap'), '#ef4444', 'overlap'],
           sections: ['Sections / rows', `${Math.max(1, Number(implementSettings.sections || 1))}`, '#16a34a', 'sections'],
-          rowSpacing: ['Row spacing', `${numberValue('rowSpacing', 3)} m`, '#16a34a', 'rows'],
-          transportWidth: ['Transport width', `${numberValue('transportWidth')} m`, '#0f766e', 'transportWidth'],
-          transportLength: ['Transport length', `${numberValue('transportLength')} m`, '#d97706', 'transportLength'],
-          workingDepth: ['Working depth', `${numberValue('workingDepth')} m`, '#a16207', 'depth'],
+          rowSpacing: ['Row spacing', distanceValue('rowSpacing', 3), '#16a34a', 'rows'],
+          transportWidth: ['Transport width', distanceValue('transportWidth'), '#0f766e', 'transportWidth'],
+          transportLength: ['Transport length', distanceValue('transportLength'), '#d97706', 'transportLength'],
+          workingDepth: ['Working depth', distanceValue('workingDepth'), '#a16207', 'depth'],
           weightKg: ['Operating weight', `${Math.round(Number(implementSettings.weightKg || 0))} kg`, '#64748b', 'mass'],
-          capacity: ['Tank / hopper capacity', `${numberValue('capacity', 0)} ${implementDisplayType === 'Land Leveling' ? 'm³' : 'L'}`, '#0284c7', 'capacity'],
+          capacity: ['Tank / hopper capacity', implementDisplayType === 'Land Leveling' ? formatCubicMeters(implementSettings.capacity, unitSystem, 1) : formatVolumeL(implementSettings.capacity, unitSystem, 0), '#0284c7', 'capacity'],
           delayOn: ['Switch-on delay', `${numberValue('delayOn', 1)} s`, '#22c55e', 'timing'],
           delayOff: ['Switch-off delay', `${numberValue('delayOff', 1)} s`, '#ef4444', 'timing']
       };
@@ -10410,10 +10724,10 @@ const App = () => {
       const antennaBX = pairCenterX + baselinePixels / 2;
       const receiverZ = 101 - Math.max(48, Math.min(78, zValue * 20));
       const focusInfo = {
-          antennaToRearAxle: { label: 'Fore-aft X', value: `${xValue.toFixed(2)} m`, color: xColor },
-          antennaOffset: { label: 'Lateral Y', value: `${yValue.toFixed(2)} m`, color: yColor },
-          antennaHeight: { label: 'Height Z', value: `${zValue.toFixed(2)} m`, color: zColor },
-          gnssBaseline: { label: 'Antenna baseline B', value: `${baselineValue.toFixed(2)} m`, color: baselineColor },
+          antennaToRearAxle: { label: 'Fore-aft X', value: formatDistanceMeters(xValue, unitSystem, { digits: 2 }), color: xColor },
+          antennaOffset: { label: 'Lateral Y', value: formatDistanceMeters(yValue, unitSystem, { digits: 2 }), color: yColor },
+          antennaHeight: { label: 'Height Z', value: formatDistanceMeters(zValue, unitSystem, { digits: 2 }), color: zColor },
+          gnssBaseline: { label: 'Antenna baseline B', value: formatDistanceMeters(baselineValue, unitSystem, { digits: 2 }), color: baselineColor },
           gnssHeadingOffset: { label: 'Heading / yaw', value: `${Number(vehicleSettings.gnssHeadingOffset || 0).toFixed(1)}°`, color: yawColor },
           gnssRollOffset: { label: 'Roll', value: `${Number(vehicleSettings.gnssRollOffset || 0).toFixed(1)}°`, color: rollColor },
           gnssPitchOffset: { label: 'Pitch', value: `${Number(vehicleSettings.gnssPitchOffset || 0).toFixed(1)}°`, color: pitchColor }
@@ -10476,7 +10790,7 @@ const App = () => {
 
                           <line x1={antennaAX} y1={pairCenterY} x2={antennaBX} y2={pairCenterY} {...lineStyle('gnssBaseline', baselineColor)} markerStart="url(#gnss-arrow-baseline)" markerEnd="url(#gnss-arrow-baseline)" />
                           <rect x={pairCenterX - 29} y={pairCenterY - 32} width="58" height="18" rx="6" fill={theme === 'dark' ? '#0f172a' : '#ffffff'} stroke={baselineColor} />
-                          <text x={pairCenterX} y={pairCenterY - 20} textAnchor="middle" fontSize="8.5" fontWeight="900" fill={baselineColor}>B {baselineValue.toFixed(2)} m</text>
+                          <text x={pairCenterX} y={pairCenterY - 20} textAnchor="middle" fontSize="8.5" fontWeight="900" fill={baselineColor}>B {formatDistanceMeters(baselineValue, unitSystem, { digits: 2 })}</text>
 
                           <circle cx={antennaAX} cy={pairCenterY} r="10" fill={theme === 'dark' ? '#020617' : '#ffffff'} stroke={baselineColor} strokeWidth="3" />
                           <circle cx={antennaAX} cy={pairCenterY} r="3" fill={baselineColor} />
@@ -10519,7 +10833,7 @@ const App = () => {
                               <text x="112" y={receiverZ - 10} textAnchor="middle" fontSize="7.5" fontWeight="900" fill={labelColor}>A</text>
                               <text x="208" y={receiverZ - 10} textAnchor="middle" fontSize="7.5" fontWeight="900" fill={labelColor}>B</text>
                               <line x1="112" y1={receiverZ + 17} x2="208" y2={receiverZ + 17} {...lineStyle('gnssBaseline', baselineColor)} markerStart="url(#gnss-arrow-b-front)" markerEnd="url(#gnss-arrow-b-front)" />
-                              <text x="160" y={receiverZ + 29} textAnchor="middle" fontSize="8" fontWeight="900" fill={baselineColor}>BASELINE {baselineValue.toFixed(2)} m</text>
+                              <text x="160" y={receiverZ + 29} textAnchor="middle" fontSize="8" fontWeight="900" fill={baselineColor}>BASELINE {formatDistanceMeters(baselineValue, unitSystem, { digits: 2 })}</text>
                               <line x1="55" y1="105" x2="55" y2={receiverZ} {...lineStyle('antennaHeight', zColor)} markerStart="url(#gnss-arrow-z)" markerEnd="url(#gnss-arrow-z)" />
                               <rect x="65" y={(105 + receiverZ) / 2 - 10} width="52" height="20" rx="6" fill={theme === 'dark' ? '#0f172a' : '#fff'} stroke={zColor} />
                               <text x="91" y={(105 + receiverZ) / 2 + 4} textAnchor="middle" fontSize="9" fontWeight="900" fill={zColor}>Z {zValue.toFixed(2)}</text>
@@ -10585,10 +10899,10 @@ const App = () => {
               ? 'side'
               : 'top';
       const selectedMap = {
-          gnssBaseline: ['Antenna baseline', `B ${baseline.toFixed(2)} m`, colors.baseline],
-          antennaToRearAxle: ['Pair center to rear axle', `X ${xValue.toFixed(2)} m`, colors.x],
-          antennaOffset: ['Pair center lateral offset', `Y ${yValue.toFixed(2)} m`, colors.y],
-          antennaHeight: ['Shared antenna height', `Z ${zValue.toFixed(2)} m`, colors.z],
+          gnssBaseline: ['Antenna baseline', `B ${formatDistanceMeters(baseline, unitSystem, { digits: 2 })}`, colors.baseline],
+          antennaToRearAxle: ['Pair center to rear axle', `X ${formatDistanceMeters(xValue, unitSystem, { digits: 2 })}`, colors.x],
+          antennaOffset: ['Pair center lateral offset', `Y ${formatDistanceMeters(yValue, unitSystem, { digits: 2 })}`, colors.y],
+          antennaHeight: ['Shared antenna height', `Z ${formatDistanceMeters(zValue, unitSystem, { digits: 2 })}`, colors.z],
           gnssHeadingOffset: ['Baseline heading correction', `${Number(vehicleSettings.gnssHeadingOffset || 0).toFixed(1)}°`, colors.heading],
           gnssRollOffset: ['Crossbar roll correction', `${Number(vehicleSettings.gnssRollOffset || 0).toFixed(1)}°`, colors.roll],
           gnssPitchOffset: ['Crossbar pitch correction', `${Number(vehicleSettings.gnssPitchOffset || 0).toFixed(1)}°`, colors.pitch]
@@ -10713,11 +11027,11 @@ const App = () => {
                                       <AntennaPair centerX={260} centerY={0} />
                                       <line x1={260 - baselinePx / 2} y1="52" x2={260 + baselinePx / 2} y2="52" stroke={focusStroke('gnssBaseline', colors.baseline)} strokeWidth={focusWidth('gnssBaseline')} markerStart="url(#live-arrow-b)" markerEnd="url(#live-arrow-b)" />
                                       <rect x="225" y="60" width="70" height="22" rx="7" fill={panelFill} stroke={colors.baseline} />
-                                      <text x="260" y="75" textAnchor="middle" fontSize="10" fontWeight="900" fill={colors.baseline}>B {baseline.toFixed(2)} m</text>
+                                      <text x="260" y="75" textAnchor="middle" fontSize="10" fontWeight="900" fill={colors.baseline}>B {formatDistanceMeters(baseline, unitSystem, { digits: 2 })}</text>
                                   </g>
                                   <line x1="66" y1="257" x2="66" y2={barHeightY} stroke={focusStroke('antennaHeight', colors.z)} strokeWidth={focusWidth('antennaHeight')} markerStart="url(#live-arrow-z)" markerEnd="url(#live-arrow-z)" />
                                   <rect x="78" y={(257 + barHeightY) / 2 - 12} width="72" height="24" rx="7" fill={panelFill} stroke={colors.z} />
-                                  <text x="114" y={(257 + barHeightY) / 2 + 4} textAnchor="middle" fontSize="10" fontWeight="900" fill={colors.z}>Z {zValue.toFixed(2)} m</text>
+                                  <text x="114" y={(257 + barHeightY) / 2 + 4} textAnchor="middle" fontSize="10" fontWeight="900" fill={colors.z}>Z {formatDistanceMeters(zValue, unitSystem, { digits: 2 })}</text>
                                   <text x="260" y="284" textAnchor="middle" fontSize="9" fontWeight="800" fill={mutedColor}>FRONT REFERENCE · ANT A / B ACROSS CAB ROOF</text>
                               </g>
                           )}
@@ -10747,7 +11061,7 @@ const App = () => {
                                   <line x1={sideAntennaX} y1={sideAntennaY + 12} x2={sideAntennaX} y2="116" stroke={colors.x} strokeDasharray="4 4" opacity="0.55" />
                                   <line x1={sideRearAxleX} y1="116" x2={sideRearAxleX} y2="200" stroke={colors.x} strokeDasharray="4 4" opacity="0.55" />
                                   <rect x={(sideRearAxleX + sideAntennaX) / 2 - 38} y="124" width="76" height="24" rx="7" fill={panelFill} stroke={colors.x} />
-                                  <text x={(sideRearAxleX + sideAntennaX) / 2} y="140" textAnchor="middle" fontSize="10" fontWeight="900" fill={colors.x}>X {xValue.toFixed(2)} m</text>
+                                  <text x={(sideRearAxleX + sideAntennaX) / 2} y="140" textAnchor="middle" fontSize="10" fontWeight="900" fill={colors.x}>X {formatDistanceMeters(xValue, unitSystem, { digits: 2 })}</text>
                                   <line x1="62" y1="257" x2="62" y2={sideAntennaY} stroke={colors.z} strokeWidth="2" opacity="0.5" markerStart="url(#live-arrow-z)" markerEnd="url(#live-arrow-z)" />
                               </g>
                           )}
@@ -10769,7 +11083,7 @@ const App = () => {
                                   <AntennaPair centerX={topPairX} centerY={topPairY} />
                                   <line x1="260" y1={topPairY + 50} x2={topPairX} y2={topPairY + 50} stroke={focusStroke('antennaOffset', colors.y)} strokeWidth={focusWidth('antennaOffset')} markerEnd="url(#live-arrow-y)" />
                                   <rect x={topPairX - 35} y={topPairY + 58} width="70" height="22" rx="7" fill={panelFill} stroke={colors.y} />
-                                  <text x={topPairX} y={topPairY + 73} textAnchor="middle" fontSize="10" fontWeight="900" fill={colors.y}>Y {yValue.toFixed(2)} m</text>
+                                  <text x={topPairX} y={topPairY + 73} textAnchor="middle" fontSize="10" fontWeight="900" fill={colors.y}>Y {formatDistanceMeters(yValue, unitSystem, { digits: 2 })}</text>
                                   <line x1={topPairX} y1={topPairY - 18} x2={topPairX} y2={Math.max(22, topPairY - 70)} stroke={focusStroke('gnssHeadingOffset', colors.heading)} strokeWidth={focusWidth('gnssHeadingOffset')} markerEnd="url(#live-arrow-heading)" />
                                   <text x={topPairX + 9} y={Math.max(34, topPairY - 48)} fontSize="9" fontWeight="900" fill={colors.heading}>HEADING</text>
                                   <line x1="446" y1="226" x2="446" y2={topPairY} stroke={colors.x} strokeWidth="2" opacity="0.45" markerStart="url(#live-arrow-x)" markerEnd="url(#live-arrow-x)" />
@@ -10784,7 +11098,7 @@ const App = () => {
                           <span className="h-2 w-2 rounded-full bg-green-500" />
                           <span className={`text-[9px] font-black ${t.textMain}`}>Illustration follows selected input automatically</span>
                       </div>
-                      <div className={`text-[9px] font-bold ${t.textSub}`}>Primary: {vehicleSettings.gnssPrimarySide || 'Left / ANT A'} · Baseline {baseline.toFixed(2)} m</div>
+                      <div className={`text-[9px] font-bold ${t.textSub}`}>Primary: {vehicleSettings.gnssPrimarySide || 'Left / ANT A'} · Baseline {formatDistanceMeters(baseline, unitSystem, { digits: 2 })}</div>
                   </div>
               </div>
           </div>
@@ -10795,23 +11109,23 @@ const App = () => {
       const vehicleImage = (view) => getVehicleAsset(vehicleSettings, view);
       const value = (field, decimals = 2) => Number(vehicleSettings[field] || 0).toFixed(decimals);
       const measures = {
-          wheelbase: ['Wheelbase', `${value('wheelbase')} m`, 'Chassis', '#2563eb', 'side'],
-          turnRadius: ['Reference-path turn radius', `${value('turnRadius')} m`, 'Steering', '#2563eb', 'top'],
-          frontAxleWidth: ['Front wheel track', `${value('frontAxleWidth')} m`, 'Chassis', '#2563eb', 'front'],
-          rearAxleWidth: ['Rear wheel track', `${value('rearAxleWidth')} m`, 'Chassis', '#2563eb', 'front'],
-          frontOverhang: ['Front overhang', `${value('frontOverhang')} m`, 'Chassis', '#2563eb', 'side'],
-          rearOverhang: ['Rear overhang', `${value('rearOverhang')} m`, 'Chassis', '#2563eb', 'side'],
-          overallHeight: ['Vehicle height', `${value('overallHeight')} m`, 'Chassis', '#2563eb', 'side'],
-          gnssBaseline: ['Antenna baseline', `B ${value('gnssBaseline')} m`, 'Dual GNSS', '#f59e0b', 'front'],
-          antennaToRearAxle: ['Pair center to rear axle', `X ${value('antennaToRearAxle')} m`, 'Dual GNSS', '#2563eb', 'side'],
-          antennaOffset: ['Pair center lateral offset', `Y ${value('antennaOffset')} m`, 'Dual GNSS', '#8b5cf6', 'top'],
-          antennaHeight: ['Shared antenna height', `Z ${value('antennaHeight')} m`, 'Dual GNSS', '#16a34a', 'front'],
+          wheelbase: ['Wheelbase', formatDistanceMeters(vehicleSettings.wheelbase, unitSystem, { digits: 2 }), 'Chassis', '#2563eb', 'side'],
+          turnRadius: ['Reference-path turn radius', formatDistanceMeters(vehicleSettings.turnRadius, unitSystem, { digits: 2 }), 'Steering', '#2563eb', 'top'],
+          frontAxleWidth: ['Front wheel track', formatDistanceMeters(vehicleSettings.frontAxleWidth, unitSystem, { digits: 2 }), 'Chassis', '#2563eb', 'front'],
+          rearAxleWidth: ['Rear wheel track', formatDistanceMeters(vehicleSettings.rearAxleWidth, unitSystem, { digits: 2 }), 'Chassis', '#2563eb', 'front'],
+          frontOverhang: ['Front overhang', formatDistanceMeters(vehicleSettings.frontOverhang, unitSystem, { digits: 2 }), 'Chassis', '#2563eb', 'side'],
+          rearOverhang: ['Rear overhang', formatDistanceMeters(vehicleSettings.rearOverhang, unitSystem, { digits: 2 }), 'Chassis', '#2563eb', 'side'],
+          overallHeight: ['Vehicle height', formatDistanceMeters(vehicleSettings.overallHeight, unitSystem, { digits: 2 }), 'Chassis', '#2563eb', 'side'],
+          gnssBaseline: ['Antenna baseline', `B ${formatDistanceMeters(vehicleSettings.gnssBaseline, unitSystem, { digits: 2 })}`, 'Dual GNSS', '#f59e0b', 'front'],
+          antennaToRearAxle: ['Pair center to rear axle', `X ${formatDistanceMeters(vehicleSettings.antennaToRearAxle, unitSystem, { digits: 2 })}`, 'Dual GNSS', '#2563eb', 'side'],
+          antennaOffset: ['Pair center lateral offset', `Y ${formatDistanceMeters(vehicleSettings.antennaOffset, unitSystem, { digits: 2 })}`, 'Dual GNSS', '#8b5cf6', 'top'],
+          antennaHeight: ['Shared antenna height', `Z ${formatDistanceMeters(vehicleSettings.antennaHeight, unitSystem, { digits: 2 })}`, 'Dual GNSS', '#16a34a', 'front'],
           gnssHeadingOffset: ['Heading correction', `${value('gnssHeadingOffset', 1)}°`, 'Dual GNSS', '#06b6d4', 'top'],
           gnssRollOffset: ['Roll correction', `${value('gnssRollOffset', 1)}°`, 'Dual GNSS', '#ec4899', 'front'],
           gnssPitchOffset: ['Pitch correction', `${value('gnssPitchOffset', 1)}°`, 'Dual GNSS', '#f97316', 'side'],
-          rearHitch: ['Rear axle to hitch', `X ${value('rearHitch')} m`, 'Hitch', '#7c3aed', 'side'],
-          hitchOffset: ['Hitch lateral offset', `Y ${value('hitchOffset')} m`, 'Hitch', '#7c3aed', 'top'],
-          hitchHeight: ['Hitch height', `Z ${value('hitchHeight')} m`, 'Hitch', '#7c3aed', 'side']
+          rearHitch: ['Rear axle to hitch', `X ${formatDistanceMeters(vehicleSettings.rearHitch, unitSystem, { digits: 2 })}`, 'Hitch', '#7c3aed', 'side'],
+          hitchOffset: ['Hitch lateral offset', `Y ${formatDistanceMeters(vehicleSettings.hitchOffset, unitSystem, { digits: 2 })}`, 'Hitch', '#7c3aed', 'top'],
+          hitchHeight: ['Hitch height', `Z ${formatDistanceMeters(vehicleSettings.hitchHeight, unitSystem, { digits: 2 })}`, 'Hitch', '#7c3aed', 'side']
       };
       const selected = measures[vehicleMeasureFocus] || measures.wheelbase;
       const [selectedLabel, selectedValue, selectedGroup, selectedColor, activeView] = selected;
@@ -11023,22 +11337,22 @@ const App = () => {
       const activeStroke = (field) => vehicleMeasureFocus === field ? accent : muted;
       const activeWidth = (field) => vehicleMeasureFocus === field ? 3 : 1.4;
       const measureValue = {
-          wheelbase: `${Number(vehicleSettings.wheelbase || 0).toFixed(2)} m`,
-          frontAxleWidth: `${Number(vehicleSettings.frontAxleWidth || 0).toFixed(2)} m`,
-          rearAxleWidth: `${Number(vehicleSettings.rearAxleWidth || 0).toFixed(2)} m`,
-          frontOverhang: `${Number(vehicleSettings.frontOverhang || 0).toFixed(2)} m`,
-          rearOverhang: `${Number(vehicleSettings.rearOverhang || 0).toFixed(2)} m`,
-          overallHeight: `${Number(vehicleSettings.overallHeight || 0).toFixed(2)} m`,
-          turnRadius: `${Number(vehicleSettings.turnRadius || 0).toFixed(2)} m`,
-          antennaHeight: `${Number(vehicleSettings.antennaHeight || 0).toFixed(2)} m`,
-          antennaOffset: `${Number(vehicleSettings.antennaOffset || 0).toFixed(2)} m`,
-          antennaToRearAxle: `${Number(vehicleSettings.antennaToRearAxle || 0).toFixed(2)} m`,
+          wheelbase: formatDistanceMeters(vehicleSettings.wheelbase, unitSystem, { digits: 2 }),
+          frontAxleWidth: formatDistanceMeters(vehicleSettings.frontAxleWidth, unitSystem, { digits: 2 }),
+          rearAxleWidth: formatDistanceMeters(vehicleSettings.rearAxleWidth, unitSystem, { digits: 2 }),
+          frontOverhang: formatDistanceMeters(vehicleSettings.frontOverhang, unitSystem, { digits: 2 }),
+          rearOverhang: formatDistanceMeters(vehicleSettings.rearOverhang, unitSystem, { digits: 2 }),
+          overallHeight: formatDistanceMeters(vehicleSettings.overallHeight, unitSystem, { digits: 2 }),
+          turnRadius: formatDistanceMeters(vehicleSettings.turnRadius, unitSystem, { digits: 2 }),
+          antennaHeight: formatDistanceMeters(vehicleSettings.antennaHeight, unitSystem, { digits: 2 }),
+          antennaOffset: formatDistanceMeters(vehicleSettings.antennaOffset, unitSystem, { digits: 2 }),
+          antennaToRearAxle: formatDistanceMeters(vehicleSettings.antennaToRearAxle, unitSystem, { digits: 2 }),
           gnssHeadingOffset: `${Number(vehicleSettings.gnssHeadingOffset || 0).toFixed(1)}°`,
           gnssRollOffset: `${Number(vehicleSettings.gnssRollOffset || 0).toFixed(1)}°`,
           gnssPitchOffset: `${Number(vehicleSettings.gnssPitchOffset || 0).toFixed(1)}°`,
-          rearHitch: `${Number(vehicleSettings.rearHitch || 0).toFixed(2)} m`,
-          hitchOffset: `${Number(vehicleSettings.hitchOffset || 0).toFixed(2)} m`,
-          hitchHeight: `${Number(vehicleSettings.hitchHeight || 0).toFixed(2)} m`
+          rearHitch: formatDistanceMeters(vehicleSettings.rearHitch, unitSystem, { digits: 2 }),
+          hitchOffset: formatDistanceMeters(vehicleSettings.hitchOffset, unitSystem, { digits: 2 }),
+          hitchHeight: formatDistanceMeters(vehicleSettings.hitchHeight, unitSystem, { digits: 2 })
       };
 
       const MeasurementLabel = ({ x, y, field, anchor = 'middle' }) => (
@@ -11212,9 +11526,10 @@ const App = () => {
           items: [
               { id: 'overview', label: 'Overview', icon: LayoutGrid },
               { id: 'guidance', label: 'Guidance', icon: Navigation },
-              { id: 'rtk', label: 'RTK / GNSS', icon: Radio },
-              { id: 'wifi', label: 'WiFi / Network', icon: WifiGlyph },
-              { id: 'display', label: 'Display', icon: Monitor }
+               { id: 'rtk', label: 'RTK / GNSS', icon: Radio },
+               { id: 'wifi', label: 'WiFi / Network', icon: WifiGlyph },
+               { id: 'regional', label: 'Regional Settings', icon: Clock },
+               { id: 'display', label: 'Display', icon: Monitor }
           ]
       },
       {
@@ -11237,15 +11552,179 @@ const App = () => {
       },
       {
           title: 'Service',
-          items: [
-              { id: 'diagnostics', label: 'Diagnostics', icon: AlertTriangle },
-              { id: 'calibration', label: 'Calibration', icon: Gauge }
-          ]
+           items: [
+               { id: 'diagnostics', label: 'Diagnostics', icon: AlertTriangle },
+               { id: 'calibration', label: 'Calibration', icon: Gauge },
+               { id: 'system', label: 'System & Power', icon: Power }
+           ]
       }
   ];
 
   const renderSettingsContent = () => {
     switch (settingsTab) {
+        case 'regional': {
+            const selectedRegion = REGION_OPTIONS.find(option => option.code === regionalSettings.country) || REGION_OPTIONS[0];
+            const selectedLanguage = LANGUAGE_OPTIONS.find(option => option.code === regionalSettings.language) || LANGUAGE_OPTIONS[0];
+            const manualTime = `${String(manualClockDraft.hour).padStart(2, '0')}:${String(manualClockDraft.minute).padStart(2, '0')}`;
+            return (
+                <div className="space-y-3">
+                    <SettingsSection title="Country & Region" detail="Sets local formats, units and the default time zone." icon={Globe}>
+                        <div className={`grid grid-cols-1 overflow-hidden rounded-xl border md:grid-cols-3 md:divide-x ${t.borderCard} ${theme === 'dark' ? 'divide-slate-700 bg-slate-800/65' : 'divide-slate-200 bg-white'}`}>
+                            <button type="button" onClick={() => setRegionalPicker('country')} className={`flex min-h-[88px] items-center gap-3 p-4 text-left transition-colors ${theme === 'dark' ? 'hover:bg-slate-800' : 'hover:bg-slate-50'}`}>
+                                <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl px-2 text-sm font-black ${theme === 'dark' ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-700'}`}>{selectedRegion.code}</span>
+                                <span className="min-w-0 flex-1">
+                                    <span className={`block text-[10px] font-black uppercase tracking-[0.12em] ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Country</span>
+                                    <span className={`mt-0.5 block truncate text-base font-black ${t.textMain}`}>{selectedRegion.name}</span>
+                                    <span className={`mt-0.5 block truncate text-[11px] font-semibold ${t.textDim}`}>{selectedRegion.dateFormat} / {selectedRegion.locale}</span>
+                                </span>
+                                <ChevronRight className={`h-5 w-5 shrink-0 ${t.textDim}`} />
+                            </button>
+                            <button type="button" onClick={() => setRegionalPicker('language')} className={`flex min-h-[88px] items-center gap-3 border-t p-4 text-left transition-colors md:border-t-0 ${t.borderCard} ${theme === 'dark' ? 'hover:bg-slate-800' : 'hover:bg-slate-50'}`}>
+                                <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-base font-black ${theme === 'dark' ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-700'}`}>A</span>
+                                <span className="min-w-0 flex-1">
+                                    <span className={`block text-[10px] font-black uppercase tracking-[0.12em] ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Language</span>
+                                    <span className={`mt-0.5 block truncate text-base font-black ${t.textMain}`}>{selectedLanguage.nativeName}</span>
+                                    <span className={`mt-0.5 block truncate text-[11px] font-semibold ${t.textDim}`}>{selectedLanguage.name} / {selectedLanguage.code.toUpperCase()}</span>
+                                </span>
+                                <ChevronRight className={`h-5 w-5 shrink-0 ${t.textDim}`} />
+                            </button>
+                            <button type="button" onClick={() => setRegionalPicker('timeZone')} className={`flex min-h-[88px] items-center gap-3 border-t p-4 text-left transition-colors md:border-t-0 ${t.borderCard} ${theme === 'dark' ? 'hover:bg-slate-800' : 'hover:bg-slate-50'}`}>
+                                <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${theme === 'dark' ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-700'}`}><Clock className="h-6 w-6" /></span>
+                                <span className="min-w-0 flex-1">
+                                    <span className={`block text-[10px] font-black uppercase tracking-[0.12em] ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Time zone</span>
+                                    <span className={`mt-0.5 block truncate text-base font-black ${t.textMain}`}>{regionalSettings.timeZone.split('/').pop().replaceAll('_', ' ')}</span>
+                                    <span className={`mt-0.5 block truncate text-[11px] font-semibold ${t.textDim}`}>{regionalSettings.timeZone.replaceAll('_', ' ')}</span>
+                                </span>
+                                <ChevronRight className={`h-5 w-5 shrink-0 ${t.textDim}`} />
+                            </button>
+                        </div>
+                        <div className={`mt-3 rounded-xl border p-3 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-800/55' : 'bg-slate-50'}`}>
+                            <div className="mb-2 flex items-center justify-between gap-3 px-1">
+                                <div>
+                                    <div className={`text-[10px] font-black uppercase tracking-[0.12em] ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Measurement units</div>
+                                    <div className={`mt-0.5 text-[11px] font-semibold ${t.textDim}`}>Changes every distance, speed, area and machine value.</div>
+                                </div>
+                                <Ruler className="h-5 w-5 shrink-0 text-blue-500" />
+                            </div>
+                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                                {UNIT_SYSTEM_OPTIONS.map(option => {
+                                    const selected = option.id === unitSystem;
+                                    return (
+                                        <button
+                                            key={option.id}
+                                            type="button"
+                                            aria-pressed={selected}
+                                            onClick={() => setRegionalSettings(previous => ({ ...previous, unitSystem: option.id }))}
+                                            className={`min-h-[72px] rounded-xl border px-3 py-2.5 text-left transition-colors ${selected ? 'border-blue-500 bg-blue-600 text-white shadow-sm' : `${t.borderCard} ${theme === 'dark' ? 'bg-slate-900 hover:bg-slate-800' : 'bg-white hover:bg-blue-50'}`}`}
+                                        >
+                                            <span className={`block text-sm font-black ${selected ? 'text-white' : t.textMain}`}>{option.label}</span>
+                                            <span className={`mt-1 block text-[10px] font-bold ${selected ? 'text-blue-100' : t.textDim}`}>{option.detail}</span>
+                                            <span className={`block text-[9px] font-semibold ${selected ? 'text-blue-200' : t.textDim}`}>{option.secondary}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </SettingsSection>
+
+                    <SettingsSection title="Date & Time" detail="Use network time automatically or set the Pi clock manually." icon={Clock}>
+                        <div className={`grid grid-cols-1 gap-3 ${regionalSettings.timeMode === 'MANUAL' ? 'lg:grid-cols-[1fr_1.3fr]' : ''}`}>
+                            <div className={`rounded-xl border p-4 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-800/70' : 'bg-white'}`}>
+                                <span className={`block text-[11px] font-black uppercase tracking-wider ${t.textDim}`}>Clock mode</span>
+                                <div className={`mt-3 grid grid-cols-2 gap-1 rounded-xl p-1 ${theme === 'dark' ? 'bg-slate-950' : 'bg-slate-100'}`}>
+                                    {['AUTO', 'MANUAL'].map(mode => (
+                                        <button
+                                            key={mode}
+                                            type="button"
+                                            onClick={() => handleTimeModeChange(mode)}
+                                            className={`h-11 rounded-lg text-xs font-black tracking-wide transition-colors ${regionalSettings.timeMode === mode ? 'bg-blue-600 text-white' : t.textDim}`}
+                                        >
+                                            {mode === 'AUTO' ? 'AUTOMATIC' : 'MANUAL'}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className={`mt-3 rounded-xl border p-3 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-slate-50'}`}>
+                                    <div className="flex items-baseline justify-between gap-3">
+                                        <span className={`text-xs font-bold ${t.textDim}`}>{regionalSettings.timeMode === 'AUTO' ? 'Network clock' : 'Manual clock'}</span>
+                                        <span className={`text-xl font-black tabular-nums ${t.textMain}`}>{regionalSettings.timeMode === 'MANUAL' ? manualTime : currentTime}</span>
+                                    </div>
+                                    <div className={`mt-1 text-right text-xs font-semibold ${t.textDim}`}>{regionalSettings.timeMode === 'MANUAL' ? manualClockDraft.date : currentDate}</div>
+                                </div>
+                                <div className="mt-3 flex items-center justify-between gap-3">
+                                    <span className={`text-sm font-bold ${t.textMain}`}>Clock format</span>
+                                    <div className={`flex rounded-lg p-1 ${theme === 'dark' ? 'bg-slate-950' : 'bg-slate-100'}`}>
+                                        {['24', '12'].map(format => (
+                                            <button
+                                                key={format}
+                                                type="button"
+                                                onClick={() => setRegionalSettings(previous => ({ ...previous, hourFormat: format }))}
+                                                className={`h-9 rounded-md px-4 text-xs font-black ${regionalSettings.hourFormat === format ? 'bg-blue-600 text-white' : t.textDim}`}
+                                            >{format}H</button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className={`rounded-xl border p-4 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-800/70' : 'bg-white'} ${regionalSettings.timeMode === 'AUTO' ? 'hidden' : ''}`}>
+                                <div className="flex items-center justify-between gap-3">
+                                    <span className={`text-[11px] font-black uppercase tracking-wider ${t.textDim}`}>Manual date and time</span>
+                                    <button type="button" onClick={useCurrentRegionalTime} className="h-9 rounded-lg border border-blue-500/35 px-3 text-xs font-black text-blue-500">USE CURRENT</button>
+                                </div>
+                                <input
+                                    type="date"
+                                    value={manualClockDraft.date}
+                                    onChange={(event) => setManualClockDraft(previous => ({ ...previous, date: event.target.value }))}
+                                    className={`mt-3 h-12 w-full rounded-lg border px-3 text-center text-sm font-black outline-none focus:border-blue-500 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900 text-white' : 'bg-gray-50 text-slate-900'}`}
+                                />
+                                <div className="mt-3 grid grid-cols-2 gap-3">
+                                    {[['hour', 'Hour', 1], ['minute', 'Minute', 5]].map(([field, label, step]) => (
+                                        <div key={field} className={`rounded-xl border p-2 ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-slate-50'}`}>
+                                            <div className={`mb-1 text-center text-[10px] font-black uppercase tracking-wider ${t.textDim}`}>{label}</div>
+                                            <div className="grid grid-cols-[40px_1fr_40px] items-center">
+                                                <button type="button" onClick={() => adjustManualClock(field, -step)} className={`flex h-10 items-center justify-center rounded-lg ${t.textMain}`}><Minus className="h-4 w-4" /></button>
+                                                <span className={`text-center text-xl font-black tabular-nums ${t.textMain}`}>{String(manualClockDraft[field]).padStart(2, '0')}</span>
+                                                <button type="button" onClick={() => adjustManualClock(field, step)} className="flex h-10 items-center justify-center rounded-lg text-blue-500"><Plus className="h-4 w-4" /></button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </SettingsSection>
+                </div>
+            );
+        }
+        case 'system': return (
+            <div className="space-y-3">
+                <SettingsSection
+                    title="Device Power"
+                    detail="Restart or safely shut down the Raspberry Pi."
+                    icon={Power}
+                    actions={<span className={`rounded-full px-3 py-1 text-[10px] font-black tracking-wider ${systemPowerLocked ? 'bg-red-500/10 text-red-500' : 'bg-blue-500/10 text-blue-600'}`}>{systemPowerLocked ? 'LOCKED WHILE RUNNING' : 'READY'}</span>}
+                >
+                    <div className={`grid grid-cols-1 overflow-hidden rounded-xl border md:grid-cols-2 md:divide-x ${t.borderCard} ${theme === 'dark' ? 'bg-slate-800/65 divide-slate-700' : 'bg-white divide-slate-200'}`}>
+                        <button type="button" disabled={systemPowerLocked} onClick={() => setSystemDialog('restart')} className={`flex min-h-24 items-center gap-4 p-5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${theme === 'dark' ? 'hover:bg-slate-800' : 'hover:bg-slate-50'}`}>
+                            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-500/12 text-blue-600"><RotateCw className="h-6 w-6" /></span>
+                            <span><span className={`block text-base font-black ${t.textMain}`}>Restart device</span><span className={`text-xs font-semibold ${t.textDim}`}>Reboot the Pi and reopen the application.</span></span>
+                        </button>
+                        <button type="button" disabled={systemPowerLocked} onClick={() => setSystemDialog('shutdown')} className={`flex min-h-24 items-center gap-4 border-t p-5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-40 md:border-t-0 ${t.borderCard} ${theme === 'dark' ? 'hover:bg-slate-800' : 'hover:bg-red-50/60'}`}>
+                            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-red-500/12 text-red-500"><Power className="h-6 w-6" /></span>
+                            <span><span className={`block text-base font-black ${t.textMain}`}>Shut down</span><span className={`text-xs font-semibold ${t.textDim}`}>Safely stop the Pi before cutting power.</span></span>
+                        </button>
+                    </div>
+                </SettingsSection>
+                <SettingsSection title="Recovery" detail="Restore the unit only when setup must start over." icon={RotateCcw}>
+                    <div className={`flex flex-col gap-4 rounded-xl border p-4 md:flex-row md:items-center ${t.borderCard} ${theme === 'dark' ? 'bg-slate-800/65' : 'bg-white'}`}>
+                        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-red-500/10 text-red-500"><RotateCcw className="h-5 w-5" /></span>
+                        <div className="min-w-0 flex-1">
+                            <div className={`text-base font-black ${t.textMain}`}>Restore factory defaults</div>
+                            <div className={`mt-1 text-xs font-semibold ${t.textDim}`}>Clears fields, lines, tasks, network and setup values. Confirmation is required.</div>
+                        </div>
+                        <button type="button" onClick={() => setSystemDialog('factoryReset')} className="h-11 shrink-0 rounded-lg border border-red-500/40 px-5 text-sm font-black text-red-500 hover:bg-red-500/10">RESET TO FACTORY</button>
+                    </div>
+                </SettingsSection>
+            </div>
+        );
         case 'display': return (
             <div className="space-y-3">
                 <SettingsSection title="Display" detail="Screen theme, brightness and map presentation." icon={Monitor}>
@@ -12268,7 +12747,7 @@ const App = () => {
                                                     </div>
                                                     <div className={`overflow-hidden rounded-xl border ${t.borderCard}`}>
                                                         <VehicleParameterInput field="wheelbase" label="Wheelbase" value={vehicleSettings.wheelbase} hint="Front axle to rear axle." />
-                                                        <VehicleParameterInput field="turnRadius" label="Min. simulated path radius" value={vehicleSettings.turnRadius} hint="Reference-path radius at full lock; must be at least wheelbase + 0.10 m." />
+                                                        <VehicleParameterInput field="turnRadius" label="Min. simulated path radius" value={vehicleSettings.turnRadius} hint={`Reference-path radius at full lock; must be at least wheelbase + ${formatDistanceMeters(0.1, unitSystem, { kind: 'auto', digits: 1 })}.`} />
                                                         <VehicleParameterInput field="frontAxleWidth" label="Front wheel track" value={vehicleSettings.frontAxleWidth} hint="Tire center to tire center." />
                                                         <VehicleParameterInput field="rearAxleWidth" label="Rear wheel track" value={vehicleSettings.rearAxleWidth} hint="Tire center to tire center." />
                                                         <VehicleParameterInput field="frontOverhang" label="Front overhang" value={vehicleSettings.frontOverhang || 0} hint="Front axle to nose." />
@@ -12278,11 +12757,11 @@ const App = () => {
                                                     <div className={`mt-3 grid grid-cols-3 gap-2 rounded-xl border ${t.borderCard} p-3`}>
                                                         <div>
                                                             <div className={`text-[8px] font-black uppercase ${t.textSub}`}>Overall length</div>
-                                                            <div className={`text-sm font-black ${t.textMain}`}>{overallLength.toFixed(2)} m</div>
+                                                            <div className={`text-sm font-black ${t.textMain}`}>{formatDistanceMeters(overallLength, unitSystem, { digits: 2 })}</div>
                                                         </div>
                                                         <div>
                                                             <div className={`text-[8px] font-black uppercase ${t.textSub}`}>Average track</div>
-                                                            <div className={`text-sm font-black ${t.textMain}`}>{avgTrack.toFixed(2)} m</div>
+                                                            <div className={`text-sm font-black ${t.textMain}`}>{formatDistanceMeters(avgTrack, unitSystem, { digits: 2 })}</div>
                                                         </div>
                                                         <div>
                                                             <div className={`text-[8px] font-black uppercase ${t.textSub}`}>Steering</div>
@@ -12352,7 +12831,7 @@ const App = () => {
                                                         <CheckCircle2 className="h-4 w-4 shrink-0 text-green-500" />
                                                         <div className="min-w-0">
                                                             <div className="text-[9px] font-black uppercase text-green-500">Reference ready</div>
-                                                            <div className={`truncate text-[10px] font-bold ${t.textSub}`}>B {Number(vehicleSettings.gnssBaseline || 0).toFixed(2)} m · X {Number(vehicleSettings.antennaToRearAxle || 0).toFixed(2)} m · Y {Number(vehicleSettings.antennaOffset || 0).toFixed(2)} m · Z {Number(vehicleSettings.antennaHeight || 0).toFixed(2)} m</div>
+                                                            <div className={`truncate text-[10px] font-bold ${t.textSub}`}>B {formatDistanceMeters(vehicleSettings.gnssBaseline, unitSystem, { digits: 2 })} · X {formatDistanceMeters(vehicleSettings.antennaToRearAxle, unitSystem, { digits: 2 })} · Y {formatDistanceMeters(vehicleSettings.antennaOffset, unitSystem, { digits: 2 })} · Z {formatDistanceMeters(vehicleSettings.antennaHeight, unitSystem, { digits: 2 })}</div>
                                                         </div>
                                                     </div>
                                                     <div className={`my-2 h-px ${t.divider}`} />
@@ -12394,9 +12873,9 @@ const App = () => {
                                     <div className="space-y-3">
                                         <RealVehicleMeasurementView />
                                         <div className="grid grid-cols-3 gap-2">
-                                            <SettingsMetric label="Wheelbase" value={`${Number(vehicleSettings.wheelbase || 0).toFixed(2)} m`} />
-                                            <SettingsMetric label="Track Avg" value={`${avgTrack.toFixed(2)} m`} />
-                                            <SettingsMetric label="Length" value={`${overallLength.toFixed(2)} m`} />
+                                            <SettingsMetric label="Wheelbase" value={formatDistanceMeters(vehicleSettings.wheelbase, unitSystem, { digits: 2 })} />
+                                            <SettingsMetric label="Track Avg" value={formatDistanceMeters(avgTrack, unitSystem, { digits: 2 })} />
+                                            <SettingsMetric label="Length" value={formatDistanceMeters(overallLength, unitSystem, { digits: 2 })} />
                                         </div>
                                     </div>
                                     <div className="space-y-3">
@@ -12412,13 +12891,13 @@ const App = () => {
                                             </div>
                                             {renderReviewRow('Machine', `${vehicleSettings.brand || 'Generic'} ${vehicleSettings.model || vehicleSettings.type}`)}
                                             {renderReviewRow('Control', vehicleSettings.controlType || 'Electronic Steering Wheel')}
-                                            {renderReviewRow('Wheelbase', Number(vehicleSettings.wheelbase || 0).toFixed(2), 'm')}
-                                            {renderReviewRow('Front / Rear track', `${Number(vehicleSettings.frontAxleWidth || 0).toFixed(2)} / ${Number(vehicleSettings.rearAxleWidth || 0).toFixed(2)}`, 'm')}
+                                            {renderReviewRow('Wheelbase', getDistanceParts(vehicleSettings.wheelbase, unitSystem, { digits: 2 }).value, getLengthInputUnit(unitSystem))}
+                                            {renderReviewRow('Front / Rear track', `${getDistanceParts(vehicleSettings.frontAxleWidth, unitSystem, { digits: 2 }).value} / ${getDistanceParts(vehicleSettings.rearAxleWidth, unitSystem, { digits: 2 }).value}`, getLengthInputUnit(unitSystem))}
                                             {renderReviewRow('GNSS receiver pair', `2 × ${vehicleSettings.gnssReceiverModel || 'Generic RTK'} · ${vehicleSettings.gnssMountPosition || 'Cab roof crossbar'}`)}
-                                            {renderReviewRow('GNSS baseline / primary', `${Number(vehicleSettings.gnssBaseline || 0).toFixed(2)} m · ${vehicleSettings.gnssPrimarySide || 'Left / ANT A'}`)}
-                                            {renderReviewRow('Pair-center X/Y/Z', `${Number(vehicleSettings.antennaToRearAxle || 0).toFixed(2)} / ${Number(vehicleSettings.antennaOffset || 0).toFixed(2)} / ${Number(vehicleSettings.antennaHeight || 0).toFixed(2)}`, 'm')}
+                                            {renderReviewRow('GNSS baseline / primary', `${formatDistanceMeters(vehicleSettings.gnssBaseline, unitSystem, { digits: 2 })} · ${vehicleSettings.gnssPrimarySide || 'Left / ANT A'}`)}
+                                            {renderReviewRow('Pair-center X/Y/Z', `${getDistanceParts(vehicleSettings.antennaToRearAxle, unitSystem, { digits: 2 }).value} / ${getDistanceParts(vehicleSettings.antennaOffset, unitSystem, { digits: 2 }).value} / ${getDistanceParts(vehicleSettings.antennaHeight, unitSystem, { digits: 2 }).value}`, getLengthInputUnit(unitSystem))}
                                             {renderReviewRow('GNSS H/R/P offset', `${Number(vehicleSettings.gnssHeadingOffset || 0).toFixed(1)} / ${Number(vehicleSettings.gnssRollOffset || 0).toFixed(1)} / ${Number(vehicleSettings.gnssPitchOffset || 0).toFixed(1)}`, '°')}
-                                            {renderReviewRow('Hitch X/Y/Z', `${Number(vehicleSettings.rearHitch || 0).toFixed(2)} / ${Number(vehicleSettings.hitchOffset || 0).toFixed(2)} / ${Number(vehicleSettings.hitchHeight || 0).toFixed(2)}`, 'm')}
+                                            {renderReviewRow('Hitch X/Y/Z', `${getDistanceParts(vehicleSettings.rearHitch, unitSystem, { digits: 2 }).value} / ${getDistanceParts(vehicleSettings.hitchOffset, unitSystem, { digits: 2 }).value} / ${getDistanceParts(vehicleSettings.hitchHeight, unitSystem, { digits: 2 }).value}`, getLengthInputUnit(unitSystem))}
                                         </div>
                                         <div className={`rounded-2xl border ${t.borderCard} p-4`}>
                                             <div className={`mb-3 text-[10px] font-black uppercase tracking-wide ${t.textSub}`}>Validation</div>
@@ -12524,7 +13003,7 @@ const App = () => {
                                                 </div>
                                             </div>
                                             <div className="flex flex-wrap items-center justify-end gap-2">
-                                                <span className={`rounded-lg border ${t.borderCard} px-3 py-2 text-[10px] font-black ${t.textMain}`}>{implementWidth.toFixed(1)} m work</span>
+                                                <span className={`rounded-lg border ${t.borderCard} px-3 py-2 text-[10px] font-black ${t.textMain}`}>{formatDistanceMeters(implementWidth, unitSystem, { digits: 1 })} work</span>
                                                 <span className={`rounded-lg border ${t.borderCard} px-3 py-2 text-[10px] font-black ${t.textMain}`}>{implementSections} sections</span>
                                                 <span className={`rounded-full px-3 py-1.5 text-[9px] font-black uppercase ${informationReady ? 'bg-green-500/10 text-green-500' : 'bg-orange-500/10 text-orange-500'}`}>
                                                     {informationReady ? 'Complete' : 'Required'}
@@ -12678,7 +13157,7 @@ const App = () => {
                                                 </div>
                                             </div>
                                             <div>
-                                                <ImplementParameterInput field="sections" label="Sections / rows" value={implementSettings.sections} unit="" hint={`${sectionWidth.toFixed(2)} m per section.`} step="1" />
+                                                <ImplementParameterInput field="sections" label="Sections / rows" value={implementSettings.sections} unit="" hint={`${formatDistanceMeters(sectionWidth, unitSystem, { digits: 2 })} per section.`} step="1" />
                                                 <ImplementParameterInput field="rowSpacing" label="Row spacing" value={implementSettings.rowSpacing} hint="Center-to-center row spacing." step="0.001" />
                                                 <ImplementParameterInput field="delayOn" label="Switch-on delay" value={implementSettings.delayOn} unit="s" hint="Advance when entering untreated area." step="0.1" />
                                                 <ImplementParameterInput field="delayOff" label="Switch-off delay" value={implementSettings.delayOff} unit="s" hint="Delay when leaving treated area." step="0.1" />
@@ -12695,7 +13174,7 @@ const App = () => {
                                                 <ImplementParameterInput field="transportWidth" label="Transport width" value={implementSettings.transportWidth} hint="Folded or road width." />
                                                 <ImplementParameterInput field="transportLength" label="Transport length" value={implementSettings.transportLength} hint="Hitch to rear in transport state." />
                                                 <ImplementParameterInput field="weightKg" label="Operating weight" value={implementSettings.weightKg} unit="kg" hint="Loaded operational weight." step="1" />
-                                                <ImplementParameterInput field="capacity" label={implementSettings.type === 'Land Leveling' ? 'Bowl capacity' : 'Tank / hopper capacity'} value={implementSettings.capacity} unit={implementSettings.type === 'Land Leveling' ? 'm³' : 'L'} hint="Nominal usable capacity." step="1" />
+                                                <ImplementParameterInput field="capacity" label={implementSettings.type === 'Land Leveling' ? 'Bowl capacity' : 'Tank / hopper capacity'} value={implementSettings.capacity} unit={implementSettings.type === 'Land Leveling' ? 'm3' : 'L'} hint="Nominal usable capacity." step="1" />
                                             </div>
                                         </div>
                                     </div>
@@ -12718,13 +13197,13 @@ const App = () => {
                                                 </span>
                                             </div>
                                             {renderImplementReviewRow('Type / connection', `${implementTypeLabel} · ${implementSettings.connectionType}`)}
-                                            {renderImplementReviewRow('Working / overall width', `${implementWidth.toFixed(2)} / ${implementOverallWidth.toFixed(2)}`, 'm')}
-                                            {renderImplementReviewRow('Hitch to work / rear', `${Number(implementSettings.hitchToWorkPoint || 0).toFixed(2)} / ${Number(implementSettings.hitchToRear || 0).toFixed(2)}`, 'm')}
-                                            {renderImplementReviewRow('Offset / overlap', `${Number(implementSettings.offset || 0).toFixed(2)} / ${Number(implementSettings.overlap || 0).toFixed(2)}`, 'm')}
-                                            {renderImplementReviewRow('Sections / row spacing', `${implementSections} / ${Number(implementSettings.rowSpacing || 0).toFixed(3)}`, 'm')}
+                                            {renderImplementReviewRow('Working / overall width', `${getDistanceParts(implementWidth, unitSystem, { digits: 2 }).value} / ${getDistanceParts(implementOverallWidth, unitSystem, { digits: 2 }).value}`, getLengthInputUnit(unitSystem))}
+                                            {renderImplementReviewRow('Hitch to work / rear', `${getDistanceParts(implementSettings.hitchToWorkPoint, unitSystem, { digits: 2 }).value} / ${getDistanceParts(implementSettings.hitchToRear, unitSystem, { digits: 2 }).value}`, getLengthInputUnit(unitSystem))}
+                                            {renderImplementReviewRow('Offset / overlap', `${getDistanceParts(implementSettings.offset, unitSystem, { digits: 2 }).value} / ${getDistanceParts(implementSettings.overlap, unitSystem, { digits: 2 }).value}`, getLengthInputUnit(unitSystem))}
+                                            {renderImplementReviewRow('Sections / row spacing', `${implementSections} / ${getDistanceParts(implementSettings.rowSpacing, unitSystem, { digits: 3 }).value}`, getLengthInputUnit(unitSystem))}
                                             {renderImplementReviewRow('Control / timing', `${implementSettings.controlMode} · ${Number(implementSettings.delayOn || 0).toFixed(1)} / ${Number(implementSettings.delayOff || 0).toFixed(1)} s`)}
-                                            {renderImplementReviewRow('Transport W / L', `${Number(implementSettings.transportWidth || 0).toFixed(2)} / ${Number(implementSettings.transportLength || 0).toFixed(2)}`, 'm')}
-                                            {renderImplementReviewRow('Weight / capacity', `${Math.round(Number(implementSettings.weightKg || 0))} kg · ${Number(implementSettings.capacity || 0).toFixed(0)} ${implementSettings.type === 'Land Leveling' ? 'm³' : 'L'}`)}
+                                            {renderImplementReviewRow('Transport W / L', `${getDistanceParts(implementSettings.transportWidth, unitSystem, { digits: 2 }).value} / ${getDistanceParts(implementSettings.transportLength, unitSystem, { digits: 2 }).value}`, getLengthInputUnit(unitSystem))}
+                                            {renderImplementReviewRow('Weight / capacity', `${formatMassKg(implementSettings.weightKg, unitSystem)} · ${implementSettings.type === 'Land Leveling' ? formatCubicMeters(implementSettings.capacity, unitSystem) : formatVolumeL(implementSettings.capacity, unitSystem)}`)}
                                         </div>
                                         <div className={`rounded-2xl border ${t.borderCard} p-4`}>
                                             <div className={`mb-3 text-[10px] font-black uppercase tracking-wide ${t.textSub}`}>Validation</div>
@@ -12758,9 +13237,9 @@ const App = () => {
                 >
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                         <ConfigTile icon={getLineTypeIcon(activeLineRecord?.type || guidanceLine || lineType)} label="Active Line" value={activeLineRecord?.name || getGuidanceModeLabel()} />
-                        <ConfigTile icon={Ruler} label="Implement Width" value={`${implementSettings.width.toFixed(1)} m`} />
-                        <ConfigTile icon={ArrowLeftRight} label="Line Shift" value={`${((lineShiftOffset / PIXELS_PER_METER) * liveGuidanceDisplayFactor) > 0 ? '+' : ''}${((lineShiftOffset / PIXELS_PER_METER) * liveGuidanceDisplayFactor).toFixed(2)} m`} />
-                        <ConfigTile icon={ArrowLeftRight} label="Trim Offset" value={`${((manualOffset / PIXELS_PER_METER * 100) * liveGuidanceDisplayFactor) > 0 ? '+' : ''}${((manualOffset / PIXELS_PER_METER * 100) * liveGuidanceDisplayFactor).toFixed(1)} cm`} />
+                        <ConfigTile icon={Ruler} label="Implement Width" value={formatDistanceMeters(implementSettings.width, unitSystem, { digits: 1 })} />
+                        <ConfigTile icon={ArrowLeftRight} label="Line Shift" value={formatDistanceMeters((lineShiftOffset / PIXELS_PER_METER) * liveGuidanceDisplayFactor, unitSystem, { digits: 2, signed: true })} />
+                        <ConfigTile icon={ArrowLeftRight} label="Trim Offset" value={formatDistanceMeters((manualOffset / PIXELS_PER_METER) * liveGuidanceDisplayFactor, unitSystem, { kind: 'fine', digits: 1, signed: true })} />
                     </div>
                     <button onClick={handleToggleMultiLine} className={`w-full flex items-center justify-between p-4 ${t.bgInput} border ${t.borderCard} rounded-xl text-left`}>
                         <div>
@@ -12995,8 +13474,8 @@ const App = () => {
                         )}
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                             <SettingSelect label="Default turn side" value={turnConfig.direction} onChange={(value) => handleUTurnSettingChange('direction', value)} options={['Auto', 'Left', 'Right']} />
-                            {turnConfig.mode === 'AUTO' && <SettingInput theme={t} label="Start before boundary (m)" value={turnConfig.startDistanceM} type="number" onChange={(e) => handleUTurnSettingChange('startDistanceM', Math.min(100, Math.max(4, parseFloat(e.target.value) || 4)))} />}
-                            <SettingInput theme={t} label="Turn speed (km/h)" value={turnConfig.turnSpeedKmh} type="number" onChange={(e) => handleUTurnSettingChange('turnSpeedKmh', Math.min(10, Math.max(1, parseFloat(e.target.value) || 1)))} />
+                            {turnConfig.mode === 'AUTO' && <SettingInput theme={t} label={`Start before boundary (${getLengthInputUnit(unitSystem)})`} value={toLengthDisplayValue(turnConfig.startDistanceM, unitSystem).toFixed(1)} type="number" onChange={(e) => handleUTurnSettingChange('startDistanceM', Math.min(100, Math.max(4, fromLengthDisplayValue(e.target.value, unitSystem))))} />}
+                            <SettingInput theme={t} label={`Turn speed (${getSpeedInputUnit(unitSystem)})`} value={toSpeedDisplayValue(turnConfig.turnSpeedKmh, unitSystem).toFixed(1)} type="number" onChange={(e) => handleUTurnSettingChange('turnSpeedKmh', Math.min(10, Math.max(1, fromSpeedDisplayValue(e.target.value, unitSystem))))} />
                         </div>
                         <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
                             {turnConfig.mode === 'ONE_KEY' && renderCompactToggle({ label: 'Boundary check', detail: 'Require a closed boundary for Turn once.', settingKey: 'requireBoundary', icon: MapPin })}
@@ -13136,7 +13615,7 @@ const App = () => {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
                         <SettingsMetric label="Mode" value={featureSettings.landLeveling ? 'Active' : 'Off'} tone={featureSettings.landLeveling ? 'text-green-500' : 'text-slate-500'} />
                         <SettingsMetric label="Correction" value={featureSettings.mobaTrac ? 'MOBA TRAC' : rtkStatus} />
-                        <SettingsMetric label="Blade Offset" value="0 cm" />
+                        <SettingsMetric label="Blade Offset" value={formatDistanceMeters(0, unitSystem, { kind: 'fine', digits: 1 })} />
                     </div>
                     <div className="grid grid-cols-1 gap-3">
                         <FeatureToggle label="Land Leveling Mode" detail="GNSS slope guidance for leveling workflows" featureKey="landLeveling" icon={Globe} />
@@ -13145,7 +13624,7 @@ const App = () => {
                     <div className={`${t.bgInput} border ${t.borderCard} rounded-xl p-4 grid grid-cols-1 md:grid-cols-3 gap-4 mt-4`}>
                         <SettingInput theme={t} label="Target Slope (%)" value="0.20" type="number" onChange={() => {}} />
                         <SettingInput theme={t} label="Cross Slope (%)" value="0.00" type="number" onChange={() => {}} />
-                        <SettingInput theme={t} label="Blade Offset (cm)" value="0" type="number" onChange={() => {}} />
+                        <SettingInput theme={t} label={`Blade Offset (${getDistanceParts(0, unitSystem, { kind: 'fine' }).unit})`} value="0" type="number" onChange={() => {}} />
                     </div>
                 </SettingsSection>
             </div>
@@ -13203,7 +13682,7 @@ const App = () => {
                 id: 'vehicle',
                 title: 'Vehicle',
                 value: activeVehicleSettings.type,
-                detail: `${activeVehicleSettings.wheelbase} m wheelbase / ${activeVehicleSettings.steeringType || 'Front axle'}`,
+                detail: `${formatDistanceMeters(activeVehicleSettings.wheelbase, unitSystem, { digits: 2 })} wheelbase / ${activeVehicleSettings.steeringType || 'Front axle'}`,
                 icon: Tractor,
                 ready: Boolean(activeVehicleSettings.type && Number(activeVehicleSettings.wheelbase) > 0),
                 status: 'Ready'
@@ -13212,7 +13691,7 @@ const App = () => {
                 id: 'implement',
                 title: 'Implement',
                 value: activeImplementSettings.name,
-                detail: `${Number(activeImplementSettings.width || 0).toFixed(1)} m working width / ${activeImplementSettings.sections || 1} sections`,
+                detail: `${formatDistanceMeters(activeImplementSettings.width, unitSystem, { digits: 1 })} working width / ${activeImplementSettings.sections || 1} sections`,
                 icon: Ruler,
                 ready: Boolean(activeImplementSettings.name && Number(activeImplementSettings.width) > 0),
                 status: Number(activeImplementSettings.width) > 0 ? 'Ready' : 'Check'
@@ -13281,7 +13760,7 @@ const App = () => {
                           <span className="min-w-0">
                               <span className={`block text-base font-black leading-5 ${t.textMain}`}>Run overview</span>
                               <span className={`block truncate text-[11px] leading-4 ${t.textSub}`}>
-                                  {activeFieldRecord?.name || 'No field'} / {activeLineRecord?.name || getGuidanceModeLabel()} / {Number(activeImplementSettings.width || 0).toFixed(1)} m working width
+                                  {activeFieldRecord?.name || 'No field'} / {activeLineRecord?.name || getGuidanceModeLabel()} / {formatDistanceMeters(activeImplementSettings.width, unitSystem, { digits: 1 })} working width
                               </span>
                           </span>
                       </div>
@@ -13351,7 +13830,7 @@ const App = () => {
                               <span className={`font-black ${activeFieldRecord ? (theme === 'dark' ? 'text-green-400' : 'text-green-700') : (theme === 'dark' ? 'text-amber-300' : 'text-amber-700')}`}>
                                   {activeFieldRecord ? 'Loaded' : 'Select'}
                               </span>
-                              <span className={`truncate ${t.textSub}`}>/ {activeFieldRecord ? `${activeFieldAreaHa.toFixed(2)} ha` : 'Choose from Field'}</span>
+                              <span className={`truncate ${t.textSub}`}>/ {activeFieldRecord ? formatAreaHa(activeFieldAreaHa, unitSystem) : 'Choose from Field'}</span>
                           </span>
                       </div>
 
@@ -13464,7 +13943,7 @@ const App = () => {
                     checks: ['ANT A and ANT B are mounted level', 'Hard, flat surface with RTK FIX', 'Cab has stopped rocking before capture'],
                     metrics: [
                         ['Layout', '2 antennas'],
-                        ['Baseline', `${Number(activeVehicleSettings.gnssBaseline || 1.2).toFixed(2)} m`],
+                        ['Baseline', formatDistanceMeters(activeVehicleSettings.gnssBaseline || 1.2, unitSystem, { digits: 2 })],
                         ['Roll zero', `${Number(activeVehicleSettings.gnssRollOffset || 0).toFixed(1)}°`],
                         ['Heading', `${Number(activeVehicleSettings.gnssHeadingOffset || 0).toFixed(1)}°`]
                     ],
@@ -13479,8 +13958,8 @@ const App = () => {
                     note: 'Pass only when mean error, peak error and oscillation stay inside the steering target.',
                     checks: ['Straight AB line selected', 'RTK remains FIX through both passes', 'Use the same speed in both directions'],
                     metrics: [
-                        ['Mean error', `${Math.abs(crossTrackError).toFixed(1)} cm`],
-                        ['Peak target', '< 5 cm'],
+                        ['Mean error', formatDistanceMeters(Math.abs(crossTrackError) / 100, unitSystem, { kind: 'fine', digits: 1 })],
+                        ['Peak target', `< ${formatDistanceMeters(0.05, unitSystem, { kind: 'fine', digits: 1 })}`],
                         ['Oscillation', 'Low'],
                         ['Pass result', 'Ready']
                     ],
@@ -13515,8 +13994,8 @@ const App = () => {
                     note: 'The system converts the observation into the correct signed offset; the operator does not guess + or −.',
                     checks: ['Implement is lowered for both passes', 'Measure at the working point, not the frame edge', 'Repeat once after applying the correction'],
                     metrics: [
-                        ['Current offset', `${Number(activeImplementSettings.offset || 0) >= 0 ? '+' : ''}${Number(activeImplementSettings.offset || 0).toFixed(2)} m`],
-                        ['Working width', `${Number(activeImplementSettings.width || 0).toFixed(2)} m`],
+                        ['Current offset', formatDistanceMeters(activeImplementSettings.offset, unitSystem, { digits: 2, signed: true })],
+                        ['Working width', formatDistanceMeters(activeImplementSettings.width, unitSystem, { digits: 2 })],
                         ['Observation', 'Gap / overlap'],
                         ['Correction', 'Calculated']
                     ],
@@ -13538,7 +14017,7 @@ const App = () => {
                         ['Control', implementSupportsSections ? `${activeImplementSettings.sections || 1} sections` : 'Work state'],
                         ['ON delay', implementSupportsSections ? `${Number(activeImplementSettings.delayOn || 0).toFixed(1)} s` : 'Not required'],
                         ['OFF delay', implementSupportsSections ? `${Number(activeImplementSettings.delayOff || 0).toFixed(1)} s` : 'Not required'],
-                        ['Test speed', '5.0 km/h']
+                        ['Test speed', formatSpeedKmh(5, unitSystem)]
                     ],
                     action: implementSupportsSections ? 'Save timing & continue' : 'Confirm response & continue'
                 },
@@ -13551,7 +14030,7 @@ const App = () => {
                     note: 'A valid result is stored for this exact vehicle and implement pair.',
                     checks: ['Vehicle calibration is still valid', 'Correct implement is active and lowered', 'No unexpected gaps or double coverage'],
                     metrics: [
-                        ['Pass spacing', `${Number(activeImplementSettings.width || 0).toFixed(2)} m`],
+                        ['Pass spacing', formatDistanceMeters(activeImplementSettings.width, unitSystem, { digits: 2 })],
                         ['Sections tested', implementSupportsSections ? `${activeImplementSettings.sections || 1}` : 'N/A'],
                         ['Transition', 'Ready'],
                         ['Pair result', 'Ready']
@@ -13826,7 +14305,7 @@ const App = () => {
                     <div className={`grid grid-cols-3 gap-px border-b ${t.borderCard} ${theme === 'dark' ? 'bg-slate-800' : 'bg-gray-200'}`}>
                         {[
                             ['Equipment pair', `${activeVehicleSettings.type} + ${activeImplementSettings.name}`, Tractor, true],
-                            ['Machine state', Math.abs(speed) < 0.1 ? 'Stopped / safe to start' : `${Math.abs(speed).toFixed(1)} km/h / stop first`, AlertCircle, Math.abs(speed) < 0.1],
+                            ['Machine state', Math.abs(speed) < 0.1 ? 'Stopped / safe to start' : `${formatSpeedKmh(Math.abs(speed), unitSystem)} / stop first`, AlertCircle, Math.abs(speed) < 0.1],
                             ['Position quality', `${rtkStatus} / ${currentGnssTelemetry.roverUsedSats || satelliteCount} sats`, LocateFixed, rtkGuidanceReady]
                         ].map(([label, value, Icon, ready]) => (
                             <div key={label} className={`flex h-[52px] min-w-0 items-center gap-2.5 px-3 ${theme === 'dark' ? 'bg-slate-900/75' : 'bg-gray-50'}`}>
@@ -13979,12 +14458,12 @@ const App = () => {
             const rtkSummaryMetrics = [
                 {
                     label: 'H accuracy',
-                    value: formatOptionalRtkMetric(currentGnssTelemetry.horizontalAccuracyCm, 1, ' cm'),
+                    value: currentGnssTelemetry.horizontalAccuracyCm === null ? '--' : formatDistanceMeters(currentGnssTelemetry.horizontalAccuracyCm / 100, unitSystem, { kind: 'fine', digits: 1 }),
                     tone: currentGnssTelemetry.horizontalAccuracyCm !== null && currentGnssTelemetry.horizontalAccuracyCm <= 5 ? 'text-green-500' : 'text-yellow-500'
                 },
                 {
                     label: 'V accuracy',
-                    value: formatOptionalRtkMetric(currentGnssTelemetry.verticalAccuracyCm, 1, ' cm'),
+                    value: currentGnssTelemetry.verticalAccuracyCm === null ? '--' : formatDistanceMeters(currentGnssTelemetry.verticalAccuracyCm / 100, unitSystem, { kind: 'fine', digits: 1 }),
                     tone: currentGnssTelemetry.verticalAccuracyCm !== null && currentGnssTelemetry.verticalAccuracyCm <= 8 ? 'text-green-500' : 'text-yellow-500'
                 },
                 { label: 'Correction age', value: formatOptionalRtkMetric(currentGnssTelemetry.correctionAgeSec, 1, ' s') },
@@ -14003,7 +14482,7 @@ const App = () => {
                     value: formatOptionalRtkMetric(currentRtkTelemetry.pdop, 1),
                     tone: currentRtkTelemetry.pdop !== null && currentRtkTelemetry.pdop <= 2 ? 'text-green-500' : 'text-yellow-500'
                 },
-                { label: 'Baseline', value: formatOptionalRtkMetric(currentGnssTelemetry.baselineKm, 1, ' km') },
+                { label: 'Baseline', value: currentGnssTelemetry.baselineKm === null ? '--' : formatDistanceMeters(currentGnssTelemetry.baselineKm * 1000, unitSystem, { kind: 'long', digits: 1 }) },
                 {
                     label: 'Antenna',
                     value: currentGnssTelemetry.antenna === 'Rover roof' ? 'Roof' : currentGnssTelemetry.antenna
@@ -14113,7 +14592,7 @@ const App = () => {
                     };
             const BaseSurveyStatusIcon = baseSurveyVisual.icon;
             const baseControlClass = `h-11 w-full rounded-lg border px-3 text-sm font-semibold tabular-nums outline-none transition-colors ${t.bgInput} ${t.borderCard} ${t.textMain} focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 disabled:cursor-not-allowed disabled:opacity-45`;
-            const renderBaseInput = ({ field, label, value, type = 'text', disabled = false, min, max, step }) => (
+            const renderBaseInput = ({ field, label, value, type = 'text', disabled = false, min, max, step, onValueChange }) => (
                 <label htmlFor={`rtk-base-${field}`} className="flex min-w-0 flex-col gap-1.5">
                     <span className={`text-[10px] font-bold leading-3 ${t.textSub}`}>{label}</span>
                     <input
@@ -14124,7 +14603,7 @@ const App = () => {
                         min={min}
                         max={max}
                         step={step}
-                        onChange={(event) => handleRtkSettingChange(field, event.target.value)}
+                        onChange={(event) => onValueChange ? onValueChange(event.target.value) : handleRtkSettingChange(field, event.target.value)}
                         className={baseControlClass}
                     />
                 </label>
@@ -14357,11 +14836,11 @@ const App = () => {
                                 <div className="mt-2.5 grid grid-cols-1 gap-2.5 sm:grid-cols-3">
                                     {renderBaseInput({ field: 'baseLatitude', label: 'Latitude', value: rtkConfig.baseLatitude, type: 'number', min: -90, max: 90, step: 'any' })}
                                     {renderBaseInput({ field: 'baseLongitude', label: 'Longitude', value: rtkConfig.baseLongitude, type: 'number', min: -180, max: 180, step: 'any' })}
-                                    {renderBaseInput({ field: 'baseHeight', label: 'Height (m)', value: rtkConfig.baseHeight, type: 'number', min: -500, max: 10000, step: 0.1 })}
+                                    {renderBaseInput({ field: 'baseHeight', label: `Height (${getLengthInputUnit(unitSystem)})`, value: toLengthDisplayValue(rtkConfig.baseHeight, unitSystem).toFixed(1), type: 'number', min: usesEnglishDistance(unitSystem) ? -1640 : -500, max: usesEnglishDistance(unitSystem) ? 32808 : 10000, step: 0.1, onValueChange: value => handleRtkSettingChange('baseHeight', fromLengthDisplayValue(value, unitSystem)) })}
                                 </div>
                                 <div className="mt-2.5 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                                     {renderBaseInput({ field: 'surveyDuration', label: 'Survey duration (s)', value: rtkConfig.surveyDuration, type: 'number', disabled: rtkConfig.baseMode !== 'Survey In', min: 30, step: 30 })}
-                                    {renderBaseInput({ field: 'surveyAccuracy', label: 'Target accuracy (cm)', value: rtkConfig.surveyAccuracy, type: 'number', disabled: rtkConfig.baseMode !== 'Survey In', min: 0.1, max: 10, step: 0.1 })}
+                                    {renderBaseInput({ field: 'surveyAccuracy', label: `Target accuracy (${getDistanceParts(0, unitSystem, { kind: 'fine' }).unit})`, value: getDistanceParts(Number(rtkConfig.surveyAccuracy || 0) / 100, unitSystem, { kind: 'fine', digits: 2 }).value, type: 'number', disabled: rtkConfig.baseMode !== 'Survey In', min: 0.01, max: usesEnglishDistance(unitSystem) ? 4 : 10, step: 0.1, onValueChange: value => handleRtkSettingChange('surveyAccuracy', usesEnglishDistance(unitSystem) ? Number(value) * 2.54 : Number(value)) })}
                                 </div>
                             </fieldset>
 
@@ -14499,10 +14978,10 @@ const App = () => {
                           </div>
                       </div>
                       <div className={`ui-action-bar h-16 min-h-16 shrink-0 px-3 py-2 border-t ${t.borderCard} flex items-center gap-3 ${['vehicle', 'implement'].includes(settingsTab) ? 'justify-between' : 'justify-end'} ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-white/70'}`}>
-                          {!['wifi', 'overview', 'calibration', 'uturn'].includes(settingsTab) && (
+                          {!['wifi', 'overview', 'calibration', 'uturn', 'regional', 'system'].includes(settingsTab) && (
                               <button className={`px-5 lg:px-7 py-2 lg:py-3 rounded-lg border ${t.borderCard} ${t.textMain} hover:brightness-95 text-sm lg:text-base`} onClick={closeSettingsPanel}>Cancel</button>
                           )}
-                          {['overview', 'calibration'].includes(settingsTab) ? (
+                          {['overview', 'calibration', 'system'].includes(settingsTab) ? (
                               <button
                                   className="h-11 rounded-lg bg-blue-600 px-7 text-sm font-black text-white shadow-md shadow-blue-900/15 hover:bg-blue-500"
                                   onClick={closeSettingsPanel}
@@ -14522,6 +15001,13 @@ const App = () => {
                                   onClick={closeSettingsPanel}
                               >
                                   Done
+                              </button>
+                          ) : settingsTab === 'regional' ? (
+                              <button
+                                  className="h-11 rounded-lg bg-blue-600 px-7 text-sm font-black text-white shadow-md shadow-blue-900/15 hover:bg-blue-500"
+                                  onClick={applyRegionalSettings}
+                              >
+                                  Apply Regional Settings
                               </button>
                           ) : settingsTab === 'vehicle' ? (
                               <div className="flex items-center gap-3">
@@ -14826,7 +15312,7 @@ const renderLinesPanel = () => {
                     <div className="ui-badge flex flex-wrap items-center gap-1.5">
                         <span className={`px-2.5 py-1 rounded-lg border ${loadedLine ? 'border-green-500/35 bg-green-500/10 text-green-500' : `${t.borderCard} ${t.textSub}`}`}>{loadedLine ? 'LOADED' : 'NO ACTIVE'}</span>
                         <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${surfaceBg} ${t.textMain}`}>{loadedLine ? (loadedLine.type || 'LINE').replace(/_/g, ' ') : '--'}</span>
-                        <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${surfaceBg} ${t.textMain}`}>{loadedLineLength !== null ? `${loadedLineLength.toFixed(1)} m` : '--'}</span>
+                        <span className={`px-2.5 py-1 rounded-lg border ${t.borderCard} ${surfaceBg} ${t.textMain}`}>{loadedLineLength !== null ? formatDistanceMeters(loadedLineLength, unitSystem, { digits: 1 }) : '--'}</span>
                     </div>
                 </div>
             </div>
@@ -14927,8 +15413,8 @@ const renderLinesPanel = () => {
                                                         {archived && <span className="ui-badge shrink-0 px-1.5 py-0.5 rounded-md bg-yellow-500/15 text-yellow-500">Archived</span>}
                                                     </div>
                                                     <div className={`ui-caption mt-0.5 ${t.textSub}`}>
-                                                        {(line.type || 'LINE').replace(/_/g, ' ')} / {lengthMeters !== null ? `${lengthMeters.toFixed(1)} m` : '--'}
-                                                        {Math.abs(Number(line.translationOffsetM) || 0) >= 0.005 ? ` / Shift ${getLineShiftSide(line)} ${Math.abs(Number(line.translationOffsetM) || 0).toFixed(2)} m` : ''}
+                                                        {(line.type || 'LINE').replace(/_/g, ' ')} / {lengthMeters !== null ? formatDistanceMeters(lengthMeters, unitSystem, { digits: 1 }) : '--'}
+                                                        {Math.abs(Number(line.translationOffsetM) || 0) >= 0.005 ? ` / Shift ${getLineShiftSide(line)} ${formatDistanceMeters(Math.abs(Number(line.translationOffsetM) || 0), unitSystem, { digits: 2 })}` : ''}
                                                     </div>
                                                 </div>
                                             </div>
@@ -14968,7 +15454,7 @@ const renderLinesPanel = () => {
                                         <h3 className={`ui-detail-title ${t.textMain} truncate`}>{selectedLine.name}</h3>
                                         <div className={`ui-caption mt-0.5 ${t.textSub}`}>
                                             {(selectedLine.type || 'LINE').replace(/_/g, ' ')} / {selectedLine.isMulti ? 'Parallel lines enabled' : 'Single path'}
-                                            {Math.abs(Number(selectedLine.translationOffsetM) || 0) >= 0.005 ? ` / Shift ${getLineShiftSide(selectedLine)} ${Math.abs(Number(selectedLine.translationOffsetM) || 0).toFixed(2)} m` : ''}
+                                            {Math.abs(Number(selectedLine.translationOffsetM) || 0) >= 0.005 ? ` / Shift ${getLineShiftSide(selectedLine)} ${formatDistanceMeters(Math.abs(Number(selectedLine.translationOffsetM) || 0), unitSystem, { digits: 2 })}` : ''}
                                         </div>
                                     </div>
                                     <div className="shrink-0 flex items-center gap-2">
@@ -14982,7 +15468,7 @@ const renderLinesPanel = () => {
                                         {renderLinePreview(selectedLine)}
                                         <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
                                             {[
-                                                { label: 'Length', value: activeLineLength !== null ? `${activeLineLength.toFixed(1)} m` : '--' },
+                                                { label: 'Length', value: activeLineLength !== null ? formatDistanceMeters(activeLineLength, unitSystem, { digits: 1 }) : '--' },
                                                 { label: 'Created', value: selectedLineCreated?.date || 'Not recorded', sub: selectedLineCreated?.exact ? selectedLineCreated.time : null },
                                                 { label: 'Location', value: selectedLineLocation },
                                                 { label: 'Quality', value: selectedLine.archived ? 'Archived' : (selectedLine.quality || 'Good') }
@@ -15010,15 +15496,15 @@ const renderLinesPanel = () => {
                                         <div className={`mt-3 rounded-xl border border-blue-500/25 ${theme === 'dark' ? 'bg-blue-950/25' : 'bg-blue-50'} p-3`}>
                                             <div className={`ui-label ${t.textSub}`}>Pass spacing</div>
                                             <div className="mt-1 flex items-end justify-between gap-3">
-                                                <div className="ui-metric text-blue-600">{passSpacingMeters.toFixed(2)} <span className="ui-caption">m</span></div>
+                                                <div className="ui-metric text-blue-600">{getDistanceParts(passSpacingMeters, unitSystem, { digits: 2 }).value} <span className="ui-caption">{getLengthInputUnit(unitSystem)}</span></div>
                                                 <div className={`ui-meta text-right ${t.textSub}`}>Saved track spacing</div>
                                             </div>
                                         </div>
 
                                         <div className="mt-2 grid grid-cols-2 gap-2">
                                             {[
-                                                ['Current width', `${workingWidthMeters.toFixed(2)} m`],
-                                                ['Current overlap', `${overlapMeters.toFixed(2)} m`],
+                                                ['Current width', formatDistanceMeters(workingWidthMeters, unitSystem, { digits: 2 })],
+                                                ['Current overlap', formatDistanceMeters(overlapMeters, unitSystem, { digits: 2 })],
                                                 ['Heading', selectedLineHeadingLabel],
                                                 ['Pass layout', selectedLine.isMulti ? 'Parallel' : 'Single']
                                             ].map(([label, value]) => (
@@ -15717,8 +16203,8 @@ const renderLinesPanel = () => {
                                               <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
                                                   {[
                                                       ['Points', selectedPoints.length],
-                                                      ['Perimeter', selectedPerimeter > 0 ? `${selectedPerimeter.toFixed(1)} m` : '--'],
-                                                      ['Area', selectedArea > 0 ? `${selectedArea.toFixed(2)} ha` : '--'],
+                                                      ['Perimeter', selectedPerimeter > 0 ? formatDistanceMeters(selectedPerimeter, unitSystem, { digits: 1 }) : '--'],
+                                                      ['Area', selectedArea > 0 ? formatAreaHa(selectedArea, unitSystem) : '--'],
                                                       ['Status', selectedIndex === activeIndex ? 'Active' : 'Saved']
                                                   ].map(([label, value]) => (
                                                       <div key={label} className={`${mutedPanelBg} border ${t.borderCard} rounded-lg p-2.5 min-w-0`}>
@@ -16162,7 +16648,7 @@ const renderLinesPanel = () => {
                                           <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-black ${boundaryCount > 0 ? 'bg-orange-500 text-white' : `${mutedPanelBg} ${t.textSub} border ${t.borderCard}`}`}>2</div>
                                           <div className="min-w-0">
                                               <div className={`ui-list-title ${t.textMain}`}>Field boundary</div>
-                                              <div className={`ui-caption ${t.textSub}`}>{boundaryCount > 0 ? `${boundaryCount} loop saved / ${estimatedArea} ha estimated` : 'You can add this now or later.'}</div>
+                                              <div className={`ui-caption ${t.textSub}`}>{boundaryCount > 0 ? `${boundaryCount} loop saved / ${formatAreaHa(estimatedArea, unitSystem, 1)} estimated` : 'You can add this now or later.'}</div>
                                           </div>
                                       </div>
                                       <span className={`ui-badge shrink-0 ${boundaryCount > 0 ? 'text-orange-500' : t.textSub}`}>{boundaryCount > 0 ? 'Captured' : 'Optional'}</span>
@@ -16210,7 +16696,7 @@ const renderLinesPanel = () => {
                               </div>
                               <div className="shrink-0 pt-3 grid grid-cols-3 gap-2">
                                   {[
-                                      ['Area', boundaryCount > 0 ? `${estimatedArea} ha` : '--'],
+                                      ['Area', boundaryCount > 0 ? formatAreaHa(estimatedArea, unitSystem, 1) : '--'],
                                       ['Boundaries', boundaryCount],
                                       ['Status', hasFieldName ? 'Ready' : 'Draft']
                                   ].map(([label, value]) => (
@@ -16306,7 +16792,9 @@ const renderLinesPanel = () => {
           const activeLine = lines.find(line => line.id === activeLineId) || lines[0] || null;
           const activeTask = tasks.find(task => task.id === activeTaskId) || tasks.find(task => task.status !== 'Done') || tasks[0] || null;
           const implementLabel = cleanProfileLabel(implementSettings.name, activeImplementProfile.label);
-          const fieldArea = activeField.area || '--';
+          const fieldArea = activeField.area
+            ? formatAreaHa(parseFloat(String(activeField.area).replace(/[^\d.]/g, '')) || 0, unitSystem)
+            : '--';
           const fieldSetupReady = Boolean(activeBoundary || activeLine);
 
           const openImplementSetup = () => {
@@ -16474,8 +16962,8 @@ const renderLinesPanel = () => {
                                   <div className="min-w-0">
                                       <div className="grid grid-cols-2 gap-2">
                                           {[
-                                              ['Working width', `${Number(implementSettings.width || 0).toFixed(3)} m`],
-                                              ['Skip / overlap', `${Number(implementSettings.overlap || 0).toFixed(3)} m`]
+                                              ['Working width', formatDistanceMeters(implementSettings.width, unitSystem, { digits: 3 })],
+                                              ['Skip / overlap', formatDistanceMeters(implementSettings.overlap, unitSystem, { digits: 3 })]
                                           ].map(([label, value]) => (
                                               <div key={label} className="min-w-0">
                                                   <div className={`ui-meta mb-1 truncate ${t.textSub}`}>{label}</div>
@@ -16596,7 +17084,9 @@ const renderLinesPanel = () => {
                                                       >
                                                           {f.name}
                                                       </div>
-                                                      <div className={`ui-caption mt-0.5 ${t.textSub}`}>{f.area || '--'} / {f.lastUsed || '--'}</div>
+                                                      <div className={`ui-caption mt-0.5 ${t.textSub}`}>
+                                                          {f.area ? formatAreaHa(parseFloat(String(f.area).replace(/[^\d.]/g, '')) || 0, unitSystem) : '--'} / {f.lastUsed || '--'}
+                                                      </div>
                                                   </div>
                                               </div>
                                               {loaded ? <CheckCircle2 className="shrink-0 w-5 h-5 text-green-500" /> : selected ? <Check className="shrink-0 w-5 h-5 text-blue-500" /> : null}
@@ -16750,17 +17240,15 @@ const renderLinesPanel = () => {
                         onClick={() => openFieldAssetPanel('tasks')}
                     />
                     <div className={`h-px w-1/2 ${t.divider}`}></div>
-                    <RailButton theme={t} icon={Settings} label="System" active={settingsOpen && settingsTab !== 'wifi'} onClick={openSystemPanel} />
+                    <RailButton theme={t} icon={Settings} label="System" active={settingsOpen} onClick={openSystemPanel} />
                 </nav>
-                <div className="mb-1 flex w-full shrink-0 flex-col items-center">
+                <div className="flex w-full shrink-0 flex-col items-center">
                     <div className={`h-px w-1/2 ${t.divider}`} />
                     <button
                         type="button"
                         onClick={openWifiPanel}
                         className={`group relative flex h-14 min-h-14 w-full flex-col items-center justify-center gap-1 rounded-lg text-center transition-all duration-150 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 ${
-                            settingsOpen && settingsTab === 'wifi'
-                                ? 'bg-blue-600 text-white shadow-md shadow-blue-900/20'
-                                : wifiConnectionAttempt.status === 'connecting'
+                            wifiConnectionAttempt.status === 'connecting'
                                     ? `${theme === 'dark' ? 'bg-amber-500/10 text-amber-400' : 'bg-amber-50 text-amber-600'}`
                                     : wifiConnectionAttempt.status === 'failed'
                                         ? `${theme === 'dark' ? 'bg-red-500/10 text-red-400' : 'bg-red-50 text-red-600'}`
@@ -16777,9 +17265,7 @@ const renderLinesPanel = () => {
                     >
                         <span className="relative flex h-5 w-5 items-center justify-center lg:h-6 lg:w-6">
                             <span className={`flex h-full w-full items-center justify-center ${
-                            settingsOpen && settingsTab === 'wifi'
-                                ? 'text-white'
-                                : wifiConnectionAttempt.status === 'connecting'
+                            wifiConnectionAttempt.status === 'connecting'
                                     ? 'text-amber-500'
                                     : wifiConnectionAttempt.status === 'failed' ? 'text-red-500' : 'group-hover:text-blue-500'
                             }`}>
@@ -16789,11 +17275,7 @@ const renderLinesPanel = () => {
                                     ? <AlertCircle className="h-5 w-5" />
                                     : <WifiGlyph className="h-full w-full" />}
                             </span>
-                            <span className={`absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 ${
-                                settingsOpen && settingsTab === 'wifi'
-                                    ? 'border-blue-600'
-                                    : theme === 'dark' ? 'border-slate-950' : 'border-white'
-                            } ${
+                            <span className={`absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 ${theme === 'dark' ? 'border-slate-950' : 'border-white'} ${
                                 wifiConnectionAttempt.status === 'connecting'
                                     ? 'animate-pulse bg-amber-300'
                                     : wifiConnectionAttempt.status === 'failed'
@@ -16801,16 +17283,15 @@ const renderLinesPanel = () => {
                                     : wifiSettings?.status === 'Connected' ? 'bg-emerald-400' : 'bg-slate-400'
                             }`} />
                         </span>
-                        <span className={`text-[9px] font-semibold lg:text-[10px] ${
-                            settingsOpen && settingsTab === 'wifi' ? 'text-white' : t.textMain
-                        }`}>Wi-Fi</span>
+                        <span className={`text-[9px] font-semibold lg:text-[10px] ${t.textMain}`}>Wi-Fi</span>
                     </button>
                     <div className={`h-px w-1/2 ${t.divider}`} />
-                    <div
-                        role="status"
-                        title="Local time"
+                    <button
+                        type="button"
+                        onClick={() => { openSystemPanel(); setSettingsTab('regional'); }}
+                        title="Open region and time settings"
                         aria-label={`Local time ${currentTime}`}
-                        className={`flex h-14 min-h-14 w-full flex-col items-center justify-center gap-1 rounded-lg ${t.textDim}`}
+                        className={`group flex h-14 min-h-14 w-full flex-col items-center justify-center gap-1 rounded-lg transition-colors active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 ${t.textDim} ${theme === 'dark' ? 'hover:bg-slate-800/45' : 'hover:bg-slate-100/70'}`}
                     >
                         <Clock className="h-5 w-5 lg:h-6 lg:w-6" aria-hidden="true" />
                         <time
@@ -16820,7 +17301,18 @@ const renderLinesPanel = () => {
                         >
                             {currentTime}
                         </time>
-                    </div>
+                    </button>
+                    <div className={`h-px w-full ${t.divider}`} />
+                    <button
+                        type="button"
+                        onClick={() => setSystemDialog('power')}
+                        title="Restart or shut down device"
+                        aria-label="Open device power menu"
+                        className={`group flex h-[88px] min-h-[88px] w-full flex-col items-center justify-center gap-1 text-red-500 transition-colors active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/50 ${systemDialog ? 'bg-red-500/12' : theme === 'dark' ? 'hover:bg-red-500/10' : 'hover:bg-red-50'}`}
+                    >
+                        <Power className="h-5 w-5 lg:h-6 lg:w-6" aria-hidden="true" />
+                        <span className="text-[9px] font-bold lg:text-[10px]">Power</span>
+                    </button>
                 </div>
             </aside>
 
@@ -17134,7 +17626,7 @@ const renderLinesPanel = () => {
                         <div className="min-w-0 flex-1 overflow-hidden">
                             <div className={`flex items-center gap-1.5 text-[10px] ${t.textSub} uppercase tracking-[0.06em] font-bold leading-none`}>
                                 <Layers className="w-3 h-3 shrink-0" />
-                                <span className="min-w-0 flex-1 truncate">Run / {activeTaskRecord?.name || 'No Task'} / {Number(implementSettings.width || 0).toFixed(1)} m</span>
+                                <span className="min-w-0 flex-1 truncate">Run / {activeTaskRecord?.name || 'No Task'} / {formatDistanceMeters(implementSettings.width, unitSystem, { digits: 1 })}</span>
                             </div>
                             <div className="mt-1 min-w-0 overflow-hidden flex items-center gap-1.5 text-sm leading-none">
                                 <span className={`min-w-0 max-w-[42%] ${t.textMain} font-bold truncate`}>{activeFieldRecord?.name || 'No Field Loaded'}</span>
@@ -17162,7 +17654,7 @@ const renderLinesPanel = () => {
                         aria-live="polite"
                         aria-label={uTurnDistanceToTriggerM == null
                             ? 'Auto U-turn armed, finding a validated headland trigger'
-                            : `Auto U-turn armed, ${uTurnDistanceToTriggerM.toFixed(1)} meters to turn`}
+                            : `Auto U-turn armed, ${formatDistanceMeters(uTurnDistanceToTriggerM, unitSystem, { digits: 1 })} to turn`}
                         style={{ maxWidth: 'calc(100% - 24px)' }}
                         className="absolute bottom-[100px] left-3 xl:left-4 z-[42] w-[248px] overflow-hidden rounded-xl border border-blue-400/60 bg-slate-950 px-3 py-2 text-white shadow-2xl"
                     >
@@ -17173,7 +17665,7 @@ const renderLinesPanel = () => {
                             <span className="min-w-0 flex-1">
                                 <span className="block text-[10px] font-black uppercase tracking-[0.06em] text-blue-300">AUTO U-TURN · ARMED</span>
                                 <span className="mt-0.5 block truncate text-[11px] font-black tabular-nums text-white">
-                                    {uTurnDistanceToTriggerM == null ? 'Finding headland' : `${uTurnDistanceToTriggerM.toFixed(1)} m to turn`}
+                                    {uTurnDistanceToTriggerM == null ? 'Finding headland' : `${formatDistanceMeters(uTurnDistanceToTriggerM, unitSystem, { digits: 1 })} to turn`}
                                 </span>
                             </span>
                         </div>
@@ -17247,19 +17739,19 @@ const renderLinesPanel = () => {
                         <div className="grid grid-cols-3 h-full items-center text-center">
                             <button
                                 type="button"
-                                aria-label={`Productivity summary: ${workedArea.toFixed(2)} hectares done`}
+                                aria-label={`Productivity summary: ${formatAreaHa(workedArea, unitSystem)} done`}
                                 onClick={() => { setProductivityOpen(prev => !prev); setRtkQualityOpen(false); setEventHistoryOpen(false); }}
                                 disabled={isRecordingBoundary}
                                 className="min-w-0 h-12 flex flex-col items-center justify-center transition-colors hover:bg-blue-500/5 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 <div className={`text-[9px] uppercase font-bold tracking-[0.06em] leading-none ${t.textSub}`}>Area</div>
-                                <div className={`mt-1 text-xl font-black leading-none tabular-nums ${t.textMain}`}>{workedArea.toFixed(2)}</div>
-                                <div className={`mt-1 text-[10px] uppercase font-bold leading-none ${t.textSub}`}>ha</div>
+                                <div className={`mt-1 text-xl font-black leading-none tabular-nums ${t.textMain}`}>{getAreaParts(workedArea, unitSystem).value}</div>
+                                <div className={`mt-1 text-[10px] uppercase font-bold leading-none ${t.textSub}`}>{getAreaParts(workedArea, unitSystem).unit}</div>
                             </button>
                             <div className={`min-w-0 h-12 border-x ${t.borderCard} flex flex-col items-center justify-center text-center`}>
                                 <div className={`text-[9px] uppercase font-bold tracking-[0.06em] leading-none ${t.textSub}`}>Speed</div>
-                                <div className={`mt-1 text-xl font-black leading-none tabular-nums ${t.textMain}`}>{Math.abs(speed).toFixed(1)}</div>
-                                <div className={`mt-1 text-[10px] uppercase font-bold leading-none ${t.textSub}`}>km/h</div>
+                                <div className={`mt-1 text-xl font-black leading-none tabular-nums ${t.textMain}`}>{getSpeedParts(Math.abs(speed), unitSystem).value}</div>
+                                <div className={`mt-1 text-[10px] uppercase font-bold leading-none ${t.textSub}`}>{getSpeedParts(Math.abs(speed), unitSystem).unit}</div>
                             </div>
                             <div className="min-w-0 h-12 flex flex-col items-center justify-center text-center">
                                 <div className={`text-[9px] uppercase font-bold tracking-[0.06em] leading-none ${t.textSub}`}>Heading</div>
@@ -17394,7 +17886,7 @@ const renderLinesPanel = () => {
                                 {boundaryAlertType === 'AUTO_CLOSE'
                                     ? 'Vehicle is near starting point. Do you want to automatically connect boundary into a closed loop?'
                                     : boundaryAlertType === 'TOO_SHORT'
-                                        ? 'Record at least 5 m and 3 distinct points before finishing this boundary.'
+                                        ? `Record at least ${formatDistanceMeters(5, unitSystem, { kind: 'auto', digits: 1 })} and 3 distinct points before finishing this boundary.`
                                         : 'Vehicle is still far from the start marker. Continue along the dashed return guide or cancel this capture.'}
                             </p>
 
@@ -17536,6 +18028,118 @@ const renderLinesPanel = () => {
                     {notification.msg}
                 </div>
             )}
+            {regionalPicker && (
+                <div
+                    className="absolute inset-0 z-[120] flex items-center justify-center bg-slate-950/55 p-5 backdrop-blur-[2px]"
+                    onPointerDown={(event) => { if (event.target === event.currentTarget) setRegionalPicker(null); }}
+                >
+                    <div className={`w-full max-w-xl overflow-hidden rounded-2xl border shadow-2xl ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`} onPointerDown={(event) => event.stopPropagation()}>
+                        <div className={`flex items-center justify-between border-b px-5 py-4 ${t.borderCard}`}>
+                            <div className="flex items-center gap-3">
+                                <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${theme === 'dark' ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-700'}`}>{regionalPicker === 'country' ? <Globe className="h-5 w-5" /> : regionalPicker === 'language' ? <span className="text-sm font-black">A</span> : <Clock className="h-5 w-5" />}</span>
+                                <div><div className={`text-lg font-black ${t.textMain}`}>{regionalPicker === 'country' ? 'Select country' : regionalPicker === 'language' ? 'Select language' : 'Select time zone'}</div><div className={`text-xs font-semibold ${t.textDim}`}>{regionalPicker === 'country' ? 'Choose the region used by this display.' : regionalPicker === 'language' ? 'Choose the language used by the interface.' : REGION_OPTIONS.find(option => option.code === regionalSettings.country)?.name}</div></div>
+                            </div>
+                            <button type="button" onClick={() => setRegionalPicker(null)} className={`flex h-10 w-10 items-center justify-center rounded-lg ${t.textDim}`} aria-label="Close region picker"><X className="h-5 w-5" /></button>
+                        </div>
+                        <div className="max-h-[470px] overflow-y-auto p-4">
+                            {regionalPicker === 'country' ? (
+                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                    {REGION_OPTIONS.map(region => {
+                                        const selected = region.code === regionalSettings.country;
+                                        return (
+                                            <button key={region.code} type="button" onClick={() => { handleRegionChange(region.code); setRegionalPicker(null); }} className={`flex min-h-16 items-center gap-3 rounded-xl border p-3 text-left ${selected ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'hover:bg-slate-800' : 'hover:bg-slate-50'}`}`}>
+                                                <span className={`flex h-10 min-w-10 items-center justify-center rounded-lg px-2 text-xs font-black ${selected ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textMain}`}`}>{region.code}</span>
+                                                <span className="min-w-0 flex-1"><span className={`block truncate text-sm font-black ${t.textMain}`}>{region.name}</span><span className={`text-[11px] font-semibold ${t.textDim}`}>{region.dateFormat} · {region.locale}</span></span>
+                                                {selected && <Check className="h-5 w-5 shrink-0 text-blue-500" />}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            ) : regionalPicker === 'language' ? (
+                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                    {LANGUAGE_OPTIONS.map(language => {
+                                        const selected = language.code === regionalSettings.language;
+                                        return (
+                                            <button key={language.code} type="button" onClick={() => { setRegionalSettings(previous => ({ ...previous, language: language.code })); setRegionalPicker(null); }} className={`flex min-h-16 items-center gap-3 rounded-xl border p-3 text-left ${selected ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'hover:bg-slate-800' : 'hover:bg-slate-50'}`}`}>
+                                                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-xs font-black ${selected ? 'bg-blue-600 text-white' : `${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'} ${t.textMain}`}`}>{language.code.toUpperCase()}</span>
+                                                <span className="min-w-0 flex-1"><span className={`block truncate text-sm font-black ${t.textMain}`}>{language.nativeName}</span><span className={`text-[11px] font-semibold ${t.textDim}`}>{language.name}</span></span>
+                                                {selected && <Check className="h-5 w-5 shrink-0 text-blue-500" />}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {(REGION_OPTIONS.find(option => option.code === regionalSettings.country)?.timeZones || []).map(timeZone => {
+                                        const selected = timeZone === regionalSettings.timeZone;
+                                        return (
+                                            <button key={timeZone} type="button" onClick={() => { setRegionalSettings(previous => ({ ...previous, timeZone })); setRegionalPicker(null); }} className={`flex min-h-14 w-full items-center gap-3 rounded-xl border px-4 text-left ${selected ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${theme === 'dark' ? 'hover:bg-slate-800' : 'hover:bg-slate-50'}`}`}>
+                                                <Clock className={`h-5 w-5 ${selected ? 'text-blue-500' : t.textDim}`} />
+                                                <span className={`flex-1 text-sm font-black ${t.textMain}`}>{timeZone.replaceAll('_', ' ')}</span>
+                                                {selected && <Check className="h-5 w-5 text-blue-500" />}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {systemDialog && (
+                <div
+                    className="absolute inset-0 z-[120] flex items-center justify-center bg-slate-950/55 p-5 backdrop-blur-[2px]"
+                    onPointerDown={(event) => { if (event.target === event.currentTarget && !systemActionBusy) setSystemDialog(null); }}
+                >
+                    <div className={`w-full max-w-md overflow-hidden rounded-2xl border shadow-2xl ${t.borderCard} ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`} onPointerDown={(event) => event.stopPropagation()}>
+                        {systemDialog === 'power' ? (
+                            <>
+                                <div className={`flex items-center justify-between border-b px-5 py-4 ${t.borderCard}`}>
+                                    <div className="flex items-center gap-3">
+                                        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/12 text-blue-600"><Power className="h-5 w-5" /></span>
+                                        <div><div className={`text-lg font-black ${t.textMain}`}>Device power</div><div className={`text-xs font-semibold ${t.textDim}`}>Raspberry Pi system controls</div></div>
+                                    </div>
+                                    <button type="button" onClick={() => setSystemDialog(null)} className={`flex h-10 w-10 items-center justify-center rounded-lg ${t.textDim}`} aria-label="Close power menu"><X className="h-5 w-5" /></button>
+                                </div>
+                                <div className="space-y-3 p-5">
+                                    {systemPowerLocked && (
+                                        <div className="flex items-start gap-3 rounded-xl border border-amber-500/35 bg-amber-500/10 p-3 text-amber-500">
+                                            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                                            <span className="text-xs font-bold">Stop the vehicle, recording and Auto Steer before using a power action.</span>
+                                        </div>
+                                    )}
+                                    <button type="button" disabled={systemPowerLocked} onClick={() => setSystemDialog('restart')} className={`flex min-h-16 w-full items-center gap-4 rounded-xl border p-4 text-left disabled:cursor-not-allowed disabled:opacity-40 ${t.borderCard} ${theme === 'dark' ? 'hover:bg-slate-800' : 'hover:bg-slate-50'}`}>
+                                        <RotateCw className="h-6 w-6 text-blue-600" /><span><span className={`block text-base font-black ${t.textMain}`}>Restart</span><span className={`text-xs font-semibold ${t.textDim}`}>Reboot the Pi and reopen the display.</span></span>
+                                    </button>
+                                    <button type="button" disabled={systemPowerLocked} onClick={() => setSystemDialog('shutdown')} className="flex min-h-16 w-full items-center gap-4 rounded-xl border border-red-500/35 p-4 text-left text-red-500 disabled:cursor-not-allowed disabled:opacity-40 hover:bg-red-500/8">
+                                        <Power className="h-6 w-6" /><span><span className="block text-base font-black">Shut down</span><span className={`text-xs font-semibold ${t.textDim}`}>Safely stop the Pi before removing power.</span></span>
+                                    </button>
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                <div className="p-6 text-center">
+                                    <span className={`mx-auto flex h-14 w-14 items-center justify-center rounded-2xl ${systemDialog === 'restart' ? 'bg-blue-500/12 text-blue-600' : 'bg-red-500/12 text-red-500'}`}>
+                                        {systemDialog === 'restart' ? <RotateCw className="h-7 w-7" /> : systemDialog === 'shutdown' ? <Power className="h-7 w-7" /> : <RotateCcw className="h-7 w-7" />}
+                                    </span>
+                                    <h2 className={`mt-4 text-xl font-black ${t.textMain}`}>{systemDialog === 'restart' ? 'Restart this device?' : systemDialog === 'shutdown' ? 'Shut down this device?' : 'Factory reset everything?'}</h2>
+                                    <p className={`mx-auto mt-2 max-w-sm text-sm font-semibold leading-relaxed ${t.textDim}`}>
+                                        {systemDialog === 'restart' ? 'Guidance will be unavailable while the Raspberry Pi reboots.' : systemDialog === 'shutdown' ? 'Wait until the display turns off before disconnecting power.' : 'Fields, boundaries, guidance lines, tasks, network and setup values will be erased. This cannot be undone.'}
+                                    </p>
+                                </div>
+                                <div className={`grid grid-cols-2 gap-3 border-t p-4 ${t.borderCard}`}>
+                                    <button type="button" disabled={systemActionBusy} onClick={() => setSystemDialog(systemDialog === 'factoryReset' ? null : 'power')} className={`h-12 rounded-xl border text-sm font-black ${t.borderCard} ${t.textMain}`}>Cancel</button>
+                                    <button type="button" disabled={systemActionBusy} onClick={handleConfirmedSystemAction} className={`h-12 rounded-xl text-sm font-black text-white disabled:opacity-50 ${systemDialog === 'restart' ? 'bg-blue-600 hover:bg-blue-500' : 'bg-red-600 hover:bg-red-500'}`}>
+                                        {systemActionBusy ? 'PLEASE WAIT...' : systemDialog === 'restart' ? 'RESTART' : systemDialog === 'shutdown' ? 'SHUT DOWN' : 'ERASE & RESET'}
+                                    </button>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
+            )}
+
             <TouchKeyboard theme={theme} />
         </div>
     </div>
