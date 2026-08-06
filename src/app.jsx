@@ -13281,19 +13281,34 @@ const App = () => {
         );
         case 'uturn': {
             const turnConfig = getNormalizedTurnConfig();
+            const HeadlandTurnIcon = ({ className = '' }) => (
+                <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M6 20V10C6 3.5 18 3.5 18 10V20" />
+                    <path d="m3 13 3-3 3 3" />
+                    <path d="m15 17 3 3 3-3" />
+                </svg>
+            );
+            const SmartRouteIcon = ({ className = '' }) => (
+                <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="2.5" y="2.5" width="19" height="19" rx="3.5" />
+                    <path d="M7 17V9c0-2.2 4-2.2 4 0v6c0 2.2 4 2.2 4 0V9c0-2.2 3-2.2 3 0v8" />
+                    <circle cx="7" cy="17" r="1.2" fill="currentColor" stroke="none" />
+                    <circle cx="18" cy="17" r="1.2" fill="currentColor" stroke="none" />
+                </svg>
+            );
             const workflowOptions = [
                 { id: 'ONE_KEY', title: 'This turn only', detail: 'Start one turn when you need it.', icon: CornerUpLeft },
-                { id: 'AUTO', title: 'Every headland', detail: 'Turn automatically at each row end.', icon: Repeat2 },
-                { id: 'SMART', title: 'Finish the field', detail: 'Plan all remaining rows.', icon: Route }
+                { id: 'AUTO', title: 'Every headland', detail: 'Repeat the selected turn at each row end.', icon: HeadlandTurnIcon },
+                { id: 'SMART', title: 'Smart field route', detail: 'Plan row order and turns across the field.', icon: SmartRouteIcon }
             ];
             const mountedTurnImplement = /3-point|mounted|front mount/i.test(String(implementSettings.connectionType || ''));
             const skipCount = Math.max(1, Number(turnConfig.skipPasses) || 1);
             const modeLabel = turnConfig.mode === 'SMART'
-                ? 'Finish the field'
+                ? 'Smart field route'
                 : turnConfig.mode === 'AUTO'
                     ? 'Every headland'
                     : 'This turn only';
-            const pathLabel = turnConfig.pattern === 'FISH_TAIL' ? '3-point' : 'Auto fit';
+            const pathLabel = turnConfig.pattern === 'FISH_TAIL' ? '3-point turn' : 'Forward U-turn';
             const targetLabel = tramlineRoutingEnabled && turnConfig.mode !== 'SMART'
                 ? 'Tramline routing'
                 : turnConfig.nextPass === 'Skip'
@@ -13332,6 +13347,75 @@ const App = () => {
                     <div>{children}</div>
                 </div>
             );
+            const TurnPathPreview = ({ mode = turnConfig.mode, pattern = turnConfig.pattern, nextPass = turnConfig.nextPass, compact = false }) => {
+                const isSmart = mode === 'SMART';
+                const usesReverse = pattern === 'FISH_TAIL' && !isSmart;
+                const skipsRows = nextPass === 'Skip' && !isSmart;
+                const currentX = 48;
+                const targetX = isSmart || skipsRows ? 226 : 112;
+                const rowXs = [48, 112, 170, 226];
+                const diagramLabel = isSmart
+                    ? 'Full-field route preview'
+                    : `${usesReverse ? 'Three-point turn with reverse' : 'Forward U-turn'} to ${skipsRows ? `a row ${skipCount + 1} passes away` : 'the adjacent row'}`;
+                const forwardPath = `M ${currentX} 104 L ${currentX} 54 C ${currentX} 18 ${targetX} 18 ${targetX} 54 L ${targetX} 104`;
+                const turnOverX = Math.min(252, targetX + 20);
+                const reverseMidX = currentX + ((targetX - currentX) * 0.48);
+                const forwardToReverse = `M ${currentX} 104 L ${currentX} 60 C ${currentX} 29 ${currentX + 22} 18 ${targetX - 6} 18 C ${targetX + 12} 18 ${turnOverX} 29 ${turnOverX} 44`;
+                const reversePath = `M ${turnOverX} 44 C ${targetX + 8} 36 ${reverseMidX + 18} 43 ${reverseMidX} 61`;
+                const reverseToTarget = `M ${reverseMidX} 61 C ${targetX - 15} 54 ${targetX} 68 ${targetX} 84 L ${targetX} 104`;
+                const smartPath = 'M 48 104 L 48 34 C 48 17 112 17 112 34 L 112 104 C 112 118 170 118 170 104 L 170 34 C 170 17 226 17 226 34 L 226 104';
+
+                return (
+                    <div className={`overflow-hidden rounded-xl border ${t.borderCard} ${theme === 'dark' ? 'bg-slate-950/55' : 'bg-slate-50/80'}`}>
+                        <svg viewBox="0 0 274 128" className={`${compact ? 'h-[78px]' : 'h-[116px]'} w-full`} role="img" aria-label={diagramLabel}>
+                            <rect x="10" y="8" width="254" height="30" rx="8" fill={theme === 'dark' ? '#172554' : '#eef2ff'} />
+                            <text x="256" y="20" textAnchor="end" fontSize="7" fontWeight="800" letterSpacing="1" fill={theme === 'dark' ? '#93a4c4' : '#7c8aa5'}>HEADLAND</text>
+                            {rowXs.map((x) => {
+                                const isCurrent = x === currentX;
+                                const isTarget = x === targetX;
+                                const isSkipped = skipsRows && x > currentX && x < targetX;
+                                return (
+                                    <line
+                                        key={x}
+                                        x1={x}
+                                        y1="12"
+                                        x2={x}
+                                        y2="108"
+                                        stroke={isTarget ? '#4f66e8' : isCurrent ? '#64748b' : isSkipped ? '#d99a31' : theme === 'dark' ? '#334155' : '#cbd5e1'}
+                                        strokeWidth={isTarget ? 3 : isCurrent ? 2.5 : 1.5}
+                                        strokeDasharray={isSkipped ? '4 5' : undefined}
+                                        opacity={isTarget || isCurrent ? 1 : 0.8}
+                                    />
+                                );
+                            })}
+                            {isSmart ? (
+                                <path d={smartPath} fill="none" stroke="#4f66e8" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+                            ) : usesReverse ? (
+                                <>
+                                    <path d={forwardToReverse} fill="none" stroke="#4f66e8" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+                                    <path d={reversePath} fill="none" stroke="#d97726" strokeWidth="4" strokeDasharray="6 5" strokeLinecap="round" />
+                                    <path d={reverseToTarget} fill="none" stroke="#4f66e8" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+                                    <circle cx={currentX + 10} cy="43" r="8" fill={theme === 'dark' ? '#172554' : '#ffffff'} stroke="#4f66e8" strokeWidth="1.5" />
+                                    <text x={currentX + 10} y="46" textAnchor="middle" fontSize="8" fontWeight="900" fill="#4f66e8">1</text>
+                                    <circle cx={(turnOverX + reverseMidX) / 2} cy="48" r="8" fill={theme === 'dark' ? '#431407' : '#ffffff'} stroke="#d97726" strokeWidth="1.5" />
+                                    <text x={(turnOverX + reverseMidX) / 2} y="51" textAnchor="middle" fontSize="8" fontWeight="900" fill="#d97726">2</text>
+                                    <circle cx={targetX - 9} cy="76" r="8" fill={theme === 'dark' ? '#172554' : '#ffffff'} stroke="#4f66e8" strokeWidth="1.5" />
+                                    <text x={targetX - 9} y="79" textAnchor="middle" fontSize="8" fontWeight="900" fill="#4f66e8">3</text>
+                                </>
+                            ) : (
+                                <path d={forwardPath} fill="none" stroke="#4f66e8" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+                            )}
+                            <polygon points="43,73 53,73 48,64" fill="#4f66e8" />
+                            <polygon points={`${targetX - 5},68 ${targetX + 5},68 ${targetX},77`} fill="#4f66e8" />
+                            <circle cx={currentX} cy="104" r="5" fill="#64748b" stroke={theme === 'dark' ? '#0f172a' : '#ffffff'} strokeWidth="2" />
+                            <circle cx={targetX} cy="104" r="5" fill="#4f66e8" stroke={theme === 'dark' ? '#0f172a' : '#ffffff'} strokeWidth="2" />
+                            <text x={currentX} y="123" textAnchor="middle" fontSize="7" fontWeight="900" letterSpacing="0.6" fill={theme === 'dark' ? '#94a3b8' : '#64748b'}>CURRENT</text>
+                            <text x={targetX} y="123" textAnchor="middle" fontSize="7" fontWeight="900" letterSpacing="0.5" fill="#4f66e8">{isSmart ? 'FINISH' : skipsRows ? `TARGET +${skipCount}` : 'TARGET'}</text>
+                            {skipsRows && <text x="150" y="91" textAnchor="middle" fontSize="7" fontWeight="800" fill="#d97726">SKIPPED</text>}
+                        </svg>
+                    </div>
+                );
+            };
 
             return (
               <div className="mx-auto max-w-[980px] space-y-3 pb-3">
@@ -13363,8 +13447,32 @@ const App = () => {
                     </div>
                 </section>
 
+                <section className={`${t.bgPanel} border ${t.borderCard} rounded-xl p-3.5`}>
+                    <div className="grid grid-cols-1 items-center gap-4 md:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.2fr)]">
+                        <TurnPathPreview />
+                        <div className="min-w-0">
+                            <span className="text-[9px] font-black uppercase tracking-[0.16em] text-blue-600">Live path preview</span>
+                            <div className={`mt-1 text-base font-black ${t.textMain}`}>
+                                {turnConfig.mode === 'SMART' ? 'Smart field route' : `${pathLabel} to ${targetLabel}`}
+                            </div>
+                            <p className={`mt-1 text-[11px] leading-relaxed ${t.textSub}`}>
+                                {turnConfig.mode === 'SMART'
+                                    ? 'Plans the row order and headland turns from the active boundary and guidance line.'
+                                    : turnConfig.pattern === 'FISH_TAIL'
+                                        ? 'Follow the gear prompts: drive forward, shift to reverse, then shift forward into the target row.'
+                                        : 'Stay in forward gear while the system fits a smooth U-turn or compact keyhole path.'}
+                            </p>
+                            <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 text-[9px] font-black uppercase tracking-wide">
+                                <span className={`flex items-center gap-1.5 ${t.textSub}`}><span className="h-1 w-5 rounded-full bg-blue-600" />Forward path</span>
+                                {turnConfig.pattern === 'FISH_TAIL' && turnConfig.mode !== 'SMART' && <span className={`flex items-center gap-1.5 ${t.textSub}`}><span className="w-5 border-t-2 border-dashed border-orange-500" />Reverse</span>}
+                                <span className={`flex items-center gap-1.5 ${t.textSub}`}><span className="h-3 w-1 rounded-full bg-blue-600" />Re-entry row</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
                 <section className={`${t.bgPanel} border ${t.borderCard} rounded-xl px-4`}>
-                    <SetupRow number="1" title="How should it run?" detail="Pick the job you want to do.">
+                    <SetupRow number="1" title="When should it turn?" detail="Choose one turn, repeated turns, or a full-field route.">
                         <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
                             {workflowOptions.map((option) => {
                                 const active = turnConfig.mode === option.id;
@@ -13397,20 +13505,22 @@ const App = () => {
 
                     {turnConfig.mode !== 'SMART' ? (
                         <>
-                            <SetupRow number="2" title="How should it turn?" detail="Auto fit works for most fields.">
+                            <SetupRow number="2" title="Choose the turn path" detail="Blue is forward. Orange dashed means reverse.">
                                 <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                                    <button type="button" aria-pressed={turnConfig.pattern !== 'FISH_TAIL'} onClick={() => handleUTurnSettingChange('pattern', 'AUTO')} className={`min-h-[60px] rounded-xl border px-3 py-2 text-left ${turnConfig.pattern !== 'FISH_TAIL' ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}>
-                                        <span className="flex items-center gap-2"><CornerUpLeft className="h-4 w-4 text-blue-500" /><span className={`text-sm font-black ${t.textMain}`}>Auto fit</span><span className="rounded bg-green-500/15 px-1.5 py-0.5 text-[8px] font-black text-green-600">RECOMMENDED</span></span>
-                                        <span className={`mt-1 block text-[10px] ${t.textSub}`}>Normal U-turn when possible; compact keyhole when needed.</span>
+                                    <button type="button" aria-pressed={turnConfig.pattern !== 'FISH_TAIL'} onClick={() => handleUTurnSettingChange('pattern', 'AUTO')} className={`min-h-[148px] rounded-xl border p-2.5 text-left ${turnConfig.pattern !== 'FISH_TAIL' ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}>
+                                        <span className="flex items-center gap-2"><CornerUpLeft className="h-4 w-4 text-blue-500" /><span className={`text-sm font-black ${t.textMain}`}>Forward U-turn</span><span className="rounded bg-green-500/15 px-1.5 py-0.5 text-[8px] font-black text-green-600">RECOMMENDED</span></span>
+                                        <span className={`mt-1 block text-[10px] ${t.textSub}`}>Auto fit chooses a smooth U or keyhole. No reversing.</span>
+                                        <div className="mt-2"><TurnPathPreview mode="AUTO" pattern="AUTO" nextPass={turnConfig.nextPass} compact /></div>
                                     </button>
-                                    <button type="button" aria-pressed={turnConfig.pattern === 'FISH_TAIL'} disabled={!mountedTurnImplement} onClick={() => handleUTurnSettingChange('pattern', 'FISH_TAIL')} className={`min-h-[60px] rounded-xl border px-3 py-2 text-left disabled:opacity-45 ${turnConfig.pattern === 'FISH_TAIL' ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}>
-                                        <span className="flex items-center gap-2"><Spline className="h-4 w-4 text-blue-500" /><span className={`text-sm font-black ${t.textMain}`}>3-point turn</span></span>
-                                        <span className={`mt-1 block text-[10px] ${t.textSub}`}>{mountedTurnImplement ? 'Forward, reverse, then forward.' : 'Available with a mounted implement.'}</span>
+                                    <button type="button" aria-pressed={turnConfig.pattern === 'FISH_TAIL'} disabled={!mountedTurnImplement} onClick={() => handleUTurnSettingChange('pattern', 'FISH_TAIL')} className={`min-h-[148px] rounded-xl border p-2.5 text-left disabled:opacity-45 ${turnConfig.pattern === 'FISH_TAIL' ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}>
+                                        <span className="flex items-center gap-2"><Spline className="h-4 w-4 text-blue-500" /><span className={`text-sm font-black ${t.textMain}`}>3-point turn</span><span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-[8px] font-black text-orange-600">MANUAL F / R</span></span>
+                                        <span className={`mt-1 block text-[10px] ${t.textSub}`}>{mountedTurnImplement ? 'Follow prompts: forward past the row, reverse to pivot, then enter forward.' : 'Available with a mounted implement.'}</span>
+                                        <div className="mt-2"><TurnPathPreview mode="AUTO" pattern="FISH_TAIL" nextPass={turnConfig.nextPass} compact /></div>
                                     </button>
                                 </div>
                             </SetupRow>
 
-                            <SetupRow number="3" title="Which row is next?" detail="Next row is the normal choice." last>
+                            <SetupRow number="3" title="Choose the re-entry row" detail="The highlighted blue row is where steering resumes." last>
                                 {tramlineRoutingEnabled ? (
                                     <div className="rounded-xl border border-fuchsia-500/35 bg-fuchsia-500/10 px-3 py-3">
                                         <span className="block text-sm font-black text-fuchsia-600">Tramline applies on One Turn and Auto U-turn.</span>
@@ -13424,13 +13534,15 @@ const App = () => {
                                             </div>
                                         )}
                                         <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                                            <button type="button" aria-pressed={turnConfig.nextPass !== 'Skip'} onClick={() => handleUTurnSettingChange('nextPass', 'Adjacent')} className={`min-h-[58px] rounded-xl border px-3 py-2 text-left ${turnConfig.nextPass !== 'Skip' ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}>
-                                                <span className={`block text-sm font-black ${t.textMain}`}>Next row</span>
+                                            <button type="button" aria-pressed={turnConfig.nextPass !== 'Skip'} onClick={() => handleUTurnSettingChange('nextPass', 'Adjacent')} className={`min-h-[142px] rounded-xl border p-2.5 text-left ${turnConfig.nextPass !== 'Skip' ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}>
+                                                <span className={`block text-sm font-black ${t.textMain}`}>Adjacent row</span>
                                                 <span className={`mt-0.5 block text-[10px] ${t.textSub}`}>Continue without leaving a gap.</span>
+                                                <div className="mt-2"><TurnPathPreview mode="AUTO" pattern={turnConfig.pattern} nextPass="Adjacent" compact /></div>
                                             </button>
-                                            <button type="button" aria-pressed={turnConfig.nextPass === 'Skip'} onClick={() => handleUTurnSettingChange('nextPass', 'Skip')} className={`min-h-[58px] rounded-xl border px-3 py-2 text-left ${turnConfig.nextPass === 'Skip' ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}>
+                                            <button type="button" aria-pressed={turnConfig.nextPass === 'Skip'} onClick={() => handleUTurnSettingChange('nextPass', 'Skip')} className={`min-h-[142px] rounded-xl border p-2.5 text-left ${turnConfig.nextPass === 'Skip' ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}>
                                                 <span className={`block text-sm font-black ${t.textMain}`}>Skip rows</span>
-                                                <span className={`mt-0.5 block text-[10px] ${t.textSub}`}>Leave rows to complete later.</span>
+                                                <span className={`mt-0.5 block text-[10px] ${t.textSub}`}>Leave {skipCount} {skipCount === 1 ? 'row' : 'rows'} and rejoin farther away.</span>
+                                                <div className="mt-2"><TurnPathPreview mode="AUTO" pattern={turnConfig.pattern} nextPass="Skip" compact /></div>
                                             </button>
                                         </div>
                                         {turnConfig.nextPass === 'Skip' && (
@@ -13445,10 +13557,10 @@ const App = () => {
                             </SetupRow>
                         </>
                     ) : (
-                        <SetupRow number="2" title="How should the field finish?" detail="Choose automatic or guided headland passes." last>
+                        <SetupRow number="2" title="Include headland passes?" detail="Choose whether Smart Route plans the outer passes." last>
                             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                                <button type="button" aria-pressed={Boolean(turnConfig.smartHeadlandPasses)} onClick={() => handleUTurnSettingChange('smartHeadlandPasses', 1)} className={`min-h-[60px] rounded-xl border px-3 py-2 text-left ${turnConfig.smartHeadlandPasses ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}><span className={`block text-sm font-black ${t.textMain}`}>Finish automatically</span><span className={`mt-0.5 block text-[10px] ${t.textSub}`}>Plan and drive the validated headland passes.</span></button>
-                                <button type="button" aria-pressed={!turnConfig.smartHeadlandPasses} onClick={() => handleUTurnSettingChange('smartHeadlandPasses', 0)} className={`min-h-[60px] rounded-xl border px-3 py-2 text-left ${!turnConfig.smartHeadlandPasses ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}><span className={`block text-sm font-black ${t.textMain}`}>Finish manually</span><span className={`mt-0.5 block text-[10px] ${t.textSub}`}>Show the remaining rows for manual steering.</span></button>
+                                <button type="button" aria-pressed={Boolean(turnConfig.smartHeadlandPasses)} onClick={() => handleUTurnSettingChange('smartHeadlandPasses', 1)} className={`min-h-[60px] rounded-xl border px-3 py-2 text-left ${turnConfig.smartHeadlandPasses ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}><span className={`block text-sm font-black ${t.textMain}`}>Include headlands</span><span className={`mt-0.5 block text-[10px] ${t.textSub}`}>Add validated outer passes to the planned route.</span></button>
+                                <button type="button" aria-pressed={!turnConfig.smartHeadlandPasses} onClick={() => handleUTurnSettingChange('smartHeadlandPasses', 0)} className={`min-h-[60px] rounded-xl border px-3 py-2 text-left ${!turnConfig.smartHeadlandPasses ? 'border-blue-500 bg-blue-500/10' : `${t.borderCard} ${t.bgInput}`}`}><span className={`block text-sm font-black ${t.textMain}`}>Rows only</span><span className={`mt-0.5 block text-[10px] ${t.textSub}`}>Plan interior rows; drive the outer passes manually.</span></button>
                             </div>
                         </SetupRow>
                     )}
@@ -13462,7 +13574,7 @@ const App = () => {
                     <div className={`border-t ${t.borderCard} p-4`}>
                         {turnConfig.mode === 'SMART' ? (
                             <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-green-500/35 bg-green-500/10 px-3 py-3">
-                                <span className="flex items-center gap-2.5"><ArrowUpFromDot className="h-4 w-4 text-green-600" /><span><span className={`block text-sm font-black ${t.textMain}`}>Lift implement during turns</span><span className={`block text-[10px] ${t.textSub}`}>Required for Finish the field.</span></span></span>
+                                <span className="flex items-center gap-2.5"><ArrowUpFromDot className="h-4 w-4 text-green-600" /><span><span className={`block text-sm font-black ${t.textMain}`}>Lift implement during turns</span><span className={`block text-[10px] ${t.textSub}`}>Required for Smart field route.</span></span></span>
                                 <span className="rounded-full bg-green-500 px-2 py-1 text-[9px] font-black text-white">ALWAYS ON</span>
                             </div>
                         ) : (
