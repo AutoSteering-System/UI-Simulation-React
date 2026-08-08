@@ -231,7 +231,7 @@ const polygonHasSelfIntersection = (points) => {
 // Constant-distance buffer for a simple closed boundary. Positive values move
 // outward and negative values move inward. Invalid/collapsed buffers return an
 // empty array so callers can block Apply instead of saving broken geometry.
-const getOffsetPolygonPoints = (points, outwardOffset) => {
+const getRawOffsetPolygonPoints = (points, outwardOffset) => {
     if (!Array.isArray(points)) return [];
     const clean = [];
     points.forEach((point) => {
@@ -296,4 +296,362 @@ const getOffsetPolygonPoints = (points, outwardOffset) => {
     }
     if (polygonHasSelfIntersection(buffered)) return [];
     return buffered;
+};
+function getSafeInsetPointToSegmentDistanceSquared(point, start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared <= 1e-12) {
+    const px = point.x - start.x;
+    const py = point.y - start.y;
+    return px * px + py * py;
+  }
+
+  const projection = Math.max(
+    0,
+    Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared),
+  );
+  const closestX = start.x + projection * dx;
+  const closestY = start.y + projection * dy;
+  const px = point.x - closestX;
+  const py = point.y - closestY;
+  return px * px + py * py;
+}
+
+function getSafeInsetCross(a, b, c) {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function isSafeInsetPointOnSegment(point, start, end) {
+  const epsilon = 1e-7;
+  return (
+    Math.abs(getSafeInsetCross(start, end, point)) <= epsilon &&
+    point.x >= Math.min(start.x, end.x) - epsilon &&
+    point.x <= Math.max(start.x, end.x) + epsilon &&
+    point.y >= Math.min(start.y, end.y) - epsilon &&
+    point.y <= Math.max(start.y, end.y) + epsilon
+  );
+}
+
+function doSafeInsetSegmentsIntersect(a, b, c, d) {
+  const abC = getSafeInsetCross(a, b, c);
+  const abD = getSafeInsetCross(a, b, d);
+  const cdA = getSafeInsetCross(c, d, a);
+  const cdB = getSafeInsetCross(c, d, b);
+  const epsilon = 1e-7;
+
+  if (
+    ((abC > epsilon && abD < -epsilon) || (abC < -epsilon && abD > epsilon)) &&
+    ((cdA > epsilon && cdB < -epsilon) || (cdA < -epsilon && cdB > epsilon))
+  ) {
+    return true;
+  }
+
+  return (
+    (Math.abs(abC) <= epsilon && isSafeInsetPointOnSegment(c, a, b)) ||
+    (Math.abs(abD) <= epsilon && isSafeInsetPointOnSegment(d, a, b)) ||
+    (Math.abs(cdA) <= epsilon && isSafeInsetPointOnSegment(a, c, d)) ||
+    (Math.abs(cdB) <= epsilon && isSafeInsetPointOnSegment(b, c, d))
+  );
+}
+
+function getSafeInsetSegmentDistance(a, b, c, d) {
+  if (doSafeInsetSegmentsIntersect(a, b, c, d)) {
+    return 0;
+  }
+
+  return Math.sqrt(
+    Math.min(
+      getSafeInsetPointToSegmentDistanceSquared(a, c, d),
+      getSafeInsetPointToSegmentDistanceSquared(b, c, d),
+      getSafeInsetPointToSegmentDistanceSquared(c, a, b),
+      getSafeInsetPointToSegmentDistanceSquared(d, a, b),
+    ),
+  );
+}
+
+function isSafeInsetPointInsidePolygon(point, polygon) {
+  let inside = false;
+
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+    const start = polygon[previous];
+    const end = polygon[index];
+
+    if (isSafeInsetPointOnSegment(point, start, end)) {
+      return true;
+    }
+
+    const crossesRay =
+      (start.y > point.y) !== (end.y > point.y) &&
+      point.x <
+        ((end.x - start.x) * (point.y - start.y)) / (end.y - start.y) + start.x;
+    if (crossesRay) {
+      inside = !inside;
+    }
+  }
+
+  return inside;
+}
+
+function simplifySafeInsetSource(points, tolerance) {
+  if (points.length <= 3 || tolerance <= 0) {
+    return points.map((point) => ({ ...point }));
+  }
+
+  const toleranceSquared = tolerance * tolerance;
+  const keep = new Uint8Array(points.length);
+  const pending = [[0, points.length - 1]];
+  keep[0] = 1;
+  keep[points.length - 1] = 1;
+
+  while (pending.length > 0) {
+    const [startIndex, endIndex] = pending.pop();
+    let furthestIndex = -1;
+    let furthestDistanceSquared = toleranceSquared;
+
+    for (let index = startIndex + 1; index < endIndex; index += 1) {
+      const distanceSquared = getSafeInsetPointToSegmentDistanceSquared(
+        points[index],
+        points[startIndex],
+        points[endIndex],
+      );
+      if (distanceSquared > furthestDistanceSquared) {
+        furthestDistanceSquared = distanceSquared;
+        furthestIndex = index;
+      }
+    }
+
+    if (furthestIndex >= 0) {
+      keep[furthestIndex] = 1;
+      pending.push([startIndex, furthestIndex], [furthestIndex, endIndex]);
+    }
+  }
+
+  return points.filter((_, index) => keep[index]);
+}
+
+function isSafeInsetCandidate(candidate, source, clearance) {
+  if (!Array.isArray(candidate) || candidate.length < 3 || source.length < 3) {
+    return false;
+  }
+
+  for (const point of candidate) {
+    if (!isSafeInsetPointInsidePolygon(point, source)) {
+      return false;
+    }
+  }
+
+  // Every planned edge must remain inside and clear of every segment of the
+  // original, unsimplified boundary. The allowance is only for floating-point
+  // rounding; the planner's physical safety margin remains intact.
+  const numericAllowance = Math.max(1, Math.min(1.5, clearance * 0.01));
+  const minimumClearance = Math.max(0, clearance - numericAllowance);
+
+  for (let candidateIndex = 0; candidateIndex < candidate.length; candidateIndex += 1) {
+    const candidateStart = candidate[candidateIndex];
+    const candidateEnd = candidate[(candidateIndex + 1) % candidate.length];
+
+    for (let sourceIndex = 0; sourceIndex < source.length; sourceIndex += 1) {
+      const sourceStart = source[sourceIndex];
+      const sourceEnd = source[(sourceIndex + 1) % source.length];
+      if (
+        getSafeInsetSegmentDistance(
+          candidateStart,
+          candidateEnd,
+          sourceStart,
+          sourceEnd,
+        ) < minimumClearance
+      ) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+function getConservativeInsetPolygon(points, clearance) {
+  if (!Array.isArray(points) || points.length < 3 || clearance <= 0) {
+    return [];
+  }
+
+  let twiceArea = 0;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  points.forEach((point, index) => {
+    const next = points[(index + 1) % points.length];
+    twiceArea += point.x * next.y - next.x * point.y;
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+  });
+
+  if (Math.abs(twiceArea) <= 1e-7) {
+    return [];
+  }
+
+  const interiorSign = twiceArea > 0 ? 1 : -1;
+  const margin = Math.max(maxX - minX, maxY - minY, clearance * 4, 1) * 2;
+  let inset = [
+    { x: minX - margin, y: minY - margin },
+    { x: maxX + margin, y: minY - margin },
+    { x: maxX + margin, y: maxY + margin },
+    { x: minX - margin, y: maxY + margin },
+  ];
+
+  for (let edgeIndex = 0; edgeIndex < points.length; edgeIndex += 1) {
+    const edgeStart = points[edgeIndex];
+    const edgeEnd = points[(edgeIndex + 1) % points.length];
+    const edgeLength = Math.hypot(
+      edgeEnd.x - edgeStart.x,
+      edgeEnd.y - edgeStart.y,
+    );
+    if (edgeLength <= 1e-7) {
+      continue;
+    }
+
+    const signedClearance = (point) => (
+      interiorSign * getSafeInsetCross(edgeStart, edgeEnd, point) / edgeLength - clearance
+    );
+    const input = inset;
+    inset = [];
+    if (input.length === 0) {
+      return [];
+    }
+
+    let previous = input[input.length - 1];
+    let previousDistance = signedClearance(previous);
+    let previousInside = previousDistance >= -1e-7;
+
+    input.forEach((current) => {
+      const currentDistance = signedClearance(current);
+      const currentInside = currentDistance >= -1e-7;
+
+      if (currentInside !== previousInside) {
+        const denominator = previousDistance - currentDistance;
+        if (Math.abs(denominator) > 1e-12) {
+          const ratio = Math.max(0, Math.min(1, previousDistance / denominator));
+          inset.push({
+            x: previous.x + (current.x - previous.x) * ratio,
+            y: previous.y + (current.y - previous.y) * ratio,
+          });
+        }
+      }
+      if (currentInside) {
+        inset.push({ x: current.x, y: current.y });
+      }
+
+      previous = current;
+      previousDistance = currentDistance;
+      previousInside = currentInside;
+    });
+  }
+
+  const cleaned = inset.filter((point, index) => {
+    if (index === 0) return true;
+    const previous = inset[index - 1];
+    return Math.hypot(point.x - previous.x, point.y - previous.y) > 1e-5;
+  });
+  if (
+    cleaned.length > 3 &&
+    Math.hypot(
+      cleaned[0].x - cleaned[cleaned.length - 1].x,
+      cleaned[0].y - cleaned[cleaned.length - 1].y,
+    ) <= 1e-5
+  ) {
+    cleaned.pop();
+  }
+
+  return cleaned.length >= 3 ? cleaned : [];
+}
+/**
+ * Creates an offset polygon while tolerating dense GPS samples and tiny local
+ * kinks. The stored boundary is never changed: simplification is only used as
+ * a planning input, and every result is checked against the original boundary.
+ */
+const getOffsetPolygonPoints = (points, outwardOffset) => {
+  const direct = getRawOffsetPolygonPoints(points, outwardOffset);
+  if (!Array.isArray(points) || points.length < 3 || outwardOffset >= 0) {
+    return direct;
+  }
+
+  const source = points
+    .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
+    .map((point) => ({ x: point.x, y: point.y }));
+
+  if (
+    source.length > 3 &&
+    Math.hypot(
+      source[0].x - source[source.length - 1].x,
+      source[0].y - source[source.length - 1].y,
+    ) <= 1e-6
+  ) {
+    source.pop();
+  }
+
+  const clearance = Math.abs(outwardOffset);
+  if (
+    Array.isArray(direct) &&
+    direct.length >= 3 &&
+    isSafeInsetCandidate(direct, source, clearance)
+  ) {
+    return direct;
+  }
+
+  // Intersect all inward edge half-planes before simplifying. For a convex or
+  // nearly convex recorded field this naturally drops collapsed one-metre GPS
+  // edges while retaining every original edge as a hard safety constraint.
+  const conservativeInset = getConservativeInsetPolygon(source, clearance);
+  if (isSafeInsetCandidate(conservativeInset, source, clearance)) {
+    return conservativeInset;
+  }
+
+  // Progressively remove GPS sampling noise. Relative tolerances scale with
+  // the requested inset, so normal boundaries remain untouched while short
+  // edges that collapse during a deep headland inset can be skipped.
+  const toleranceFactors = [
+    0.005,
+    0.01,
+    0.02,
+    0.035,
+    0.05,
+    0.075,
+    0.1,
+    0.125,
+    0.15,
+    0.175,
+    0.2,
+    0.225,
+    0.25,
+    0.275,
+    0.3,
+  ];
+  const attemptedPointCounts = new Set();
+
+  for (const factor of toleranceFactors) {
+    const simplified = simplifySafeInsetSource(source, Math.max(0.5, clearance * factor));
+    if (simplified.length < 3 || attemptedPointCounts.has(simplified.length)) {
+      continue;
+    }
+    attemptedPointCounts.add(simplified.length);
+
+    // A simplified chord can sit outside the recorded edge by at most its
+    // tolerance. Increase the inset progressively and accept the shallowest
+    // candidate that still clears the original boundary.
+    const extraInsets = [0, tolerance * 0.25, tolerance * 0.5, tolerance * 0.75, tolerance];
+    for (const extraInset of extraInsets) {
+      const candidate = getRawOffsetPolygonPoints(
+        simplified,
+        outwardOffset - extraInset,
+      );
+      if (isSafeInsetCandidate(candidate, source, clearance)) {
+        return candidate;
+      }
+    }
+  }
+
+  return [];
 };

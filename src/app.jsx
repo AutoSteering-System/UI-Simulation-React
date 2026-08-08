@@ -5900,6 +5900,10 @@ const App = () => {
               : 'One Turn';
       const planPending = !plan;
       const planBlocked = Boolean(plan && !plan.feasible);
+      const tightHeadlandBlocked = Boolean(
+          planBlocked
+          && plan?.failReason === 'Boundary is too tight for the radius-safe headland circuits'
+      );
       const directionTitle = plan?.direction < 0
           ? 'LEFT'
           : plan?.direction > 0
@@ -5941,7 +5945,9 @@ const App = () => {
                           : turnConfig.mode === 'SMART'
                               ? 'ROUTE READY'
                               : 'READY';
-      const statusHint = planBlocked
+      const statusHint = tightHeadlandBlocked
+          ? 'Use a larger field, reduce the vehicle turn radius, or switch to Auto U-turn.'
+          : planBlocked
           ? 'Resolve the issue above before starting.'
           : turnConfig.mode !== 'SMART' && (!turnConfig.liftAction || !turnConfig.pauseCoverage)
               ? 'Manual implement or coverage control is required.'
@@ -5995,7 +6001,8 @@ const App = () => {
           NO_SAFE_ENTRY: 'No safe route from the vehicle to the first pass',
           NO_SAFE_TRANSIT: 'No safe connection between remaining passes',
           UNSAFE_HEADLAND_PATH: 'Headland closing path has insufficient clearance',
-           NO_SAFE_HEADLAND_ENTRY: 'No safe entry to the headland closing pass',
+          'Boundary is too tight for the radius-safe headland circuits': 'Not enough headland space for the current turn radius and implement',
+          NO_SAFE_HEADLAND_ENTRY: 'No safe entry to the headland closing pass',
            NO_SAFE_HEADLAND_RING_CONNECTOR: 'Headland passes cannot be connected within the calibrated turn radius',
            INCOMPLETE_FIELD_COVERAGE: 'The validated automatic route leaves an uncovered corridor; use Manual guide or adjust the setup',
            UNSAFE_ROUTE: 'Complete route cannot stay inside the safety envelope',
@@ -6125,6 +6132,15 @@ const App = () => {
                               {planPending ? 'Preparing turn preview…' : planBlocked ? turnFailureLabel(plan?.failReason) : planSummary}
                           </div>
                           <div className={`mt-1 text-[8px] font-bold leading-snug ${previewNeedsCaution ? 'text-amber-600' : t.textSub}`}>{statusHint}</div>
+                          {tightHeadlandBlocked && (
+                              <button
+                                  type="button"
+                                  onClick={() => changeTurnSetting('mode', 'AUTO')}
+                                  className="mt-2.5 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-red-500/35 bg-white/70 text-[9px] font-black text-red-600 hover:bg-white"
+                              >
+                                  <CornerUpLeft className="h-4 w-4" /> USE AUTO U-TURN
+                              </button>
+                          )}
                           {targetPassAlreadyWorked && plan?.feasible && (
                               <div className="mt-1.5 text-[8px] font-black text-amber-600">Selected pass already has coverage.</div>
                           )}
@@ -6167,7 +6183,7 @@ const App = () => {
                                                           : smartRoutePartial ? 'START PARTIAL ROUTE' : 'START SMART FIELD'}
                               </button>
                           )}
-                          <button aria-label="Detailed U-turn settings" disabled={autoUTurnArmed || turnAssistActive || manualHeadlandRecommendation} onClick={() => { closePanel(); setSettingsTab('uturn'); setSettingsOpen(true); }} className={`h-11 w-[92px] rounded-xl border ${t.borderCard} ${t.textMain} flex items-center justify-center gap-1.5 text-[9px] font-black disabled:opacity-35`}>
+                          <button aria-label="Open detailed U-turn settings" disabled={autoUTurnArmed || turnAssistActive || manualHeadlandRecommendation} onClick={() => { closePanel(); setSettingsTab('uturn'); setSettingsOpen(true); }} className={`h-11 w-[92px] rounded-xl border ${t.borderCard} ${t.textMain} flex items-center justify-center gap-1.5 text-[9px] font-black disabled:opacity-35`}>
                               <Settings className="w-4 h-4" />
                               DETAILS
                           </button>
@@ -10130,6 +10146,14 @@ const App = () => {
           showNotification('Turn off Tramline Follow on U-turn before using Smart Field', 'warning');
           return;
       }
+      if (key === 'enabled') {
+          showNotification(
+              value
+                  ? 'Turn Assist enabled. Choose a turn mode, then press Preview route.'
+                  : 'Turn Assist disabled.',
+              value ? 'success' : 'info'
+          );
+      }
       actions.setUTurnSettings(previous => {
           const next = {
               ...previous,
@@ -13426,23 +13450,27 @@ const App = () => {
                                 <CornerUpLeft className="h-5 w-5" />
                             </span>
                             <span className="min-w-0">
-                                <span className="flex flex-wrap items-center gap-2">
-                                    <span className={`text-base font-black ${t.textMain}`}>U-turn setup</span>
-                                    <button
-                                        type="button"
-                                        aria-label="Turn assist"
-                                        aria-pressed={Boolean(turnConfig.enabled)}
-                                        onClick={() => handleUTurnSettingChange('enabled', !turnConfig.enabled)}
-                                        className={`rounded-full px-2 py-0.5 text-[9px] font-black ${turnConfig.enabled ? 'bg-green-500/15 text-green-600' : 'bg-slate-400/15 text-slate-500'}`}
-                                    >
-                                        TURN ASSIST {turnConfig.enabled ? 'ON' : 'OFF'}
-                                    </button>
-                                </span>
+                                <span className={`block text-base font-black ${t.textMain}`}>U-turn setup</span>
                                 <span className={`mt-0.5 block text-[11px] ${t.textSub}`}>{modeLabel} · {turnConfig.mode === 'SMART' ? (turnConfig.smartHeadlandPasses ? 'Auto finish' : 'Manual finish') : `${pathLabel} · ${targetLabel}`}</span>
                             </span>
                         </div>
-                        <div className="flex shrink-0 gap-2">
-                            <SettingsActionButton disabled={!turnConfig.enabled} variant="primary" onClick={() => { setSettingsOpen(false); openUTurnPlanner(); }}>Preview turn</SettingsActionButton>
+                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                            <button
+                                type="button"
+                                aria-label={`${turnConfig.enabled ? 'Disable' : 'Enable'} Turn Assist`}
+                                aria-pressed={Boolean(turnConfig.enabled)}
+                                onClick={() => handleUTurnSettingChange('enabled', !turnConfig.enabled)}
+                                className={`flex min-h-[44px] min-w-[178px] items-center justify-between gap-4 rounded-xl border px-3 py-2 text-left transition-colors ${turnConfig.enabled ? 'border-green-500/45 bg-green-500/10' : `${t.borderCard} ${t.bgInput}`}`}
+                            >
+                                <span>
+                                    <span className={`block text-[10px] font-black uppercase tracking-wide ${turnConfig.enabled ? 'text-green-600' : t.textMain}`}>Turn Assist</span>
+                                    <span className={`mt-0.5 block text-[9px] font-bold ${t.textSub}`}>{turnConfig.enabled ? 'Enabled' : 'Disabled'}</span>
+                                </span>
+                                <span className={`h-6 w-11 shrink-0 rounded-full p-0.5 transition-colors ${turnConfig.enabled ? 'bg-green-500' : 'bg-slate-400'}`}>
+                                    <span className={`block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${turnConfig.enabled ? 'translate-x-5' : ''}`} />
+                                </span>
+                            </button>
+                            <SettingsActionButton disabled={!turnConfig.enabled} variant="primary" onClick={() => { setSettingsOpen(false); openUTurnPlanner(); }}>Preview route</SettingsActionButton>
                         </div>
                     </div>
                 </section>
